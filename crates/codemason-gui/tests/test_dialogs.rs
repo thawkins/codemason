@@ -17,7 +17,7 @@ use codemason_app_core::app::{App, ModelPickerEntry, PERMISSION_ANSWER_DELAY, Pr
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
 use codemason_gui::dialogs::model_picker::{
-    FILTER_LABEL, MODEL_PICKER_TITLE, MODELS_LABEL, filter_field_id,
+    FAVORITE_MARK, FILTER_LABEL, MODEL_PICKER_TITLE, MODELS_LABEL, filter_field_id,
 };
 use codemason_gui::dialogs::permission::{
     ALLOW_ONCE, ALWAYS_ALLOW, CHANGES_LABEL, COMMAND_LABEL, DENY, PERMISSION_TITLE,
@@ -341,6 +341,50 @@ fn test_model_picker_filter_narrows_list() {
         Some("openai/sonnet-3"),
         "the second shown model, not the hidden one between"
     );
+}
+
+#[test]
+fn test_model_picker_fuzzy_filter_matches_a_subsequence() {
+    let (_rt, _events, mut harness) = rig(open_model_picker);
+    harness.run();
+    harness.get_by_label(FILTER_LABEL).type_text("gpt4");
+    harness.run();
+    harness.run();
+    assert!(harness.query_by_label("GPT-4o").is_some());
+    assert!(harness.query_by_label("Claude Sonnet 4").is_none());
+    assert!(harness.query_by_label("Claude Sonnet 3").is_none());
+}
+
+#[test]
+fn test_model_picker_ctrl_f_marks_a_favourite_first() {
+    let (_rt, _events, mut harness) = rig(open_model_picker);
+    harness.run();
+    let input = harness.input_mut();
+    for pressed in [true, false] {
+        input.events.push(egui::Event::Key {
+            key: egui::Key::F,
+            physical_key: Some(egui::Key::F),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        });
+    }
+    harness.run();
+    harness.run();
+    assert_eq!(
+        harness.state().app().favorite_models(),
+        vec!["openai/gpt-4o".to_string()]
+    );
+    let starred = format!("{FAVORITE_MARK} GPT-4o");
+    assert!(
+        harness.query_by_label(&starred).is_some(),
+        "the row is marked"
+    );
+    assert!(matches!(
+        &harness.state().app().provider_setup,
+        Some(ProviderSetupStep::SelectModel { models, selected: 0, .. })
+            if models[0].id == "gpt-4o"
+    ));
 }
 
 #[test]

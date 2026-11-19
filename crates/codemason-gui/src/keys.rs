@@ -8,27 +8,25 @@
 //! falls through to `App::handle_key` as its own [`KeyInput`]
 //! ([`to_key_input`]).
 //!
-//! # Command table
+//! # Commands
 //!
-//! | Command         | Linux / Windows | macOS         | TUI source                          |
-//! |-----------------|-----------------|---------------|-------------------------------------|
-//! | `panel.log`     | Alt+L           | Cmd+Shift+L   | `input.rs`: `Alt+L` -> `ToggleLog`  |
-//! | `panel.profile` | Alt+P           | Cmd+Shift+P   | `input.rs`: `Alt+P` -> `ToggleProfile` |
-//! | `panel.tasks`   | Alt+I           | Cmd+Shift+I   | `input.rs`: `Alt+I` -> `ToggleTasksPanel` |
-//! | `panel.memory`  | Alt+M           | Cmd+Shift+M   | `input.rs`: `Alt+M` -> `ToggleMemory` |
-//! | `queue.menu`    | Alt+Q           | Cmd+Alt+Q     | `input.rs`: `Alt+Q` -> `OpenQueueMenu` |
-//! | `app.quit`      | Ctrl+D          | Cmd+Q         | `input.rs`: `Ctrl+D` -> `ConfirmQuit` |
-//!
-//! `input.rs` is `crates/codemason-app-core/src/input.rs`. macOS uses
-//! Cmd+Shift with the same letter, except `queue.menu` (Cmd+Shift+Q logs the
-//! user out on macOS) and `app.quit` (Cmd+Q is the macOS quit key).
+//! The commands are app-core's action catalog
+//! ([`codemason_app_core::shortcuts::action_catalog`]): every action has a
+//! dotted id, a title and default chords for Linux/Windows and macOS. An
+//! action with a terminal key press (`ActionSpec::key`) runs as that press
+//! through `App::handle_key`; one without is queued for the shell
+//! ([`KeyRouter::take_actions`]), which runs it through `App::run_action` or
+//! itself. macOS uses Cmd+Shift with the same letter as the Alt chord,
+//! except `queue.menu` (Cmd+Shift+Q logs the user out on macOS) and
+//! `app.quit` (Cmd+Q is the macOS quit key).
 //!
 //! # Overrides
 //!
 //! The user's changes to these bindings are a [`craft_keymap::Overrides`]
 //! stored as JSON at `<config_dir>/codemason/gui-keys.json`, beside the
-//! dock layout file ([`crate::dock::layout_path`]); see [`keys_path`] and
-//! [`load_keymap`].
+//! dock layout file ([`crate::dock::layout_path`]), keyed by action id; see
+//! [`keys_path`] and [`load_keymap`]. A user binding on a chord another
+//! action holds by default takes the chord from it.
 //!
 //! Dependencies: `craft-keymap` (feature `egui`) for the keymap and the egui
 //! dispatcher, `egui` for input events, `serde_json` for the overrides file,
@@ -38,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use codemason_app_core::app::{KeyWindow, window_owns_key};
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
+use codemason_app_core::shortcuts::action_catalog;
 use craft_keymap::egui::Dispatcher;
 use craft_keymap::{Active, Bindable, Binding, CommandRef, Keymap, Overrides, Platform, Scope};
 
@@ -45,70 +44,13 @@ use craft_keymap::{Active, Bindable, Binding, CommandRef, Keymap, Overrides, Pla
 /// directory.
 const KEYS_FILE: &str = "gui-keys.json";
 
-/// One bindable command: its id, label, default chord text per platform,
-/// and the TUI key press it stands for.
-struct Command {
-    id: &'static str,
-    label: &'static str,
-    pc: &'static str,
-    mac: &'static str,
-    tui: KeyInput,
-}
-
-/// A TUI key press of `c` with `mods`.
+/// A key press of `c` with `mods`.
 const fn chord(c: char, mods: Modifiers) -> KeyInput {
     KeyInput {
         key: Key::Char(c),
         mods,
     }
 }
-
-/// The GUI command catalog; see the module docs for where each TUI binding
-/// lives.
-const COMMANDS: &[Command] = &[
-    Command {
-        id: "panel.log",
-        label: "Toggle Log Panel",
-        pc: "Alt+L",
-        mac: "Cmd+Shift+L",
-        tui: chord('l', Modifiers::ALT),
-    },
-    Command {
-        id: "panel.profile",
-        label: "Toggle Profile Panel",
-        pc: "Alt+P",
-        mac: "Cmd+Shift+P",
-        tui: chord('p', Modifiers::ALT),
-    },
-    Command {
-        id: "panel.tasks",
-        label: "Toggle Tasks Panel",
-        pc: "Alt+I",
-        mac: "Cmd+Shift+I",
-        tui: chord('i', Modifiers::ALT),
-    },
-    Command {
-        id: "panel.memory",
-        label: "Toggle Memory Panel",
-        pc: "Alt+M",
-        mac: "Cmd+Shift+M",
-        tui: chord('m', Modifiers::ALT),
-    },
-    Command {
-        id: "queue.menu",
-        label: "Queue Menu",
-        pc: "Alt+Q",
-        mac: "Cmd+Alt+Q",
-        tui: chord('q', Modifiers::ALT),
-    },
-    Command {
-        id: "app.quit",
-        label: "Quit",
-        pc: "Ctrl+D",
-        mac: "Cmd+Q",
-        tui: chord('d', Modifiers::CTRL),
-    },
-];
 
 /// Build the keymap with the default bindings for `platform`.
 ///
@@ -121,22 +63,23 @@ const COMMANDS: &[Command] = &[
 ///
 /// A keymap over the command catalog with no user overrides.
 pub fn default_keymap(platform: Platform) -> Keymap {
-    let catalog = COMMANDS
+    let catalog = action_catalog()
         .iter()
-        .map(|command| {
+        .map(|action| {
+            let bindable = Bindable::new(action.id, action.title, Scope::app());
             let text = if platform.is_mac() {
-                command.mac
+                action.mac_key
             } else {
-                command.pc
+                action.default_key
             };
-            let bindable = Bindable::new(command.id, command.label, Scope::app());
-            match Binding::parse(text) {
-                Ok(binding) => bindable.with_default(binding),
-                Err(err) => {
+            match text.map(Binding::parse) {
+                Some(Ok(binding)) => bindable.with_default(binding),
+                Some(Err(err)) => {
                     // The table is static; a bad entry loses its default only.
-                    tracing::warn!(command = command.id, text, ?err, "bad default chord");
+                    tracing::warn!(command = action.id, ?text, ?err, "bad default chord");
                     bindable
                 }
+                None => bindable,
             }
         })
         .collect();
@@ -152,12 +95,13 @@ pub fn default_keymap(platform: Platform) -> Keymap {
 /// # Returns
 ///
 /// The [`KeyInput`] to send to `App::handle_key`, or `None` for a command
-/// the catalog does not hold.
+/// the catalog does not hold or one with no terminal key press (the shell
+/// runs those, see [`KeyRouter::take_actions`]).
 pub fn command_key_input(command: &CommandRef) -> Option<KeyInput> {
-    COMMANDS
+    action_catalog()
         .iter()
-        .find(|c| *command == CommandRef::new(c.id))
-        .map(|c| c.tui)
+        .find(|a| *command == CommandRef::new(a.id))
+        .and_then(|a| a.key)
 }
 
 /// Convert an egui event into the frontend-neutral [`KeyInput`].
@@ -545,6 +489,44 @@ pub struct KeyRouter {
     /// Whether the transcript holds a text selection this frame (see
     /// [`KeyRouter::set_label_selection`]).
     label_selection: bool,
+    /// Actions with no terminal key press that ran since the last
+    /// [`KeyRouter::take_actions`], by id.
+    actions: Vec<String>,
+    /// The leader chord, if leader sequences are on.
+    leader: Option<(egui::Key, egui::Modifiers)>,
+    /// How long the leader waits for the next key, in seconds.
+    leader_timeout: f64,
+    /// The action each key runs after the leader.
+    leader_bindings: std::collections::BTreeMap<char, String>,
+    /// When the leader was pressed (egui input time), while it waits.
+    leader_since: Option<f64>,
+    /// The terminal key presses of catalog actions whose default chord the
+    /// keymap no longer binds to them (the user moved it): app-core would
+    /// still run the action on that press, so it is not forwarded.
+    moved_keys: Vec<KeyInput>,
+}
+
+/// The terminal key presses of the catalog actions `keymap` no longer binds
+/// to their default chord.
+fn moved_action_keys(keymap: &Keymap) -> Vec<KeyInput> {
+    let scope = Scope::app();
+    action_catalog()
+        .iter()
+        .filter_map(|action| {
+            let key = action.key?;
+            let text = if keymap.platform().is_mac() {
+                action.mac_key
+            } else {
+                action.default_key
+            }?;
+            let default = Binding::parse(text).ok()?.text(&scope);
+            let still_bound = keymap
+                .bindings(&CommandRef::new(action.id))
+                .iter()
+                .any(|b| b.text(&scope) == default);
+            (!still_bound).then_some(key)
+        })
+        .collect()
 }
 
 impl KeyRouter {
@@ -560,10 +542,152 @@ impl KeyRouter {
     #[must_use]
     pub fn new(keymap: Keymap) -> Self {
         Self {
+            moved_keys: moved_action_keys(&keymap),
             keymap,
             dispatcher: Dispatcher::new(),
             label_selection: false,
+            actions: Vec::new(),
+            leader: None,
+            leader_timeout: 0.0,
+            leader_bindings: default_leader_bindings(),
+            leader_since: None,
         }
+        .with_leader(&codemason_app_core::shortcuts::leader_startup())
+    }
+
+    /// This router with the leader key and wait of `settings`. A leader
+    /// text that does not parse turns leader sequences off.
+    #[must_use]
+    pub fn with_leader(mut self, settings: &codemason_app_core::shortcuts::LeaderSettings) -> Self {
+        self.leader = settings.key.as_deref().and_then(parse_chord);
+        self.leader_timeout = settings.timeout_ms as f64 / 1000.0;
+        self
+    }
+
+    /// Add or replace the actions keys run after the leader, by key (a
+    /// user's `"<leader> x"` bindings, see [`load_leader_bindings`]).
+    pub fn bind_after_leader(&mut self, bindings: std::collections::BTreeMap<char, String>) {
+        self.leader_bindings.extend(bindings);
+    }
+
+    /// Whether the leader was pressed and the router waits for the next key.
+    #[must_use]
+    pub fn pending_leader(&self) -> bool {
+        self.leader_since.is_some()
+    }
+
+    /// How long the leader has waited, in seconds, at egui time `now`.
+    #[must_use]
+    pub fn leader_waited(&self, now: f64) -> Option<f64> {
+        self.leader_since.map(|since| now - since)
+    }
+
+    /// The leader's wait, in seconds.
+    #[must_use]
+    pub fn leader_timeout(&self) -> f64 {
+        self.leader_timeout
+    }
+
+    /// The keys that run an action after the leader, with the action's
+    /// title, in key order.
+    #[must_use]
+    pub fn leader_entries(&self) -> Vec<(char, String)> {
+        self.leader_bindings
+            .iter()
+            .map(|(key, id)| {
+                let title = codemason_app_core::shortcuts::action(id)
+                    .map_or_else(|| id.clone(), |a| a.title.to_string());
+                (*key, title)
+            })
+            .collect()
+    }
+
+    /// Take the leader and the key after it out of `input`: the leader
+    /// starts a wait, and the next key press ends it, running the action
+    /// bound to that key (if any) and never typing. A wait longer than the
+    /// leader's timeout ends with no action. Not while a modal owns the keys.
+    fn take_leader_sequences(
+        &mut self,
+        input: &mut egui::InputState,
+        focus: Focus,
+        keys: &mut Vec<KeyInput>,
+    ) {
+        let now = input.time;
+        if self
+            .leader_since
+            .is_some_and(|since| now - since > self.leader_timeout)
+        {
+            self.leader_since = None;
+        }
+        let Some((leader_key, leader_mods)) = self.leader else {
+            return;
+        };
+        if matches!(focus, Focus::Modal { .. }) {
+            self.leader_since = None;
+            return;
+        }
+        let mut drop_text = false;
+        let mut ran: Vec<String> = Vec::new();
+        input.events.retain(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                drop_text = false;
+                if self.leader_since.take().is_some() {
+                    // The key after the leader: its action, if bound.
+                    if let Key::Char(c) = neutral_key(*key, modifiers.shift)
+                        && let Some(id) = self.leader_bindings.get(&c)
+                    {
+                        ran.push(id.clone());
+                    }
+                    drop_text = true;
+                    return false;
+                }
+                if *key == leader_key && same_modifiers(*modifiers, leader_mods) {
+                    self.leader_since = Some(now);
+                    drop_text = true;
+                    return false;
+                }
+                true
+            }
+            egui::Event::Text(_) if drop_text || self.leader_since.is_some() => {
+                drop_text = false;
+                false
+            }
+            _ => true,
+        });
+        for id in ran {
+            match codemason_app_core::shortcuts::action(&id).and_then(|a| a.key) {
+                Some(key) => keys.push(key),
+                None => self.actions.push(id),
+            }
+        }
+    }
+
+    /// The key each catalog action is bound to now (its first binding, a
+    /// user override included), as text, by action id; unbound actions are
+    /// left out.
+    #[must_use]
+    pub fn action_keys(&self) -> std::collections::BTreeMap<String, String> {
+        action_catalog()
+            .iter()
+            .filter_map(|action| {
+                self.keymap
+                    .bindings(&CommandRef::new(action.id))
+                    .first()
+                    .map(|binding| (action.id.to_string(), binding.text(&Scope::app())))
+            })
+            .collect()
+    }
+
+    /// The ids of the actions with no terminal key press that the keymap
+    /// ran since the last call, oldest first. The shell runs each through
+    /// `App::run_action`, or itself when app-core does not know it.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.actions)
     }
 
     /// Say whether selectable text outside any text field (the transcript)
@@ -643,6 +767,8 @@ impl KeyRouter {
     ///
     /// The key presses for the App.
     pub fn route(&mut self, input: &mut egui::InputState, focus: Focus) -> Vec<KeyInput> {
+        let mut leader_keys = Vec::new();
+        self.take_leader_sequences(input, focus, &mut leader_keys);
         let platform = self.keymap.platform();
         let (typing, has_selection) = match focus {
             Focus::Elsewhere | Focus::Modal { .. } => (false, false),
@@ -662,10 +788,16 @@ impl KeyRouter {
             ..Active::NONE
         };
         let hits = self.dispatcher.dispatch(input, &self.keymap, &active);
-        let mut keys: Vec<KeyInput> = hits
-            .iter()
-            .filter_map(|hit| command_key_input(&hit.command))
-            .collect();
+        let mut keys: Vec<KeyInput> = leader_keys;
+        for hit in &hits {
+            match command_key_input(&hit.command) {
+                Some(key) => keys.push(key),
+                // No terminal key press: the shell runs it.
+                None => self.actions.push(hit.command.to_string()),
+            }
+        }
+        // Presses after this point are forwarded raw, not run by a binding.
+        let raw_from = keys.len();
         let events = &input.events;
         let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
@@ -777,7 +909,119 @@ impl KeyRouter {
             index += 1;
             keep
         });
+        // A moved action's old chord must not reach app-core, which would
+        // still run the action on it.
+        let raw = keys.split_off(raw_from);
+        keys.extend(raw.into_iter().filter(|k| !self.moved_keys.contains(k)));
         keys
+    }
+}
+
+/// The keys that run an action after the leader by default: each catalog
+/// action's `leader_key`.
+fn default_leader_bindings() -> std::collections::BTreeMap<char, String> {
+    action_catalog()
+        .iter()
+        .filter_map(|a| a.leader_key.map(|c| (c, a.id.to_string())))
+        .collect()
+}
+
+/// Whether two sets of modifiers name the same chord: Ctrl, Alt, Shift and
+/// macOS Cmd all match.
+fn same_modifiers(a: egui::Modifiers, b: egui::Modifiers) -> bool {
+    a.ctrl == b.ctrl && a.alt == b.alt && a.shift == b.shift && a.mac_cmd == b.mac_cmd
+}
+
+/// Parse a chord written like `Ctrl+G` or `Cmd+Shift+K` into its egui key
+/// and modifiers; `None` when it does not parse.
+#[must_use]
+pub fn parse_chord(text: &str) -> Option<(egui::Key, egui::Modifiers)> {
+    let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    let key_name = parts.pop()?;
+    let key = egui::Key::from_name(key_name)
+        .or_else(|| egui::Key::from_name(&key_name.to_uppercase()))?;
+    let mut mods = egui::Modifiers::NONE;
+    for part in parts {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods.ctrl = true,
+            "alt" | "option" => mods.alt = true,
+            "shift" => mods.shift = true,
+            "cmd" | "command" | "super" | "meta" => mods.mac_cmd = true,
+            _ => return None,
+        }
+    }
+    Some((key, mods))
+}
+
+/// The prefix of a `gui-keys.json` value that binds a key after the leader.
+const LEADER_PREFIX: &str = "<leader>";
+
+/// Read the `"<leader> x"` bindings from the key overrides file at `path`.
+///
+/// # Returns
+///
+/// The action bound to each key after the leader, and one warning per entry
+/// that names an unknown action or whose text after `<leader>` is not one
+/// character. A missing or unreadable file gives none (see
+/// [`load_keymap`] for its warnings).
+pub fn load_leader_bindings(
+    path: &Path,
+) -> (std::collections::BTreeMap<char, String>, Vec<String>) {
+    let mut bindings = std::collections::BTreeMap::new();
+    let mut warnings = Vec::new();
+    let Some(entries) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+    else {
+        return (bindings, warnings);
+    };
+    let shown = path.display();
+    for (id, value) in entries {
+        for text in leader_texts(&value) {
+            let rest: Vec<char> = text.trim().chars().collect();
+            match (codemason_app_core::shortcuts::action(&id), rest.as_slice()) {
+                (None, _) => warnings.push(format!("{shown}: unknown action `{id}`, ignored")),
+                (Some(_), [c]) => {
+                    bindings.insert(c.to_ascii_lowercase(), id.clone());
+                }
+                (Some(_), _) => warnings.push(format!(
+                    "{shown}: `<leader>{text}` for `{id}` is not one key after the leader, ignored"
+                )),
+            }
+        }
+    }
+    (bindings, warnings)
+}
+
+/// The texts after `<leader>` in an overrides value (one text or a list).
+fn leader_texts(value: &serde_json::Value) -> Vec<String> {
+    let texts: Vec<&str> = match value {
+        serde_json::Value::String(text) => vec![text.as_str()],
+        serde_json::Value::Array(items) => items.iter().filter_map(|v| v.as_str()).collect(),
+        _ => Vec::new(),
+    };
+    texts
+        .into_iter()
+        .filter_map(|t| t.trim().strip_prefix(LEADER_PREFIX).map(str::to_string))
+        .collect()
+}
+
+/// `value` without its `"<leader> x"` texts, for craft-keymap's overrides.
+fn without_leader_texts(value: serde_json::Value) -> Option<serde_json::Value> {
+    match value {
+        serde_json::Value::String(text) if text.trim().starts_with(LEADER_PREFIX) => None,
+        serde_json::Value::Array(items) => {
+            let kept: Vec<serde_json::Value> = items
+                .into_iter()
+                .filter(|v| {
+                    !v.as_str()
+                        .is_some_and(|t| t.trim().starts_with(LEADER_PREFIX))
+                })
+                .collect();
+            (!kept.is_empty()).then_some(serde_json::Value::Array(kept))
+        }
+        other => Some(other),
     }
 }
 
@@ -794,6 +1038,10 @@ pub fn keys_path() -> Option<PathBuf> {
 /// Build the keymap for `platform` with the user overrides stored at
 /// `path`.
 ///
+/// A user binding on a chord that another action holds by default takes the
+/// chord: the default is removed from that action, so the user's binding is
+/// the one that runs.
+///
 /// # Arguments
 ///
 /// * `platform` - the platform whose default chords to use.
@@ -802,31 +1050,87 @@ pub fn keys_path() -> Option<PathBuf> {
 /// # Returns
 ///
 /// The keymap with the stored overrides applied, or [`default_keymap`]
-/// when the file is missing or cannot be read or parsed. An unreadable or
-/// invalid file, and override entries the keymap cannot use, are reported
-/// with `tracing::warn!`.
-pub fn load_keymap(platform: Platform, path: &Path) -> Keymap {
+/// when the file is missing or cannot be read or parsed, and one warning per
+/// problem: an unreadable or invalid file, an unknown action id, a key that
+/// does not parse or is reserved, and a default a user binding took over
+/// (naming both actions). The caller shows them to the user (the Log pane).
+pub fn load_keymap(platform: Platform, path: &Path) -> (Keymap, Vec<String>) {
     let keymap = default_keymap(platform);
+    let shown = path.display();
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return keymap,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (keymap, Vec::new()),
         Err(err) => {
-            tracing::warn!(path = %path.display(), %err, "cannot read GUI keys; using defaults");
-            return keymap;
+            return (
+                keymap,
+                vec![format!(
+                    "{shown}: cannot read, using the default keys: {err}"
+                )],
+            );
         }
     };
-    match serde_json::from_str::<Overrides>(&text) {
-        Ok(overrides) => {
-            let keymap = keymap.with_overrides(overrides);
-            let problems = keymap.problems();
-            if !problems.is_empty() {
-                tracing::warn!(path = %path.display(), ?problems, "GUI key overrides ignored");
-            }
-            keymap
-        }
+    // `"<leader> x"` texts are the router's (`load_leader_bindings`), not
+    // craft-keymap's.
+    let text = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(serde_json::Value::Object(entries)) => serde_json::Value::Object(
+            entries
+                .into_iter()
+                .filter_map(|(id, value)| without_leader_texts(value).map(|v| (id, v)))
+                .collect(),
+        )
+        .to_string(),
+        Ok(_) | Err(_) => text,
+    };
+    let overrides = match serde_json::from_str::<Overrides>(&text) {
+        Ok(overrides) => overrides,
         Err(err) => {
-            tracing::warn!(path = %path.display(), %err, "invalid GUI keys; using defaults");
-            keymap
+            return (
+                keymap,
+                vec![format!("{shown}: invalid, using the default keys: {err}")],
+            );
         }
+    };
+    let mut keymap = keymap.with_overrides(overrides);
+    let mut warnings: Vec<String> = keymap
+        .problems()
+        .into_iter()
+        .map(|problem| format!("{shown}: {}", describe_problem(&problem)))
+        .collect();
+    let users: Vec<CommandRef> = keymap
+        .overrides()
+        .iter()
+        .map(|(key, _)| CommandRef::new(key))
+        .collect();
+    for user in users {
+        for conflict in keymap.conflicts_with(&user) {
+            let (other, binding) = &conflict.b;
+            let default = keymap.default_bindings(other).contains(binding);
+            if conflict.kind != craft_keymap::ConflictKind::Clash || !default {
+                continue;
+            }
+            if keymap.remove(other, binding) {
+                warnings.push(format!(
+                    "{shown}: {} is now `{user}`; it was `{other}`'s default, which no longer has it",
+                    conflict.chord
+                ));
+            }
+        }
+    }
+    (keymap, warnings)
+}
+
+/// One line for a problem in the stored key overrides.
+fn describe_problem(problem: &craft_keymap::Problem) -> String {
+    use craft_keymap::Problem;
+    match problem {
+        Problem::UnknownCommand { key } => format!("unknown action `{key}`, ignored"),
+        Problem::BadBinding { key, text, error } => {
+            format!("`{text}` for `{key}` is not a key ({error:?}), ignored")
+        }
+        Problem::Reserved { key, text } => {
+            format!("`{text}` for `{key}` is reserved by the system, ignored")
+        }
+        Problem::DuplicateKey { key } => format!("`{key}` is listed twice; the second is ignored"),
+        other => format!("{other:?}"),
     }
 }

@@ -33,6 +33,14 @@
 > removed. The tables below are not re-measured; a full
 > `cargo nextest run --workspace` on this tree ran 15,866 tests, all passing.
 >
+> **GUI phase 4 (unreleased, branch `feat/ui-phase4`).** One catalog of
+> rebindable actions, a fuzzy matcher and the command palette, the leader key
+> and which-key popup, agent and session pickers, model favourites and `F2`
+> recent models, `@file#range` mentions and `/editor`. No crate is added or
+> removed. The tables below are not re-measured; a full
+> `cargo nextest run --workspace` on this tree ran 16,003 tests, all
+> passing.
+>
 > **GUI phase 3 (unreleased, branch `feat/ui-phase3`).** `/verbosity` and
 > `/thinking-display`, activity rows that fold tool calls and reasoning, inline
 > diffs and the Diff pane, diff and command previews in the permission dialog,

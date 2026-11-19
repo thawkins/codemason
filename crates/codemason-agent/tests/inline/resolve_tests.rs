@@ -24,6 +24,7 @@ async fn test_resolve_file() {
         raw: "hello.txt".to_string(),
         kind: FileRef::File(PathBuf::from("hello.txt")),
         span: 0..10,
+        range: None,
     };
 
     let resolved = resolve_ref(&parsed, &tmp).await.expect("resolve");
@@ -45,6 +46,7 @@ async fn test_resolve_directory() {
         raw: "subdir/".to_string(),
         kind: FileRef::Directory(PathBuf::from("subdir")),
         span: 0..8,
+        range: None,
     };
 
     let resolved = resolve_ref(&parsed, &tmp).await.expect("resolve");
@@ -64,6 +66,7 @@ async fn test_resolve_fuzzy() {
         raw: "main".to_string(),
         kind: FileRef::Fuzzy("main".to_string()),
         span: 0..5,
+        range: None,
     };
 
     let resolved = resolve_ref(&parsed, &tmp).await.expect("resolve");
@@ -82,6 +85,7 @@ async fn test_resolve_nonexistent_file() {
         raw: "nope.txt".to_string(),
         kind: FileRef::File(PathBuf::from("nope.txt")),
         span: 0..9,
+        range: None,
     };
 
     assert!(resolve_ref(&parsed, &tmp).await.is_err());
@@ -111,6 +115,7 @@ async fn test_resolve_url_uses_shared_client() {
         raw: url.clone(),
         kind: FileRef::Url(url),
         span: 0..10,
+        range: None,
     };
 
     let tmp = std::env::temp_dir();

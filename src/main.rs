@@ -539,6 +539,9 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     codemason_app_core::transcript_prefs::set_startup(
         codemason_app_core::transcript_prefs::TranscriptPrefs::from_config(&config),
     );
+    codemason_app_core::shortcuts::set_leader_startup(
+        codemason_app_core::shortcuts::LeaderSettings::from_config(&config),
+    );
     tracing::info!(
         yolo = config.yolo,
         edit_log = config.edit_log,

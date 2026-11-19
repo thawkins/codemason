@@ -1353,6 +1353,7 @@ dependencies = [
  "html2text",
  "ignore",
  "libc",
+ "lopdf",
  "num_cpus",
  "opentelemetry_sdk",
  "parking_lot",

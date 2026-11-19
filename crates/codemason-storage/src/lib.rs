@@ -24,8 +24,7 @@ pub use storage::{
     InitiativeMilestone, InitiativeRow, KgEntityRow, KgRelationshipRow, MemoryRow,
     MessageSearchResult, ProjectSessions, RunCostSummaryRow, SCHEMA_VERSION, SessionKind,
     SessionRequest, SessionRow, SessionSearchParams, SidebarSection, Storage, TaskDerived, TaskRow,
-    TaskUpdateParams, TaskView, compute_task_dag, decrypt_key, deobfuscate_key, detect_cycle,
-    encrypt_key, obfuscate_key,
+    TaskUpdateParams, TaskView, compute_task_dag, decrypt_key, detect_cycle, encrypt_key,
 };
 
 // Automation run-history types (spec `openhands` T-016; FR-018). Re-exported

@@ -173,7 +173,12 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   (`/verbosity low|medium|high`), reasoning sits under a collapsible Thinking
   row (`/thinking-display`), and edits show their diff, with a Diff pane for
   reviewing changed files and diff or command previews in the permission
-  dialog. Without a display
+  dialog. `Ctrl+P` opens a command palette over actions, slash commands,
+  themes, agents and sessions; every shortcut can be rebound in
+  `gui-keys.json`; a leader key (`Ctrl+G`) starts two-key sequences with a
+  which-key popup; model favourites (`Ctrl+F` in the picker) and `F2` for
+  recent models; `@file#20-45` mentions send only those lines; and `/editor`
+  writes the prompt in your own editor. Without a display
   (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
   (success, non-2xx collector response, transport error, export timeout) and a

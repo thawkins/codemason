@@ -148,6 +148,8 @@ pub struct Shell {
     /// The `movable` flag last given to the macOS window.
     #[cfg(target_os = "macos")]
     movable_applied: Option<bool>,
+    /// `/editor`: the prompt out in an external editor.
+    external_edit: crate::external_edit::ExternalEdit,
 }
 
 impl std::fmt::Debug for Shell {
@@ -202,6 +204,7 @@ impl Shell {
             frame: craft_window::policy::Frame::Native,
             #[cfg(target_os = "macos")]
             movable_applied: None,
+            external_edit: crate::external_edit::ExternalEdit::default(),
         }
     }
 
@@ -252,6 +255,19 @@ impl Shell {
         &self.layout
     }
 
+    /// Run `/editor` with `editor`, writing the prompt file in
+    /// `scratch_dir`, instead of `$VISUAL` / `$EDITOR` and the system temp
+    /// directory.
+    ///
+    /// # Returns
+    ///
+    /// The shell using that editor.
+    #[must_use]
+    pub fn with_external_editor(mut self, editor: String, scratch_dir: PathBuf) -> Self {
+        self.external_edit = crate::external_edit::ExternalEdit::with_editor(editor, scratch_dir);
+        self
+    }
+
     /// Replace the keyboard shortcuts.
     ///
     /// # Arguments
@@ -264,6 +280,17 @@ impl Shell {
     #[must_use]
     pub fn with_keymap(mut self, keymap: craft_keymap::Keymap) -> Self {
         self.keys = KeyRouter::new(keymap);
+        self
+    }
+
+    /// Add the user's `"<leader> x"` bindings (from
+    /// [`crate::keys::load_leader_bindings`]); call after [`Self::with_keymap`].
+    #[must_use]
+    pub fn with_leader_bindings(
+        mut self,
+        bindings: std::collections::BTreeMap<char, String>,
+    ) -> Self {
+        self.keys.bind_after_leader(bindings);
         self
     }
 
@@ -492,6 +519,24 @@ impl Shell {
         egui::CentralPanel::default().show(ui, |ui| {
             sessions_rect = self.show_dock(ui, &palette, document);
         });
+        if self.app.palette.is_some() {
+            dialogs::palette::set_action_keys(ui.ctx(), self.keys.action_keys());
+        }
+        // The leader waits for its second key: after a moment, list the keys.
+        let now = ui.input(|i| i.time);
+        if let Some(waited) = self.keys.leader_waited(now) {
+            if waited >= dialogs::which_key::WHICH_KEY_DELAY {
+                dialogs::which_key::show(ui.ctx(), &self.keys.leader_entries());
+            }
+            // Wake to show the popup, and to end the wait at its timeout.
+            let next = if waited < dialogs::which_key::WHICH_KEY_DELAY {
+                dialogs::which_key::WHICH_KEY_DELAY - waited
+            } else {
+                (self.keys.leader_timeout() - waited).max(0.0) + 0.01
+            };
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(next));
+        }
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx());
         self.close.show(ui.ctx(), &mut self.app);
@@ -809,6 +854,7 @@ impl Shell {
         self.apply_file_answers(ctx);
         self.housekeeping(ctx);
         self.poll_timers(ctx);
+        self.external_edit.poll(ctx, &mut self.app);
         clipboard::forward_copies(ctx);
         if let Some(geometry) = self.geometry.as_mut() {
             geometry.track(ctx);
@@ -1025,6 +1071,35 @@ impl Shell {
         }
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
+        }
+        // A modal dialog (or a locked prompt) keeps the keyboard: a keyless
+        // action such as the palette must not open over it. Keyed actions
+        // went through `App::handle_key`, which applies the same guards.
+        let actions = self.keys.take_actions();
+        if dialogs::active(&self.app).is_none() && !self.app.is_input_locked() {
+            for action in actions {
+                self.run_action(ctx, &action);
+            }
+        }
+        // An action a palette row handed to the frontend.
+        while let Some(action) = self.app.take_frontend_action() {
+            self.run_action(ctx, &action);
+        }
+    }
+
+    /// Run the catalog action `id` that has no terminal key press: through
+    /// `App::run_action` when app-core knows it, else here.
+    fn run_action(&mut self, ctx: &egui::Context, id: &str) {
+        let Some(sources) = self.sources.as_ref() else {
+            return;
+        };
+        if sources.runtime.block_on(self.app.run_action(id)) {
+            ctx.request_repaint();
+            return;
+        }
+        match id {
+            "prompt.editor" => self.external_edit.start(ctx, &mut self.app),
+            _ => tracing::debug!(action = id, "no handler for the action"),
         }
     }
 

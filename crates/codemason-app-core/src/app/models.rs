@@ -552,6 +552,7 @@ impl App {
         );
         // Persist the chosen model per-provider so it can be restored later (FR-003).
         persist(&format!("provider_{}_last_model", provider_id), &entry.id);
+        self.remember_recent_model(&provider_id, &provider_name, entry);
         self.session.selected_model = Some(model_value);
         self.session.selected_model_ctx_window = Some(entry.context_window);
         self.persist_selected_thinking_level(thinking_level);
@@ -1264,6 +1265,7 @@ impl App {
                 .cmp(&b.name.to_lowercase())
                 .then_with(|| a.id.to_lowercase().cmp(&b.id.to_lowercase()))
         });
+        self.sort_favorites_first(&mut entries);
 
         entries
     }
@@ -1402,6 +1404,7 @@ impl App {
             return self.selected_model_fallback_entries(provider_id);
         }
 
+        self.sort_favorites_first(&mut models);
         models
     }
 

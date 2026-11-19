@@ -221,12 +221,16 @@ mod test_esc_stops_agent;
 mod test_event_handler_more;
 #[path = "test_event_swarm_research_deep.rs"]
 mod test_event_swarm_research_deep;
+#[path = "test_external_editor.rs"]
+mod test_external_editor;
 #[path = "test_force_cleanup_modal.rs"]
 mod test_force_cleanup_modal;
 #[path = "test_fr030_surface_agreement.rs"]
 mod test_fr030_surface_agreement;
 #[path = "test_fr033_completion_surfaces.rs"]
 mod test_fr033_completion_surfaces;
+#[path = "test_fuzzy.rs"]
+mod test_fuzzy;
 #[path = "test_gcf_command.rs"]
 mod test_gcf_command;
 #[path = "test_gcf_indicator.rs"]
@@ -333,6 +337,8 @@ mod test_mcp_remove;
 mod test_memory_clear_confirm;
 #[path = "test_memory_panel.rs"]
 mod test_memory_panel;
+#[path = "test_mentions.rs"]
+mod test_mentions;
 #[path = "test_message_blocks.rs"]
 mod test_message_blocks;
 #[path = "test_message_edit_seq_cache.rs"]
@@ -349,6 +355,8 @@ mod test_message_widget_summaries2;
 mod test_message_widget_tests;
 #[path = "test_misc_modules_deep.rs"]
 mod test_misc_modules_deep;
+#[path = "test_model_favorites.rs"]
+mod test_model_favorites;
 #[path = "test_models_state_misc.rs"]
 mod test_models_state_misc;
 #[path = "test_modules_arms_deep.rs"]
@@ -371,6 +379,8 @@ mod test_osinfo_registration;
 mod test_output_view_footer;
 #[path = "test_output_view_live_steps.rs"]
 mod test_output_view_live_steps;
+#[path = "test_palette_command.rs"]
+mod test_palette_command;
 #[path = "test_perf_render_idle.rs"]
 mod test_perf_render_idle;
 #[path = "test_permission_answer_guard.rs"]
@@ -501,6 +511,8 @@ mod test_session_resume;
 mod test_sessions_sidebar;
 #[path = "test_setup_dialog_chrome.rs"]
 mod test_setup_dialog_chrome;
+#[path = "test_shortcuts_catalog.rs"]
+mod test_shortcuts_catalog;
 #[path = "test_skill_command.rs"]
 mod test_skill_command;
 #[path = "test_slash_advertised_forms.rs"]

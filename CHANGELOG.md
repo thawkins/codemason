@@ -15,6 +15,15 @@
 - Added: Material Design 3 colour roles for every theme (`ThemeTokens::roles`). A theme file may carry them in an optional `m3` block, which is contrast-checked on load; otherwise they are derived from the existing tokens. Two new built-in themes, `document-light` and `document-dark`, carry their own roles, generated from one blue seed. Neither is the default; select them with `/theme` (NEWUI Phase 1).
 - Changed: the GUI's corner radii (8/12/16 pt) and caption and heading sizes (11 pt, 22 pt) now follow the Material Design 3 shape and type scales (NEWUI Phase 1).
 - Added: `docs/NEWUI.md`, a plan to restyle the GUI with a word-processor layout (ribbon, page on a desk, side sheets, status bar) built from Material Design 3 components and tokens. Plan only; no code changes.
+- Added: line-range mentions. `@src/a.rs#20-45` (or `#20`) sends only those lines of the file, clamped to its length.
+- Added: `/editor` (leader `e`) edits the prompt in `$VISUAL` or `$EDITOR`; the prompt is locked until the editor exits.
+- Added: model favourites. In the model picker `Ctrl+F` marks or unmarks the highlighted model; favourites are listed first and marked `*`. The picker's filter now matches fuzzily on name or id.
+- Added: `F2` switches to the next of your 5 most recently chosen models (`model.cycle_recent`, rebindable).
+- Added: agent and session pickers with fuzzy search: leader `a` (`picker.agent`) and leader `s` (`picker.session`).
+- Added: a leader key, `Ctrl+G` by default (`leader` and `leader_timeout_ms` in `codemason.json`): press it, then `m` choose model, `a` choose agent, `u` undo, `r` redo, `b` Sessions panel. After a moment a popup lists the keys. Bind your own in `gui-keys.json` as `"<leader> x"`.
+- Added: a command palette (`Ctrl+P` | `Cmd+P`). It searches every shortcut action, slash command, theme, agent and session with fuzzy matching; Enter runs the top row, Esc closes. A slash command that takes arguments is put in the prompt to finish. Action rows show their current key.
+- Added: every GUI shortcut is an action in one catalog with a dotted id (`panel.context`, `session.new`, `mode.yolo`, `help.shortcuts`, ...), so all of them can be rebound in `gui-keys.json`. Problems in that file (an unknown id, a key that does not parse) and a binding that takes another action's default key are reported in the Log pane at startup; your binding wins.
+- Added: macOS gets Cmd+Shift chords for the context, sessions, agents and teams panels and for the autopilot, YOLO, edit-log, GCF and image-paste toggles.
 - Added: the GUI bundles the Lucide icon font (lucide-static 1.66.0, ISC licence; Feather-derived icons MIT). Activity rows show an icon for their main kind of work, and a finished tool call shows a check or a cross; without the font they fall back to ASCII.
 - Added: the permission dialog previews exactly the call it asks about, with the input it will run with after any hook: every hunk of an edit (a write to an existing file is diffed against its current contents), or a shell call's full command. Permission requests raised for a tool call now carry that call (`tool_call` on `PermissionRequested`; not in the SSE payload).
 - Added: a finished edit (`Edit`, `multi_edit`, `Write`, `create`) is followed in the transcript by its diff: the path with `+added -removed`, the first hunk with line numbers on added and removed backgrounds, and an Open diff button. Under the default verbosity the diff sits inside the activity row.
@@ -84,6 +93,12 @@
 - Fixed: `cdmn serve` with no `openai.token` or `CODEMASON_TOKEN` prints the bearer token it generated for the run to stderr; before, the token was never shown and every protected route answered `401`.
 
 ### Changed
+
+- Changed: the deprecated `obfuscate_key` / `deobfuscate_key` wrappers in `codemason-storage` (and their re-exports from `codemason_storage` and `codemason_agent::storage`) are removed. They only forwarded to `encrypt_key` / `decrypt_key`, and their docs still described a v1/v2 format although the store writes v3. `Storage::set_provider_auth` now calls `encrypt_key` directly; stored values are unchanged. Sanctioned test edit: `test_provider_auth_store.rs` decodes through `decrypt_key` (#10, LC-13).
+
+- Changed: two test-only helpers are removed. `codemason_types::guard::cap_read` had no production caller (and its re-export from the crate root goes with it); `codemason_llm`'s `http_client::append_stream_chunk_capped` was superseded by `append_chunk_guarded`, which every provider stream loop uses. Sanctioned test edits: `test_shared_guards.rs` drops the two `cap_read` tests, and `test_http_client_helpers.rs` re-points its overflow test at `append_chunk_guarded`, which had no direct test (#10, B-03).
+
+- Changed: the unused `codemason_llm::providers::http_client::MAX_RETRY_AFTER` alias is removed; `Retry-After` is still clamped to 30 s through `codemason_types::guard::clamp_retry_after`, the single source of truth for `MAX_RETRY_AFTER`. No test edits were needed (#10, LC-12).
 
 - Changed: the `chat_request_payload_bytes` compatibility alias in `codemason-agent`'s `session::history` (and its `session::processor` re-export) is removed; callers use `estimate_request_bytes`, which it only delegated to. Sanctioned test edits: `test_history_estimators.rs` drops the alias-equality assert, and `test_session_processor.rs` calls `estimate_request_bytes` directly (#10, AA-10).
 

@@ -472,42 +472,6 @@ pub fn clamp_retry_after(hint: std::time::Duration) -> std::time::Duration {
     hint
 }
 
-/// Truncate `bytes` to at most `max_bytes`, tolerating a partial UTF-8 boundary
-/// at the cut point.
-///
-/// SEC-codemason-llm-005 and SEC-codemason-types-005 (SECTASKS T-028, T-035, T-067):
-/// every capped read in the workspace needs the same "keep the prefix, do not
-/// panic on a split character" behaviour.
-///
-/// # Examples
-///
-/// ```
-/// use codemason_types::guard::cap_read;
-///
-/// let text = cap_read(b"hello world", 5);
-/// assert_eq!(text, "hello");
-/// // "e" is two bytes; a cut inside it drops only the split character.
-/// let text = cap_read("caf\u{e9}".as_bytes(), 4);
-/// assert_eq!(text, "caf");
-/// ```
-#[must_use]
-pub fn cap_read(bytes: &[u8], max_bytes: usize) -> String {
-    let end = if bytes.len() <= max_bytes {
-        bytes.len()
-    } else {
-        max_bytes
-    };
-    match std::str::from_utf8(&bytes[..end]) {
-        Ok(text) => text.to_string(),
-        Err(err) => {
-            // `valid_up_to` is always on a char boundary, so the prefix slice
-            // cannot panic.
-            let valid = err.valid_up_to();
-            String::from_utf8_lossy(&bytes[..valid]).into_owned()
-        }
-    }
-}
-
 /// Write `bytes` to `path` atomically: a unique temp file in the same
 /// directory, then a rename.
 ///
