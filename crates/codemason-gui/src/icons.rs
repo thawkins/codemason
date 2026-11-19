@@ -1,12 +1,14 @@
-//! Icons from the bundled Lucide font, with ASCII stand-ins.
+//! Icons from the bundled Material Symbols Rounded font, with ASCII stand-ins.
 //!
 //! [`Icon`] names the icons the window draws; [`Icon::glyph`] is its code
-//! point in the bundled Lucide font (`assets/fonts/lucide.ttf`,
-//! `lucide-static` 1.66.0, ISC licence, the Feather-derived icons MIT, see
-//! `assets/fonts/Lucide-LICENSE.txt`) and [`Icon::ascii`] what is drawn when
-//! the font stack cannot draw it ([`icon_text`]).
+//! point in the bundled Material Symbols Rounded font
+//! (`assets/fonts/MaterialSymbolsRounded.ttf`, a static FILL 0 / wght 400 /
+//! opsz 24 instance subset to these icons, Apache License 2.0, see
+//! `assets/fonts/MaterialSymbols-LICENSE.txt`, which also gives the command
+//! that rebuilds the subset) and [`Icon::ascii`] what is drawn when the font
+//! stack cannot draw it ([`icon_label`]).
 //!
-//! The Lucide face is alone in its own family, [`ICON_FAMILY`] (see
+//! The icon face is alone in its own family, [`ICON_FAMILY`] (see
 //! [`crate::fonts::font_stack`]): its glyphs sit at private-use code points
 //! that other faces, and model output, use for other things, so text never
 //! falls back to it. [`icon_label`] draws an icon in that family.
@@ -15,41 +17,42 @@
 
 use egui::{FontFamily, FontId, RichText};
 
-/// Name of the Lucide face in the font stack.
-pub const ICON_FACE: &str = "Lucide";
+/// Name of the Material Symbols face in the font stack.
+pub const ICON_FACE: &str = "MaterialSymbolsRounded";
 
-/// The font family that holds only the Lucide face.
+/// The font family that holds only the Material Symbols face.
 pub const ICON_FAMILY: &str = "codemason-icons";
 
-/// The Lucide icon font (`lucide-static` 1.66.0).
-pub(crate) const LUCIDE: &[u8] = include_bytes!("../assets/fonts/lucide.ttf");
+/// The Material Symbols Rounded icon font, subset to the [`Icon`] glyphs.
+pub(crate) const MATERIAL_SYMBOLS: &[u8] =
+    include_bytes!("../assets/fonts/MaterialSymbolsRounded.ttf");
 
 /// An icon the window draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
-    /// Reading files (`file`).
+    /// Reading files (`description`).
     Read,
-    /// Editing files (`file-pen`).
+    /// Editing files (`edit_document`).
     Edit,
-    /// Running a command (`square-terminal`).
+    /// Running a command (`terminal`).
     Command,
     /// Searching (`search`).
     Search,
-    /// An agent or another tool (`bot`).
+    /// An agent or another tool (`smart_toy`).
     Agent,
     /// Done (`check`).
     Check,
-    /// Failed (`x`).
+    /// Failed (`close`).
     Cross,
-    /// A warning (`triangle-alert`).
+    /// A warning (`warning`).
     Warning,
     /// Information (`info`).
     Info,
-    /// Closed (`chevron-right`).
+    /// Closed (`chevron_right`).
     ChevronRight,
-    /// Open (`chevron-down`).
+    /// Open (`expand_more`).
     ChevronDown,
-    /// Copy (`copy`).
+    /// Copy (`content_copy`).
     Copy,
 }
 
@@ -70,26 +73,26 @@ impl Icon {
         Self::Copy,
     ];
 
-    /// The icon's character in the Lucide font.
+    /// The icon's character in the Material Symbols font.
     #[must_use]
     pub const fn glyph(self) -> &'static str {
         match self {
-            Self::Read => "\u{e0c0}",
-            Self::Edit => "\u{e31f}",
-            Self::Command => "\u{e20a}",
-            Self::Search => "\u{e151}",
-            Self::Agent => "\u{e1bb}",
-            Self::Check => "\u{e06c}",
-            Self::Cross => "\u{e1b2}",
-            Self::Warning => "\u{e193}",
-            Self::Info => "\u{e0f9}",
-            Self::ChevronRight => "\u{e06f}",
-            Self::ChevronDown => "\u{e06d}",
-            Self::Copy => "\u{e09e}",
+            Self::Read => "\u{e873}",
+            Self::Edit => "\u{f88c}",
+            Self::Command => "\u{eb8e}",
+            Self::Search => "\u{ef7a}",
+            Self::Agent => "\u{f06c}",
+            Self::Check => "\u{e668}",
+            Self::Cross => "\u{e5cd}",
+            Self::Warning => "\u{f083}",
+            Self::Info => "\u{e88e}",
+            Self::ChevronRight => "\u{e5cc}",
+            Self::ChevronDown => "\u{e5cf}",
+            Self::Copy => "\u{e14d}",
         }
     }
 
-    /// What is drawn when the font stack has no Lucide.
+    /// What is drawn when the font stack has no icon face.
     #[must_use]
     pub const fn ascii(self) -> &'static str {
         match self {
@@ -123,7 +126,7 @@ pub fn has_icon(ctx: &egui::Context, icon: Icon) -> bool {
     })
 }
 
-/// `icon` as text of `size` in `color`: its Lucide glyph in [`ICON_FAMILY`]
+/// `icon` as text of `size` in `color`: its icon glyph in [`ICON_FAMILY`]
 /// when the installed fonts have it, else its ASCII stand-in.
 #[must_use]
 pub fn icon_label(ctx: &egui::Context, icon: Icon, size: f32, color: egui::Color32) -> RichText {

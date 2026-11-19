@@ -8,8 +8,8 @@
 use codemason_app_core::styled::{StyledLine, StyledSpan, TextStyle};
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::fonts::{
-    BOLD_FACE, BOLD_FAMILY, BOLD_MONO_FAMILY, SYMBOL_FACE, UI_BOLD_FACE, UI_FACE, font_stack,
-    install,
+    BOLD_FACE, BOLD_FAMILY, BOLD_MONO_FAMILY, FALLBACK_BOLD_FACE, FALLBACK_FACE, SYMBOL_FACE,
+    UI_BOLD_FACE, UI_FACE, font_stack, install,
 };
 use codemason_gui::palette::Palette;
 use codemason_gui::styled_text::{Bold, FONT_SIZE, drawable, styled_to_layout_job};
@@ -30,8 +30,8 @@ const COVERED: [char; 8] = [
 /// it either: the info sign.
 const SYSTEM_ONLY: [(char, char); 1] = [('\u{2139}', 'i')];
 
-/// Status icons the bundled Inter face draws in proportional text: the error
-/// cross and the warning sign.
+/// Status icons the bundled fallback face (Inter) draws in proportional
+/// text: the error cross and the warning sign.
 const UI_FACE_ICONS: [char; 2] = ['\u{2717}', '\u{26A0}'];
 
 /// The families the window draws text in.
@@ -67,13 +67,19 @@ fn test_fonts_stack_registers_fallback_families() {
         proportional.iter().any(|name| name == SYMBOL_FACE),
         "{proportional:?}"
     );
-    // Proportional text is led by the bundled UI face.
-    assert_eq!(proportional.first().map(String::as_str), Some(UI_FACE));
+    // Proportional text is led by the bundled UI face, then its fallback.
+    assert_eq!(
+        proportional.get(..2),
+        Some([UI_FACE.to_string(), FALLBACK_FACE.to_string()].as_slice())
+    );
     // Bold prose starts with the UI face's own bold weight, and falls back to
     // the bold code face for the block glyphs it lacks; bold code starts with
     // the bold code face.
     let bold = stack.chain(&FontFamily::Name(BOLD_FAMILY.into()));
-    assert_eq!(bold.first().map(String::as_str), Some(UI_BOLD_FACE));
+    assert_eq!(
+        bold.get(..2),
+        Some([UI_BOLD_FACE.to_string(), FALLBACK_BOLD_FACE.to_string()].as_slice())
+    );
     assert!(bold.iter().any(|name| name == BOLD_FACE), "{bold:?}");
     let bold_mono = stack.chain(&FontFamily::Name(BOLD_MONO_FAMILY.into()));
     assert_eq!(bold_mono.first().map(String::as_str), Some(BOLD_FACE));
@@ -203,8 +209,19 @@ fn test_fonts_icon_glyphs_present() {
         let label = codemason_gui::icons::icon_label(&ctx, icon, FONT_SIZE, egui::Color32::WHITE);
         assert_eq!(label.text(), icon.glyph(), "{icon:?}");
     }
-    // Lucide stays out of the text families: a private-use character in
-    // text is still drawn as its stand-in.
+    // The icon face stays out of the text families, so a private-use
+    // character in text never falls back to it.
+    let stack = font_stack(SystemFonts::Off);
+    for family in families() {
+        let chain = stack.chain(&family);
+        assert!(
+            !chain
+                .iter()
+                .any(|name| name == codemason_gui::icons::ICON_FACE),
+            "{family:?}: {chain:?}"
+        );
+    }
+    // A private-use character no text face has is drawn as its stand-in.
     let font = FontId::proportional(FONT_SIZE);
     assert_eq!(drawable(&ctx, &font, "\u{E5B6}"), "?");
 }

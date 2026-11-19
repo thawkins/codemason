@@ -7,25 +7,33 @@
 //! blocks, the U+25C6 running diamond) and no CJK.
 //! [`font_stack`] builds craft-ui's [`UiFonts`] stack with:
 //!
-//! - the bundled Inter Regular face ([`UI_FACE`]) leading the proportional
-//!   family, and Inter SemiBold ([`UI_BOLD_FACE`]) leading [`BOLD_FAMILY`],
-//!   so bold prose is drawn in the same typeface as the text around it
-//!   (`assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`, Inter 4.1, SIL
-//!   Open Font License 1.1, see `assets/fonts/Inter-LICENSE.txt`);
-//! - egui's default faces after it in the proportional family and first in
+//! - the bundled Roboto Flex Regular face ([`UI_FACE`]), the Material
+//!   Design 3 typeface, leading the proportional family, and Roboto Flex
+//!   Medium ([`UI_BOLD_FACE`], weight 500) leading [`BOLD_FAMILY`], so bold
+//!   prose is drawn in the same typeface as the text around it
+//!   (`assets/fonts/RobotoFlex-Regular.ttf`, `RobotoFlex-Medium.ttf`, static
+//!   instances of Roboto Flex, SIL Open Font License 1.1, see
+//!   `assets/fonts/RobotoFlex-LICENSE.txt`);
+//! - the bundled Inter Regular and SemiBold faces ([`FALLBACK_FACE`],
+//!   [`FALLBACK_BOLD_FACE`]) right after them, for the Greek, Cyrillic and
+//!   symbol glyphs Roboto Flex lacks, such as the U+2717 cross and the U+26A0
+//!   warning sign (`assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`,
+//!   Inter 4.1, SIL Open Font License 1.1, see
+//!   `assets/fonts/Inter-LICENSE.txt`);
+//! - egui's default faces after them in the proportional family and first in
 //!   the monospace family;
-//! - the bundled Lucide icon face ([`crate::icons::ICON_FACE`],
-//!   `assets/fonts/lucide.ttf`, ISC licence, see
-//!   `assets/fonts/Lucide-LICENSE.txt`) alone in
-//!   [`crate::icons::ICON_FAMILY`], used only to draw icons;
+//! - the bundled Material Symbols Rounded icon face
+//!   ([`crate::icons::ICON_FACE`], `assets/fonts/MaterialSymbolsRounded.ttf`,
+//!   Apache License 2.0, see `assets/fonts/MaterialSymbols-LICENSE.txt`)
+//!   alone in [`crate::icons::ICON_FAMILY`], used only to draw icons;
 //! - egui's bundled `Hack` face ([`SYMBOL_FACE`]) after them in the
 //!   proportional family, for the whole U+2500..U+25FF range (box drawing,
 //!   block elements, geometric shapes);
 //! - the bundled Hack Bold face ([`BOLD_FACE`], `assets/fonts/Hack-Bold.ttf`,
 //!   Hack v3.003, MIT and Bitstream Vera licences, see
 //!   `assets/fonts/Hack-LICENSE.txt`) leading [`BOLD_MONO_FAMILY`] for bold
-//!   code, and following Inter SemiBold in [`BOLD_FAMILY`] for the block and
-//!   box-drawing glyphs Inter lacks;
+//!   code, and following the bold UI faces in [`BOLD_FAMILY`] for the block
+//!   and box-drawing glyphs they lack;
 //! - installed system fonts (craft-ui's `system_fonts` feature) for
 //!   everything the bundled faces lack: CJK and other scripts, emoji, and
 //!   the U+2139 info status icon (Inter draws the U+2717 ballot cross and
@@ -52,10 +60,18 @@ pub const BOLD_MONO_FAMILY: &str = "codemason-bold-mono";
 pub const BOLD_FACE: &str = "Hack-Bold";
 
 /// The egui font name of the bundled proportional UI face.
-pub const UI_FACE: &str = "Inter-Regular";
+pub const UI_FACE: &str = "RobotoFlex-Regular";
 
 /// The egui font name of the bundled bold proportional UI face.
-pub const UI_BOLD_FACE: &str = "Inter-SemiBold";
+pub const UI_BOLD_FACE: &str = "RobotoFlex-Medium";
+
+/// The egui font name of the proportional face that follows [`UI_FACE`] for
+/// the glyphs it lacks.
+pub const FALLBACK_FACE: &str = "Inter-Regular";
+
+/// The egui font name of the bold face that follows [`UI_BOLD_FACE`] for the
+/// glyphs it lacks.
+pub const FALLBACK_BOLD_FACE: &str = "Inter-SemiBold";
 
 /// egui's bundled face that covers box drawing, block elements and
 /// geometric shapes; the proportional family falls back to it.
@@ -63,6 +79,14 @@ pub const SYMBOL_FACE: &str = "Hack";
 
 /// Hack Bold v3.003 (Source Foundry; MIT and Bitstream Vera licences).
 const HACK_BOLD: &[u8] = include_bytes!("../assets/fonts/Hack-Bold.ttf");
+
+/// Roboto Flex Regular, a static wght 400 instance (The Roboto Flex Project
+/// Authors; SIL Open Font License 1.1).
+const ROBOTO_FLEX_REGULAR: &[u8] = include_bytes!("../assets/fonts/RobotoFlex-Regular.ttf");
+
+/// Roboto Flex Medium, a static wght 500 instance (The Roboto Flex Project
+/// Authors; SIL Open Font License 1.1).
+const ROBOTO_FLEX_MEDIUM: &[u8] = include_bytes!("../assets/fonts/RobotoFlex-Medium.ttf");
 
 /// Inter Regular 4.1 (The Inter Project Authors; SIL Open Font License 1.1).
 const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
@@ -82,10 +106,11 @@ const BOLD_WEIGHT: u16 = 700;
 ///
 /// # Returns
 ///
-/// The stack: [`UI_FACE`] then egui's default faces in the proportional
-/// family with [`SYMBOL_FACE`] as its fallback, the Lucide icon face alone
-/// in [`crate::icons::ICON_FAMILY`], [`BOLD_FAMILY`] led by
-/// [`UI_BOLD_FACE`], [`BOLD_MONO_FAMILY`] led by [`BOLD_FACE`], then system
+/// The stack: [`UI_FACE`], [`FALLBACK_FACE`] then egui's default faces in
+/// the proportional family with [`SYMBOL_FACE`] as its fallback, the
+/// Material Symbols face alone in [`crate::icons::ICON_FAMILY`],
+/// [`BOLD_FAMILY`] led by [`UI_BOLD_FACE`] and [`FALLBACK_BOLD_FACE`],
+/// [`BOLD_MONO_FAMILY`] led by [`BOLD_FACE`], then system
 /// fonts when `system` allows them.
 #[must_use]
 pub fn font_stack(system: SystemFonts) -> Stack {
@@ -96,19 +121,30 @@ pub fn font_stack(system: SystemFonts) -> Stack {
     UiFonts::new(&I18nScripts)
         .app_face(
             UI_FACE,
+            FontData::from_static(ROBOTO_FLEX_REGULAR),
+            &[FontFamily::Proportional],
+        )
+        .app_face(
+            FALLBACK_FACE,
             FontData::from_static(INTER_REGULAR),
             &[FontFamily::Proportional],
         )
         .app_face(
             UI_BOLD_FACE,
+            FontData::from_static(ROBOTO_FLEX_MEDIUM),
+            &[FontFamily::Name(BOLD_FAMILY.into())],
+        )
+        .app_face(
+            FALLBACK_BOLD_FACE,
             FontData::from_static(INTER_SEMIBOLD),
             &[FontFamily::Name(BOLD_FAMILY.into())],
         )
-        // Icons, in a family of their own: Lucide's private-use code points
-        // would otherwise draw icons for characters other faces reserve.
+        // Icons, in a family of their own: the icon font's private-use code
+        // points would otherwise draw icons for characters other faces
+        // reserve.
         .app_face(
             crate::icons::ICON_FACE,
-            FontData::from_static(crate::icons::LUCIDE),
+            FontData::from_static(crate::icons::MATERIAL_SYMBOLS),
             &[FontFamily::Name(crate::icons::ICON_FAMILY.into())],
         )
         .app_face(BOLD_FACE, FontData::from_static(HACK_BOLD), &bold)

@@ -87,7 +87,17 @@ Done as planned, with these differences:
    - Verify: a token test asserting every on-X / X pair meets `AA_CONTRAST`
      for all bundled themes.
 
-### Phase 2: fonts and icons (1 day)
+### Phase 2: fonts and icons (1 day) - DONE
+
+Done as planned, with these differences:
+- Roboto Flex ships as two static instances (wght 400 and 500, all other
+  axes at their defaults) cut with fonttools, not the variable font.
+- Inter is not removed: it follows Roboto Flex in the proportional and bold
+  families, because Roboto Flex lacks the U+2717 cross, the U+26A0 warning
+  sign and much of Greek and Cyrillic.
+- The Material Symbols font is a 3 KB subset of the 12 icons in use; the
+  rebuild command is in `assets/fonts/MaterialSymbols-LICENSE.txt`. Later
+  phases add their icons to that command.
 
 1. Bundle `RobotoFlex` and `MaterialSymbolsRounded` under
    `crates/codemason-gui/assets/fonts/` with their licence files; add both to

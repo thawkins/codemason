@@ -4,6 +4,7 @@
 
 ### Added
 
+- Changed: the GUI draws text in Roboto Flex (the Material Design 3 typeface; Regular, and Medium for bold), with Inter kept right after it for the Greek, Cyrillic and symbol glyphs Roboto Flex lacks. Icons come from Material Symbols Rounded (Apache 2.0, a 3 KB subset) instead of Lucide, which is removed (NEWUI Phase 2).
 - Added: Material Design 3 colour roles for every theme (`ThemeTokens::roles`). A theme file may carry them in an optional `m3` block, which is contrast-checked on load; otherwise they are derived from the existing tokens. Two new built-in themes, `document-light` and `document-dark`, carry their own roles, generated from one blue seed. Neither is the default; select them with `/theme` (NEWUI Phase 1).
 - Changed: the GUI's corner radii (8/12/16 pt) and caption and heading sizes (11 pt, 22 pt) now follow the Material Design 3 shape and type scales (NEWUI Phase 1).
 - Added: `docs/NEWUI.md`, a plan to restyle the GUI with a word-processor layout (ribbon, page on a desk, side sheets, status bar) built from Material Design 3 components and tokens. Plan only; no code changes.
