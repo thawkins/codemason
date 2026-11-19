@@ -312,7 +312,7 @@ impl super::App {
 
 /// Result of the background code-index startup, delivered to the App over a
 /// channel so the `&mut App` updates happen on the frontend's thread.
-pub(crate) struct CodeIndexStartupResult {
+pub struct CodeIndexStartupResult {
     /// The opened code index, if any.
     index: Option<Arc<codemason_codeindex::CodeIndex>>,
     /// The watch session, if the watcher started.
