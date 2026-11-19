@@ -1048,9 +1048,14 @@ pub fn reply_image_source(src: &str, root: &Path) -> ReplyImageSource {
 /// Whether the window can load the image file at `path`.
 fn loadable(ui: &egui::Ui, path: &Path) -> bool {
     let uri = format!("file://{}", path.display());
-    ui.ctx()
-        .try_load_image(&uri, egui::load::SizeHint::default())
-        .is_ok()
+    let ctx = ui.ctx();
+    // A changed file is read again; an SVG is rasterised at a capped size.
+    crate::image_load::refresh_if_changed(ctx, &uri);
+    let Some(hint) = crate::image_load::decode_hint(ctx, &uri) else {
+        ctx.request_repaint();
+        return false;
+    };
+    ctx.try_load_image(&uri, hint).is_ok()
 }
 
 /// How an image is fitted into its box.

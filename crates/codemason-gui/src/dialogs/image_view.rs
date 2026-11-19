@@ -41,14 +41,6 @@ const MIN_BODY: f32 = 160.0;
 /// buttons beside a small image.
 const MIN_DIALOG_WIDTH: f32 = 280.0;
 
-/// Whether the image at `uri` is a vector image (SVG), which scales without
-/// blurring.
-fn is_vector(uri: &str) -> bool {
-    std::path::Path::new(uri)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
-}
-
 /// `size` scaled, keeping its shape, to fit inside `room`. A raster image
 /// that already fits keeps its own size (enlarging it would blur it); a
 /// vector image (`vector`) is scaled up to fill the room too.
@@ -122,14 +114,12 @@ pub fn show(ctx: &egui::Context, palette: &Palette) -> bool {
     };
     let window = ctx.content_rect().size();
     // The image's own size, once loaded, for Actual size.
-    let natural = ctx
-        .try_load_texture(
-            &uri,
-            egui::TextureOptions::default(),
-            egui::SizeHint::default(),
-        )
-        .ok()
-        .and_then(|poll| poll.size());
+    crate::image_load::refresh_if_changed(ctx, &uri);
+    let natural = crate::image_load::decode_hint(ctx, &uri).and_then(|hint| {
+        ctx.try_load_texture(&uri, egui::TextureOptions::default(), hint)
+            .ok()
+            .and_then(|poll| poll.size())
+    });
     let mut actual = ctx
         .data(|d| d.get_temp::<bool>(actual_id()))
         .unwrap_or(false);
@@ -145,7 +135,7 @@ pub fn show(ctx: &egui::Context, palette: &Palette) -> bool {
                     if actual {
                         size.min(body)
                     } else {
-                        fitted(size, body, is_vector(&uri))
+                        fitted(size, body, crate::image_load::is_svg(&uri))
                     }
                 });
                 ui.set_width(shown.x.max(MIN_DIALOG_WIDTH));

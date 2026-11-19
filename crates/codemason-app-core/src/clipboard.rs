@@ -373,8 +373,11 @@ pub const SVG_ATTACHMENT_MAX_SIDE: u32 = 2048;
 /// at twice its own size (sharper on a model's screen-sized input) unless
 /// that would pass [`SVG_ATTACHMENT_MAX_SIDE`], which caps it.
 ///
-/// The PNG is saved where pasted images are (`target/temp/`, as
-/// `codemason_paste_*.png`), so the same pruning removes it later.
+/// The PNG is saved where pasted images are (`target/temp/`) as
+/// `codemason_svg_<hash>.png`, named by the SVG's content. The pruning of
+/// old pasted images (`codemason_paste_*`) leaves it alone, so a session
+/// that attached it can show and resend it later; attaching the same SVG
+/// again reuses the file instead of adding another.
 ///
 /// # Errors
 ///
@@ -383,6 +386,13 @@ pub const SVG_ATTACHMENT_MAX_SIDE: u32 = 2048;
 pub fn svg_to_png_temp(svg: &std::path::Path) -> Result<PathBuf> {
     use resvg::{tiny_skia, usvg};
     let data = std::fs::read(svg)?;
+    let temp_dir = PASTE_DIR_OVERRIDE
+        .with(|d| d.borrow().clone())
+        .unwrap_or_else(project_temp_dir);
+    let target = temp_dir.join(format!("codemason_svg_{:016x}.png", svg_key(&data)));
+    if target.is_file() {
+        return Ok(target);
+    }
     let mut options = usvg::Options {
         resources_dir: svg.parent().map(std::path::Path::to_path_buf),
         ..usvg::Options::default()
@@ -416,24 +426,36 @@ pub fn svg_to_png_temp(svg: &std::path::Path) -> Result<PathBuf> {
         .collect();
     let image = image::RgbaImage::from_raw(width, height, rgba)
         .ok_or_else(|| anyhow::anyhow!("rasterised SVG has the wrong size"))?;
-    let temp_dir = PASTE_DIR_OVERRIDE
-        .with(|d| d.borrow().clone())
-        .unwrap_or_else(project_temp_dir);
+    // Written beside the target and renamed into place, so a reader never
+    // sees a half-written PNG; the writer is flushed (and the error
+    // reported) before that.
     let tmp_file = tempfile::Builder::new()
-        .prefix("codemason_paste_")
-        .suffix(".png")
+        .prefix("codemason_svg_")
+        .suffix(".tmp")
         .tempfile_in(&temp_dir)
         .map_err(|e| anyhow::anyhow!("failed to create temp file: {e}"))?;
-    image
-        .write_to(
-            &mut std::io::BufWriter::new(tmp_file.as_file()),
-            image::ImageFormat::Png,
-        )
-        .map_err(|e| anyhow::anyhow!("failed to write PNG: {e}"))?;
-    let (_, path) = tmp_file
-        .keep()
-        .map_err(|e| anyhow::anyhow!("failed to keep temp file: {e}"))?;
-    Ok(path)
+    {
+        let mut writer = std::io::BufWriter::new(tmp_file.as_file());
+        image
+            .write_to(&mut writer, image::ImageFormat::Png)
+            .map_err(|e| anyhow::anyhow!("failed to write PNG: {e}"))?;
+        std::io::Write::flush(&mut writer)
+            .map_err(|e| anyhow::anyhow!("failed to write PNG: {e}"))?;
+    }
+    tmp_file
+        .persist(&target)
+        .map_err(|e| anyhow::anyhow!("failed to save PNG: {e}"))?;
+    Ok(target)
+}
+
+/// The name key of an SVG's PNG: a hash of its bytes and of the
+/// rasterisation settings, so a change to either makes a new file.
+fn svg_key(data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut hasher);
+    SVG_ATTACHMENT_MAX_SIDE.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Encode `arboard::ImageData` (raw RGBA pixels) as a PNG saved to a

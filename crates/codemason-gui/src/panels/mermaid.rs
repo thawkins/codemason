@@ -33,6 +33,10 @@ pub const SHOW_SOURCE: &str = "Show source";
 /// The button that shows the diagram again.
 pub const SHOW_DIAGRAM: &str = "Show diagram";
 
+/// The tallest a diagram is drawn in the transcript, in points; a click
+/// opens it at full size.
+pub const MAX_INLINE_HEIGHT: f32 = 1200.0;
+
 /// Accessible name and full-size view headline of a diagram.
 pub const DIAGRAM_NAME: &str = "Mermaid diagram";
 
@@ -91,14 +95,14 @@ pub fn mermaid_theme(palette: &Palette) -> Theme {
 /// A rendered diagram: its SVG, or why it could not be rendered.
 type Rendered = Arc<Result<Arc<[u8]>, String>>;
 
-/// The cache key of `source` drawn in `theme`.
-fn key(source: &str, theme: &Theme) -> u64 {
+/// The cache key of `source` drawn in `theme`: the source and every
+/// theme input (each colour, the font and the light or dark base), so any
+/// theme change draws the diagram again.
+#[must_use]
+pub fn key(source: &str, theme: &Theme) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut hasher);
-    theme.primary_color.hash(&mut hasher);
-    theme.text_color.hash(&mut hasher);
-    theme.background.hash(&mut hasher);
-    theme.line_color.hash(&mut hasher);
+    format!("{theme:?}").hash(&mut hasher);
     hasher.finish()
 }
 
@@ -177,7 +181,7 @@ pub fn mermaid_ui(
         let uri = format!("bytes://mermaid/{key:016x}.svg");
         let image = egui::Image::from_bytes(uri.clone(), egui::load::Bytes::Shared(svg))
             .fit_to_original_size(1.0)
-            .max_width(ui.available_width())
+            .max_size(egui::vec2(ui.available_width(), MAX_INLINE_HEIGHT))
             .corner_radius(radius::SM)
             .alt_text(DIAGRAM_NAME)
             .sense(egui::Sense::CLICK);

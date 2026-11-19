@@ -80,7 +80,41 @@ async fn test_svg_attachments_invalid_svg_is_not_attached() {
     let scratch = Scratch::new("invalid");
     let svg = scratch.svg("broken.svg", "this is not svg");
     let mut app = support::make_app();
-    app.attach_image_path(&svg);
+    assert!(!app.attach_image_path(&svg), "reported as not attached");
     assert_eq!(app.session.pending_attachments.len(), 0, "nothing attached");
     assert!(svg_to_png_temp(&svg).is_err());
+}
+
+#[test]
+fn test_svg_attachments_png_survives_pruning_and_is_reused() {
+    let scratch = Scratch::new("durable");
+    let svg = scratch.svg("box.svg", BLUE_BOX);
+    let first = svg_to_png_temp(&svg).expect("converted");
+    let name = first.file_name().and_then(|n| n.to_str()).expect("name");
+    assert!(name.starts_with("codemason_svg_"), "{name}");
+    // Pasted images are pruned by age; the converted SVG is not one.
+    codemason_app_core::clipboard::prune_clipboard_temp_files_in(
+        &scratch.0,
+        std::time::Duration::ZERO,
+    )
+    .expect("prune");
+    assert!(first.exists(), "kept after pruning");
+    assert_eq!(svg_to_png_temp(&svg).expect("again"), first, "reused");
+}
+
+#[test]
+fn test_svg_attachments_embedded_raster_image_is_drawn() {
+    let scratch = Scratch::new("embedded");
+    // A 1 x 1 red PNG embedded as a data URL, stretched over the SVG.
+    let red_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+    let body = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="20" height="20"><image width="20" height="20" xlink:href="data:image/png;base64,{red_png}"/></svg>"#
+    );
+    let png = svg_to_png_temp(&scratch.svg("embedded.svg", &body)).expect("converted");
+    let image = image::open(&png).expect("a PNG").to_rgba8();
+    let pixel = image.get_pixel(20, 20).0;
+    assert!(
+        pixel[0] > 200 && pixel[1] < 60 && pixel[3] == 255,
+        "red: {pixel:?}"
+    );
 }

@@ -5220,8 +5220,7 @@ impl App {
             );
             return false;
         }
-        self.stage_image_path(path.to_path_buf(), "file dialog");
-        true
+        self.stage_image_path(path.to_path_buf(), "file dialog")
     }
 
     /// Add an existing image file to the pending attachments, warning when
@@ -5231,7 +5230,9 @@ impl App {
     /// An SVG is rasterised to a PNG first (providers take raster images
     /// only) and the PNG is attached; one that cannot be read is not
     /// attached, and that is logged.
-    fn stage_image_path(&mut self, path: std::path::PathBuf, source: &str) {
+    ///
+    /// Returns whether an attachment was added.
+    fn stage_image_path(&mut self, path: std::path::PathBuf, source: &str) -> bool {
         self.warn_if_path_outside_safe_scope(&path);
         let is_svg = path
             .extension()
@@ -5254,7 +5255,7 @@ impl App {
                         LogLevel::Warn,
                         format!("[attach] Could not attach SVG {}: {e}", path.display()),
                     );
-                    return;
+                    return false;
                 }
             }
         } else {
@@ -5268,6 +5269,7 @@ impl App {
             ),
         );
         self.session.pending_attachments.push(attached);
+        true
     }
 
     /// Log a warning when a clipboard-resolved image path lies outside the

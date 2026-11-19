@@ -93,6 +93,24 @@ pub fn split_standalone_images(markdown: &str) -> Vec<MarkdownPiece> {
     let mut paragraph: Option<(usize, Vec<(String, String)>, bool)> = None;
     let mut in_image = false;
     let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    // Each piece is parsed on its own, so a reference link (`[docs][d]`) on
+    // one side of an image needs the document's definitions: they are
+    // appended to every piece once the document is split (a definition
+    // renders as nothing), as `message_blocks::split_code_blocks` does.
+    let definitions: Vec<&str> = Parser::new_ext(markdown, options)
+        .reference_definitions()
+        .iter()
+        .filter_map(|(_, def)| markdown.get(def.span.clone()))
+        .map(str::trim)
+        .collect();
+    let piece = |text: &str| {
+        let mut text = text.to_string();
+        if !definitions.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&definitions.join("\n"));
+        }
+        MarkdownPiece::Markdown(text)
+    };
     for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
         match event {
             MdEvent::Start(Tag::Paragraph) if depth == 0 => {
@@ -106,7 +124,7 @@ pub fn split_standalone_images(markdown: &str) -> Vec<MarkdownPiece> {
                 {
                     let before = &markdown[emitted..start];
                     if !before.trim().is_empty() {
-                        pieces.push(MarkdownPiece::Markdown(before.to_string()));
+                        pieces.push(piece(before));
                     }
                     pieces.push(MarkdownPiece::Image { alt, src });
                     emitted = range.end;
@@ -119,7 +137,7 @@ pub fn split_standalone_images(markdown: &str) -> Vec<MarkdownPiece> {
                 }
             }
             MdEvent::End(TagEnd::Image) => in_image = false,
-            MdEvent::Text(text) if in_image => {
+            MdEvent::Text(text) | MdEvent::Code(text) if in_image => {
                 if let Some((_, images, _)) = paragraph.as_mut()
                     && let Some((alt, _)) = images.last_mut()
                 {
@@ -144,7 +162,7 @@ pub fn split_standalone_images(markdown: &str) -> Vec<MarkdownPiece> {
     }
     let rest = &markdown[emitted..];
     if !rest.trim().is_empty() {
-        pieces.push(MarkdownPiece::Markdown(rest.to_string()));
+        pieces.push(piece(rest));
     }
     pieces
 }

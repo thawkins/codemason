@@ -64,3 +64,23 @@ fn test_markdown_images_web_url_is_kept_as_written() {
         vec![image("logo", "https://example.com/logo.png")]
     );
 }
+
+#[test]
+fn test_markdown_images_alt_text_keeps_inline_code() {
+    assert_eq!(
+        split_standalone_images("![`CPU` usage](chart.png)"),
+        vec![image("CPU usage", "chart.png")]
+    );
+}
+
+#[test]
+fn test_markdown_images_pieces_keep_reference_definitions() {
+    let doc = "[docs][d]\n\n![chart](chart.png)\n\n[d]: https://example.com";
+    let pieces = split_standalone_images(doc);
+    assert_eq!(pieces[1], image("chart", "chart.png"));
+    let MarkdownPiece::Markdown(first) = &pieces[0] else {
+        panic!("markdown first: {pieces:?}");
+    };
+    assert!(first.starts_with("[docs][d]"), "{first:?}");
+    assert!(first.ends_with("[d]: https://example.com"), "{first:?}");
+}

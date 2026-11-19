@@ -32,12 +32,17 @@ egui = { workspace = true }
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 # Thumbnails of attached images in the transcript (`file://` URIs, decoded
 # by `image` with the workspace's formats).
-# `svg` and `svg_text` rasterise rendered Mermaid diagrams (resvg, with
-# the system's fonts for their labels).
-egui_extras = { version = "0.37", default-features = false, features = ["file", "image", "svg", "svg_text"] }
+# `svg`, `svg_text` and `svg_images` rasterise SVGs (rendered Mermaid
+# diagrams, SVG images in replies) with resvg: their labels in the system's
+# fonts and their embedded raster images.
+egui_extras = { version = "0.37", default-features = false, features = ["file", "image", "svg", "svg_text", "svg_images"] }
 # Mermaid diagrams in the transcript, rendered to SVG in pure Rust (MIT);
 # no CLI and no PNG writer (`default-features = false`).
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+# Reads an SVG's own size before it is rasterised (crate::image_load), so a
+# huge SVG is drawn at a capped size. 0.45.1 is egui_extras' version: no
+# new crates.
+resvg = { version = "0.45.1", default-features = false }
 # JPEG, GIF and WebP too: transcript images (attachments, images in replies)
 # come in those formats; the workspace default is PNG only.
 image = { workspace = true, features = ["jpeg", "gif", "webp"] }

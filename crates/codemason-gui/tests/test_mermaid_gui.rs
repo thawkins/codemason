@@ -123,3 +123,21 @@ fn test_mermaid_language_tag_and_theme_colours() {
     assert_eq!(theme.text_color, hex(m3.on_surface));
     assert_eq!(theme.background, hex(m3.surface));
 }
+
+#[test]
+fn test_mermaid_cache_key_covers_every_theme_colour() {
+    let tokens = ThemeCatalog::builtin().resolve(&ThemeSelection::System, true);
+    let palette = Palette::from_tokens(&tokens);
+    let theme = mermaid_theme(&palette);
+    let base = codemason_gui::panels::mermaid::key("flowchart TD\n A-->B", &theme);
+    let mut outline = theme.clone();
+    outline.primary_border_color = "#123456".to_string();
+    let mut note = theme.clone();
+    note.sequence_note_fill = "#654321".to_string();
+    for changed in [outline, note] {
+        assert_ne!(
+            codemason_gui::panels::mermaid::key("flowchart TD\n A-->B", &changed),
+            base
+        );
+    }
+}
