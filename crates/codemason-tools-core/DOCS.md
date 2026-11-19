@@ -14,7 +14,7 @@ helpers, and the concrete core tool implementations.
 - tokio, async-trait, serde, serde_json, anyhow, tracing
 - globset, similar, lru
 - grep-regex, grep-searcher, ignore, regex, rayon, same-file
-- which, libc, chrono, dirs, rust_xlsxwriter
+- which, libc, chrono, dirs
 
 Dev-dependencies: tempfile, filetime.
 
@@ -97,5 +97,4 @@ Dev-dependencies: tempfile, filetime.
 - **edit_log** — JSONL edit audit log: `is_edit_log_enabled`, `log_edit_operation`, `edit_log_summary`, `detect_old_str_risks`, `edit_log_analyse`, `edit_log_stats`.
 - **cron_log** — JSONL cron execution log: `CronOutcome`, `log_cron_execution`, `read_cron_log`, `clear_cron_logs`.
 - **truncate** — `truncate_content`, `truncate_content_head_tail`, `get_truncation_stats`.
-- **xlsx** — `write_xlsx(path, content)` helper.
 - **file_lock** — `lock_file(path)` per-file mutex.

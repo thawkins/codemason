@@ -166,8 +166,5 @@ mod test_think;
 #[path = "test_truncate.rs"]
 mod test_truncate;
 
-#[path = "test_xlsx.rs"]
-mod test_xlsx;
-
 #[path = "test_bash_large_output.rs"]
 mod test_bash_large_output;

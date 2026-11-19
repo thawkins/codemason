@@ -1,7 +1,7 @@
 //! Coverage-focused happy-path tests for the simple file-operation tools that
 //! are otherwise only exercised on their rejection branches: `create`,
 //! `write`, `append_to_file`, `copy_file`, `move_file`, `rm`, `make_directory`,
-//! `file_info`, `diff_files`, `calculator` and the `xlsx` writer.
+//! `file_info`, `diff_files` and `calculator`.
 //!
 //! Every assertion is concrete (real files under `target/temp`, real byte
 //! counts, real type strings) so a regression in the success path fails loudly.
@@ -368,27 +368,4 @@ async fn test_calculator_returns_result_and_reports_errors() {
         .await
         .unwrap_err();
     assert_ne!(err.to_string(), "");
-}
-
-#[test]
-fn test_xlsx_writer_edge_shapes() {
-    use codemason_tools_core::xlsx::write_xlsx;
-    let dir = temp_dir("xlsx");
-    // Missing sheets array is an error.
-    assert!(write_xlsx(&dir.join("bad.xlsx"), &json!({})).is_err());
-
-    // A sheet with no rows still writes a valid workbook.
-    let path = dir.join("empty.xlsx");
-    write_xlsx(&path, &json!({"sheets": [{"name": "Only"}]})).unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    assert_eq!(&bytes[..4], b"PK\x03\x04");
-
-    // Default sheet name when `name` is absent; null cells are skipped.
-    let path2 = dir.join("def.xlsx");
-    write_xlsx(
-        &path2,
-        &json!({"sheets": [{"rows": [[1, true, "s", null]]}]}),
-    )
-    .unwrap();
-    assert_eq!(&std::fs::read(&path2).unwrap()[..4], b"PK\x03\x04");
 }

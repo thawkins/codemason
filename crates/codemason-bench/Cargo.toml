@@ -17,6 +17,8 @@ path = "tests/all.rs"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# XLSX writer for `src/xlsx.rs` (benchmark workbooks).
+rust_xlsxwriter.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 sha2.workspace = true
@@ -29,7 +31,6 @@ async-trait = { workspace = true }
 # Internal crates
 codemason-agent = { path = "../codemason-agent" }
 codemason-llm = { path = "../codemason-llm" }
-codemason-tools-core = { path = "../codemason-tools-core" }
 codemason-types = { path = "../codemason-types" }
 
 [dev-dependencies]

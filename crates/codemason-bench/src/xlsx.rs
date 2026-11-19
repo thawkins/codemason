@@ -1,7 +1,9 @@
-//! Shared XLSX writing helpers used by benchmark exports.
+//! XLSX writing helper for benchmark exports.
 //!
-//! This module centralizes the workbook writer so every XLSX-producing surface
-//! in the workspace uses the same `serde_json` sheet/row representation.
+//! [`crate::workbook`] is the only caller: it turns a run's results into the
+//! `serde_json` sheet/row shape below and writes it with `rust_xlsxwriter`.
+//! The helper lived in `codemason-tools-core` until #10 (TL-07) moved it to its
+//! sole consumer.
 
 use anyhow::{Context, Result};
 use serde_json::Value;

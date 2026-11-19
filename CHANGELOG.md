@@ -83,6 +83,8 @@
 
 ### Changed
 
+- Changed: the `write_xlsx` helper moves from `codemason-tools-core` (`src/xlsx.rs`) to its only caller, `codemason-bench` (`codemason_bench::xlsx`). tools-core no longer depends on `rust_xlsxwriter`, and bench no longer depends on tools-core. Sanctioned test edits: `test_xlsx.rs` moves to the bench crate's `tests/` with its import updated, and the `test_xlsx_writer_edge_shapes` case moves out of tools-core's `test_file_ops_happy_paths.rs` into it (#10, TL-07).
+
 - Changed: the deprecated `obfuscate_key` / `deobfuscate_key` wrappers in `codemason-storage` (and their re-exports from `codemason_storage` and `codemason_agent::storage`) are removed. They only forwarded to `encrypt_key` / `decrypt_key`, and their docs still described a v1/v2 format although the store writes v3. `Storage::set_provider_auth` now calls `encrypt_key` directly; stored values are unchanged. Sanctioned test edit: `test_provider_auth_store.rs` decodes through `decrypt_key` (#10, LC-13).
 
 - Changed: two test-only helpers are removed. `codemason_types::guard::cap_read` had no production caller (and its re-export from the crate root goes with it); `codemason_llm`'s `http_client::append_stream_chunk_capped` was superseded by `append_chunk_guarded`, which every provider stream loop uses. Sanctioned test edits: `test_shared_guards.rs` drops the two `cap_read` tests, and `test_http_client_helpers.rs` re-points its overflow test at `append_chunk_guarded`, which had no direct test (#10, B-03).

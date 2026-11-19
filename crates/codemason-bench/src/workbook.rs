@@ -1,8 +1,8 @@
 //! Fixed benchmark workbook schema and XLSX writing.
 
+use crate::xlsx::write_xlsx;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use codemason_tools_core::xlsx::write_xlsx;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
