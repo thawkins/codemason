@@ -3,7 +3,7 @@
 //!
 //! Every command is one the window already has: a slash command
 //! ([`MenuAction::Slash`]), a key press such as Esc ([`MenuAction::Key`]), a
-//! keymap command such as a panel toggle ([`RibbonAction::Panel`]), or a file
+//! panel toggle sent as its keymap command ([`RibbonAction::Panel`]), or a file
 //! dialog ([`RibbonAction::Files`]). The ribbon only collects them in one
 //! place; [`crate::shell`] runs the [`RibbonAction`] a click returns, the
 //! same way it runs the native menu's.
@@ -13,7 +13,12 @@
 //!
 //! The tab strip is laid out with craft-ui's [`craft_ui::tabs`]: tabs keep
 //! their natural width ([`fit_whole`]), and each is a [`Tab`] with the
-//! accessible tab role. Buttons use [`crate::material`]'s state layers.
+//! accessible tab role. Buttons use [`crate::material`]'s state layers; a
+//! panel toggle is filled in `secondary_container` while its panel is open.
+//!
+//! The band spans the window's width on every tab, so switching tabs never
+//! changes its size, and each button is as wide as its label needs. In a
+//! window too narrow for a tab's groups the band scrolls sideways.
 //!
 //! When the app draws the window frame ([`crate::title_bar`]), the title
 //! strip is also the window's title bar, with the caption buttons.
@@ -35,6 +40,7 @@ use craft_window::policy::Frame;
 use egui::{CornerRadius, Rect, Response, Role, Sense, Stroke, Vec2, WidgetInfo};
 use serde::{Deserialize, Serialize};
 
+use crate::dock::PaneId;
 use crate::icons::Icon;
 use crate::material::icon_button::{IconButtonKind, icon_button};
 use crate::material::{
@@ -53,17 +59,18 @@ pub const TITLE_STRIP_HEIGHT: f32 = 40.0;
 /// Height of the ribbon's tab strip, in points.
 pub const TAB_HEIGHT: f32 = 36.0;
 
-/// Height of the band of grouped commands under the tabs, in points.
-pub const BAND_HEIGHT: f32 = 88.0;
+/// Height of the band of grouped commands under the tabs, in points: a
+/// button over its group's caption.
+pub const BAND_HEIGHT: f32 = 72.0;
 
 /// Vertical padding of the band, in points.
 const BAND_MARGIN: f32 = 4.0;
 
-/// Width of a ribbon command button, in points.
-const BUTTON_WIDTH: f32 = 72.0;
+/// Narrowest a ribbon command button gets, in points; wider labels widen it.
+const BUTTON_MIN_WIDTH: f32 = 56.0;
 
-/// Height of a ribbon command button, in points.
-const BUTTON_HEIGHT: f32 = 60.0;
+/// Height of a ribbon command button, in points: its icon over its label.
+const BUTTON_HEIGHT: f32 = 52.0;
 
 /// Size of a ribbon command's icon, in points.
 const BUTTON_ICON: f32 = 24.0;
@@ -79,8 +86,9 @@ pub const HOME_TAB: usize = 1;
 pub enum RibbonAction {
     /// A key press or slash command, run as the native menu runs it.
     Menu(MenuAction),
-    /// A keymap command by id (e.g. `panel.log`), sent as its key press.
-    Panel(&'static str),
+    /// Toggle a panel, sent as its keymap command's key press
+    /// ([`crate::dock::panel_command`]); the button shows whether the panel is open.
+    Panel(PaneId),
     /// A file dialog, whose answer the shell applies.
     Files(FileIntent),
 }
@@ -124,11 +132,11 @@ const fn slash(label: &'static str, icon: Icon, line: &'static str) -> RibbonIte
 }
 
 /// A ribbon item toggling a panel through its keymap command.
-const fn panel(label: &'static str, icon: Icon, command: &'static str) -> RibbonItem {
+const fn panel(label: &'static str, icon: Icon, pane: PaneId) -> RibbonItem {
     RibbonItem {
         label,
         icon,
-        action: RibbonAction::Panel(command),
+        action: RibbonAction::Panel(pane),
     }
 }
 
@@ -236,10 +244,10 @@ pub const TABS: &[RibbonTab] = &[
             RibbonGroup {
                 label: "Panels",
                 items: &[
-                    panel("Log", Icon::Log, "panel.log"),
-                    panel("Profile", Icon::Profile, "panel.profile"),
-                    panel("Tasks", Icon::Tasks, "panel.tasks"),
-                    panel("Memory", Icon::Memory, "panel.memory"),
+                    panel("Log", Icon::Log, PaneId::Log),
+                    panel("Profile", Icon::Profile, PaneId::Profile),
+                    panel("Tasks", Icon::Tasks, PaneId::Tasks),
+                    panel("Memory", Icon::Memory, PaneId::Memory),
                 ],
             },
             RibbonGroup {
@@ -365,6 +373,7 @@ pub fn title_strip_ui(
 /// * `state` - the open tab and collapsed flag; a tab click opens that tab
 ///   (and expands a collapsed ribbon), the chevron at the right collapses
 ///   or expands it.
+/// * `shown` - whether a panel is open, which its toggle button shows.
 ///
 /// # Returns
 ///
@@ -373,6 +382,7 @@ pub fn ribbon_ui(
     ui: &mut egui::Ui,
     palette: &Palette,
     state: &mut RibbonState,
+    shown: &dyn Fn(PaneId) -> bool,
 ) -> Option<RibbonAction> {
     tab_strip(ui, palette, state);
     // The band slides open and shut: its height follows the openness, and
@@ -391,12 +401,12 @@ pub fn ribbon_ui(
     let full = BAND_MARGIN.mul_add(2.0, BAND_HEIGHT);
     let top = ui.cursor().min;
     let width = ui.available_width();
-    let (shown, _) = ui.allocate_exact_size(Vec2::new(width, full * openness), Sense::hover());
+    let (visible, _) = ui.allocate_exact_size(Vec2::new(width, full * openness), Sense::hover());
     let mut band_ui = ui.new_child(
         egui::UiBuilder::new().max_rect(Rect::from_min_size(top, Vec2::new(width, full))),
     );
-    band_ui.set_clip_rect(shown.intersect(ui.clip_rect()));
-    band(&mut band_ui, palette, tab)
+    band_ui.set_clip_rect(visible.intersect(ui.clip_rect()));
+    band(&mut band_ui, palette, tab, shown)
 }
 
 /// The tab strip with the collapse chevron at its right end.
@@ -494,9 +504,14 @@ fn paint_tab(ui: &egui::Ui, palette: &Palette, response: &Response, label: &str,
     text_width
 }
 
-/// The open tab's band: each group's buttons over its caption, groups
-/// separated by `outline_variant` dividers.
-fn band(ui: &mut egui::Ui, palette: &Palette, tab: &RibbonTab) -> Option<RibbonAction> {
+/// The open tab's band, as wide as the window: each group's buttons over
+/// its caption, groups separated by `outline_variant` dividers.
+fn band(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    tab: &RibbonTab,
+    shown: &dyn Fn(PaneId) -> bool,
+) -> Option<RibbonAction> {
     let m3 = &palette.m3;
     let mut chosen = None;
     egui::Frame::new()
@@ -504,56 +519,127 @@ fn band(ui: &mut egui::Ui, palette: &Palette, tab: &RibbonTab) -> Option<RibbonA
         .corner_radius(CornerRadius::same(crate::metrics::radius::MD))
         .inner_margin(egui::Margin::symmetric(8, BAND_MARGIN as i8))
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.set_height(BAND_HEIGHT);
-            ui.horizontal(|ui| {
-                for (index, group) in tab.groups.iter().enumerate() {
-                    if index > 0 {
-                        let rect = ui
-                            .allocate_exact_size(Vec2::new(space::SM, BAND_HEIGHT), Sense::hover())
-                            .0;
-                        ui.painter().vline(
-                            rect.center().x,
-                            rect.y_range().shrink(space::SM),
-                            Stroke::new(1.0, rgb(m3.outline_variant)),
-                        );
-                    }
-                    let spacing = ui.spacing().item_spacing.x;
-                    let count = group.items.len() as f32;
-                    let width = BUTTON_WIDTH.mul_add(count, spacing * (count - 1.0).max(0.0));
-                    let layout = egui::Layout::top_down(egui::Align::Center);
-                    ui.allocate_ui_with_layout(Vec2::new(width, BAND_HEIGHT), layout, |ui| {
-                        ui.horizontal(|ui| {
-                            for item in group.items {
-                                if ribbon_button(ui, palette, item).clicked() {
-                                    chosen = Some(item.action);
-                                }
+            // In a window too narrow for the groups the band scrolls
+            // sideways (a plain mouse wheel scrolls it too), so no command
+            // is cut off; at full width nothing scrolls.
+            ui.style_mut().always_scroll_the_only_direction = true;
+            egui::ScrollArea::horizontal()
+                .id_salt("ribbon_band_scroll")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        for (index, group) in tab.groups.iter().enumerate() {
+                            if index > 0 {
+                                divider(ui, palette);
                             }
-                        });
-                        ui.label(
-                            egui::RichText::new(group.label)
-                                .size(text_size::SMALL)
-                                .color(rgb(m3.on_surface_variant)),
-                        );
+                            if let Some(action) = band_group(ui, palette, group, shown) {
+                                chosen = Some(action);
+                            }
+                        }
                     });
-                }
-            });
+                });
         });
     chosen
 }
 
-/// One ribbon command: its icon over its label.
-fn ribbon_button(ui: &mut egui::Ui, palette: &Palette, item: &RibbonItem) -> Response {
+/// A divider between two groups, inset from the band's edges.
+fn divider(ui: &mut egui::Ui, palette: &Palette) {
+    let width = space::SM.mul_add(2.0, 1.0);
+    let rect = ui
+        .allocate_exact_size(Vec2::new(width, BAND_HEIGHT), Sense::hover())
+        .0;
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range().shrink(space::SM),
+        Stroke::new(1.0, rgb(palette.m3.outline_variant)),
+    );
+}
+
+/// One group: its buttons in a row, each as wide as its label needs, and
+/// its caption centred under them.
+fn band_group(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    group: &RibbonGroup,
+    shown: &dyn Fn(PaneId) -> bool,
+) -> Option<RibbonAction> {
     let m3 = &palette.m3;
-    let size = Vec2::new(BUTTON_WIDTH, BUTTON_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), item.label));
+    let font = egui::FontId::proportional(text_size::SMALL);
+    let label_colour = content_colour(ui, palette, rgb(m3.on_surface));
+    let widths: Vec<f32> = group
+        .items
+        .iter()
+        .map(|item| {
+            let text = text_galley(ui, item.label, font.clone(), label_colour)
+                .size()
+                .x;
+            space::SM.mul_add(2.0, text).max(BUTTON_MIN_WIDTH)
+        })
+        .collect();
+    let caption_colour = content_colour(ui, palette, rgb(m3.on_surface_variant));
+    let caption = text_galley(ui, group.label, font, caption_colour);
+    let gaps = widths.len().saturating_sub(1) as f32;
+    let row: f32 = space::XS.mul_add(gaps, widths.iter().sum::<f32>());
+    let width = row.max(space::SM.mul_add(2.0, caption.size().x));
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BAND_HEIGHT), Sense::hover());
+    let mut chosen = None;
+    let mut x = rect.center().x - row / 2.0;
+    for (item, item_width) in group.items.iter().zip(widths) {
+        let button = Rect::from_min_size(
+            egui::pos2(x, rect.top()),
+            Vec2::new(item_width, BUTTON_HEIGHT),
+        );
+        x += item_width + space::XS;
+        let on = match item.action {
+            RibbonAction::Panel(pane) => Some(shown(pane)),
+            RibbonAction::Menu(_) | RibbonAction::Files(_) => None,
+        };
+        if ribbon_button(ui, palette, item, button, on).clicked() {
+            chosen = Some(item.action);
+        }
+    }
+    let caption_pos = egui::pos2(
+        rect.center().x - caption.size().x / 2.0,
+        rect.bottom() - caption.size().y,
+    );
+    ui.painter().galley(caption_pos, caption, caption_colour);
+    chosen
+}
+
+/// One ribbon command in `rect`: its icon over its label. A toggle (`on` is
+/// `Some`) is filled in `secondary_container` while on.
+fn ribbon_button(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    item: &RibbonItem,
+    rect: Rect,
+    on: Option<bool>,
+) -> Response {
+    let m3 = &palette.m3;
+    let id = ui.scope_id().with(("ribbon_button", item.label));
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| match on {
+        Some(on) => WidgetInfo::selected(Role::Button, ui.is_enabled(), on, item.label),
+        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), item.label),
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }
     let corner = CornerRadius::same(crate::metrics::radius::SM);
-    let content = content_colour(ui, palette, rgb(m3.on_surface));
+    let selected = on == Some(true);
+    let (content, icon_colour) = if selected {
+        ui.painter()
+            .rect_filled(rect, corner, rgb(m3.secondary_container));
+        let colour = rgb(m3.on_secondary_container);
+        (colour, colour)
+    } else {
+        (rgb(m3.on_surface), rgb(m3.primary))
+    };
+    let content = content_colour(ui, palette, content);
+    let icon_colour = content_colour(ui, palette, icon_colour);
     paint_state_layer(ui, &response, corner, content);
-    let icon_colour = content_colour(ui, palette, rgb(m3.primary));
     let glyph = icon_galley(ui, item.icon, BUTTON_ICON, icon_colour);
     let icon_pos = egui::pos2(
         rect.center().x - glyph.size().x / 2.0,

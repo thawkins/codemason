@@ -13,6 +13,7 @@ pub mod registry;
 pub mod runner;
 pub mod suites;
 pub mod workbook;
+pub mod xlsx;
 
 pub use command::{
     BenchCommand, BenchInitMode, BenchInitTarget, BenchRunOptions, BenchTarget, parse_bench_command,

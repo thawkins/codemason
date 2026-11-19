@@ -10,12 +10,13 @@ use codemason_app_core::app::SLASH_COMMANDS;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
+use codemason_gui::dock::panel_command;
 use codemason_gui::keys::{command_key_input, default_keymap};
 use codemason_gui::platform::menu::MenuAction;
 use codemason_gui::ribbon::{HOME_TAB, QUICK_ACCESS, RibbonAction, RibbonItem, TABS};
 use craft_keymap::{CommandRef, Platform};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A running window in theme `theme`: its runtime and harness.
 struct Rig {
@@ -69,11 +70,14 @@ fn test_ribbon_commands_are_ones_the_window_has() {
                     item.label
                 );
             }
-            RibbonAction::Panel(command) => assert!(
-                command_key_input(&CommandRef::new(command)).is_some(),
-                "{}: {command} is not a keymap command",
-                item.label
-            ),
+            RibbonAction::Panel(pane) => {
+                let command = panel_command(pane);
+                assert!(
+                    command.is_some_and(|c| command_key_input(&CommandRef::new(c)).is_some()),
+                    "{}: {pane:?} has no keymap command",
+                    item.label
+                );
+            }
             RibbonAction::Menu(MenuAction::Key(_)) | RibbonAction::Files(_) => {}
         }
     }
@@ -130,7 +134,50 @@ fn test_ribbon_panel_button_toggles_the_panel() {
     rig.harness.run();
     rig.harness.get_by_label("Log").click();
     rig.harness.run();
-    assert_ne!(rig.harness.state().app().show_log, before);
+    let after = rig.harness.state().app().show_log;
+    assert_ne!(after, before);
+    // The button shows the panel's state (the open panel's dock tab is
+    // also labelled "Log", but is no toggle).
+    let toggled: Vec<_> = rig
+        .harness
+        .query_all_by_label("Log")
+        .filter_map(|node| node.accesskit_node().toggled())
+        .collect();
+    let want = if after {
+        egui::accesskit::Toggled::True
+    } else {
+        egui::accesskit::Toggled::False
+    };
+    assert_eq!(toggled, vec![want]);
+}
+
+#[test]
+fn test_ribbon_band_scrolls_when_the_window_is_too_narrow() {
+    let mut rig = rig("document-light");
+    let width = 520.0;
+    rig.harness.set_size(egui::vec2(width, 900.0));
+    rig.harness.run();
+    let compact = rig.harness.get_by_label("Compact").rect();
+    assert!(compact.right() > width, "Compact fits already: {compact:?}");
+    // A plain mouse wheel over the band scrolls it sideways.
+    rig.harness
+        .hover_at(egui::pos2(width / 2.0, compact.center().y));
+    rig.harness.run();
+    for _ in 0..10 {
+        rig.harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -100.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        rig.harness.run();
+    }
+    let compact = rig.harness.get_by_label("Compact").rect();
+    assert!(
+        compact.right() <= width && compact.left() >= 0.0,
+        "Compact is still out of view: {compact:?}"
+    );
 }
 
 /// A fresh, empty scratch directory under the git-ignored `target/temp`.

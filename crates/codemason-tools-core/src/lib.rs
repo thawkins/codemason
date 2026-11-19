@@ -38,7 +38,6 @@ pub mod rm;
 pub mod schema;
 pub mod truncate;
 pub mod write;
-pub mod xlsx;
 
 // Search tools
 pub mod glob;

@@ -22,3 +22,5 @@ mod test_suite_adapters;
 mod test_suite_adapters_all;
 #[path = "test_vendor_slug_partitioning.rs"]
 mod test_vendor_slug_partitioning;
+#[path = "test_xlsx.rs"]
+mod test_xlsx;

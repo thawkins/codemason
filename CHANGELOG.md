@@ -8,6 +8,12 @@
 - Added: whether the ribbon is collapsed is remembered across restarts, in `gui-ribbon.json` in the codemason config directory.
 - Added: a side panel fades in over 200 ms when it is shown (off when egui's animation time is zero).
 - Fixed: `/name` now refreshes the sessions sidebar, which kept showing the old title until something else reloaded it.
+- Changed: the ribbon is tighter. Its band is 16 points shorter (80 instead of 96), spans the window on every tab so switching tabs no longer changes its width, and each button is as wide as its label (at least 56 points) instead of a fixed 72. The View tab's Log, Profile, Tasks and Memory buttons are filled while their panel is open, and report it to screen readers as a toggled state.
+- Fixed: in a window too narrow for a ribbon tab's buttons, the band scrolls sideways (with a plain mouse wheel over it, or its scrollbar) instead of cutting the last buttons off. At normal widths nothing changes.
+- Fixed: in a narrow window the status bar's `Details` button and the rest of its row no longer run under the zoom slider; the row wraps in the width left of the slider, and the bar is only as tall as its rows.
+- Changed: the side panels are tidier. Context drops its two blank top rows and indent, states the token unit once (`200.0k tokens` instead of `200.0ktk`), aligns `Free`, and shows `Streamed  1.2 KB up  3.4 KB down`; at sidebar width its percentages now fit. Tasks show `todo`/`active`/`done`/`blocked` in a fixed-width column with `#id`, so subjects align. Log levels are `info`/`tool`/`warn`/`error`/`compact` in a fixed-width column. Memory's header reads `N memories, N bytes` with capitalised category headings. Tasks, Memory and Log have two-line empty states saying what fills them.
+- Changed: the Sessions pane's tab shows the session count (`Sessions (12)`) and the panel's own count line is gone; rows are left-aligned; `New session` and `Search` have icons with their keys right-aligned; section headers show a painted solid triangle (right collapsed, down open) instead of `>`/`v`.
+- Fixed: four clippy `redundant_pub_crate` warnings in `codemason-app-core`.
 - Changed: the word-processor layout (title strip with quick access, ribbon, Material panes and the status-bar zoom slider) is drawn on every theme, in that theme's colours, not only in the `document-*` themes; the ribbon replaces the `File` menu bar on every theme (File > Open project / New folder, Insert > Images). The transcript and the prompt now fill their panes instead of a centred column at most 816 points wide.
 - Fixed: a click on the Diff pane's text gives the pane the keyboard (egui's text selection had cleared the focus the pane asked for), as a click on its empty space does.
 - Changed: the border of a markdown table in the transcript is drawn twice as wide as before (2 pt with the default style). Only replies that contain a table are affected; a horizontal rule or task-list checkbox in the same reply is drawn with the wider line too.
@@ -100,6 +106,8 @@
 - Fixed: `cdmn serve` with no `openai.token` or `CODEMASON_TOKEN` prints the bearer token it generated for the run to stderr; before, the token was never shown and every protected route answered `401`.
 
 ### Changed
+
+- Changed: the `write_xlsx` helper moves from `codemason-tools-core` (`src/xlsx.rs`) to its only caller, `codemason-bench` (`codemason_bench::xlsx`). tools-core no longer depends on `rust_xlsxwriter`, and bench no longer depends on tools-core. Sanctioned test edits: `test_xlsx.rs` moves to the bench crate's `tests/` with its import updated, and the `test_xlsx_writer_edge_shapes` case moves out of tools-core's `test_file_ops_happy_paths.rs` into it (#10, TL-07).
 
 - Changed: the deprecated `obfuscate_key` / `deobfuscate_key` wrappers in `codemason-storage` (and their re-exports from `codemason_storage` and `codemason_agent::storage`) are removed. They only forwarded to `encrypt_key` / `decrypt_key`, and their docs still described a v1/v2 format although the store writes v3. `Storage::set_provider_auth` now calls `encrypt_key` directly; stored values are unchanged. Sanctioned test edit: `test_provider_auth_store.rs` decodes through `decrypt_key` (#10, LC-13).
 

@@ -217,10 +217,7 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
             app.diff_pane.shown = false;
             return None;
         }
-        PaneId::Log => "panel.log",
-        PaneId::Profile => "panel.profile",
-        PaneId::Tasks => "panel.tasks",
-        PaneId::Memory => "panel.memory",
+        PaneId::Log | PaneId::Profile | PaneId::Tasks | PaneId::Memory => panel_command(pane)?,
         PaneId::Context => {
             return Some(KeyInput {
                 key: Key::Char('c'),
@@ -229,6 +226,35 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
         }
     };
     crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
+}
+
+/// The keymap command that toggles `pane`, for the panels app-core shows and
+/// hides by a chord: the log, profile, tasks and memory panels.
+///
+/// # Arguments
+///
+/// * `pane` - the pane in question.
+///
+/// # Returns
+///
+/// The command id (e.g. `panel.log`), or `None` for a pane with no toggle
+/// command.
+#[must_use]
+pub const fn panel_command(pane: PaneId) -> Option<&'static str> {
+    match pane {
+        PaneId::Log => Some("panel.log"),
+        PaneId::Profile => Some("panel.profile"),
+        PaneId::Tasks => Some("panel.tasks"),
+        PaneId::Memory => Some("panel.memory"),
+        PaneId::Messages
+        | PaneId::Prompt
+        | PaneId::Sessions
+        | PaneId::Context
+        | PaneId::ActiveAgents
+        | PaneId::Teams
+        | PaneId::Queue
+        | PaneId::Diff => None,
+    }
 }
 
 /// Whether app-core sends the keyboard to `pane` now: the focused sessions
