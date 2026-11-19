@@ -9,6 +9,11 @@
 //! `system`, which follows the operating system between the built-in dark and
 //! light themes.
 //!
+//! Every theme also has Material Design 3 colour roles ([`M3Roles`]): the
+//! `document-light` and `document-dark` themes carry their own (an `m3`
+//! block, generated from one blue seed), and [`ThemeTokens::roles`] derives
+//! them for every other theme.
+//!
 //! Dependencies: `serde` and `serde_json` (theme files).
 
 use std::path::Path;
@@ -36,7 +41,7 @@ pub const UI_CONTRAST: f32 = 3.0;
 const MAX_THEME_BYTES: u64 = 64 * 1024;
 
 /// The built-in themes as `(file name, JSON)`, the dark default first.
-const BUILTIN_JSON: [(&str, &str); 7] = [
+const BUILTIN_JSON: [(&str, &str); 9] = [
     (
         "codemason-dark.json",
         include_str!("../themes/codemason-dark.json"),
@@ -61,6 +66,14 @@ const BUILTIN_JSON: [(&str, &str); 7] = [
     (
         "tokyo-night.json",
         include_str!("../themes/tokyo-night.json"),
+    ),
+    (
+        "document-light.json",
+        include_str!("../themes/document-light.json"),
+    ),
+    (
+        "document-dark.json",
+        include_str!("../themes/document-dark.json"),
     ),
 ];
 
@@ -253,9 +266,258 @@ pub struct ThemeTokens {
     pub markdown: MarkdownTokens,
     /// Eight distinguishable colours for telling agents apart.
     pub categorical: [Rgb; 8],
+    /// Material Design 3 colour roles. Optional in a theme file: when absent,
+    /// [`ThemeTokens::roles`] derives them from the tokens above.
+    #[serde(default)]
+    pub m3: Option<M3Roles>,
+}
+
+/// Material Design 3 colour roles.
+///
+/// Each `on_x` role is the text and icon colour drawn on the `x` role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct M3Roles {
+    /// High-emphasis fills: filled buttons, active indicators.
+    pub primary: Rgb,
+    /// Content on `primary`.
+    pub on_primary: Rgb,
+    /// Lower-emphasis fills in the primary hue: tonal buttons, selection.
+    pub primary_container: Rgb,
+    /// Content on `primary_container`.
+    pub on_primary_container: Rgb,
+    /// Less prominent accents.
+    pub secondary: Rgb,
+    /// Content on `secondary`.
+    pub on_secondary: Rgb,
+    /// Fills such as the active navigation item and filter chips.
+    pub secondary_container: Rgb,
+    /// Content on `secondary_container`.
+    pub on_secondary_container: Rgb,
+    /// Contrasting accents.
+    pub tertiary: Rgb,
+    /// Content on `tertiary`.
+    pub on_tertiary: Rgb,
+    /// Fills in the tertiary hue.
+    pub tertiary_container: Rgb,
+    /// Content on `tertiary_container`.
+    pub on_tertiary_container: Rgb,
+    /// Errors.
+    pub error: Rgb,
+    /// Content on `error`.
+    pub on_error: Rgb,
+    /// Error fills such as an error banner.
+    pub error_container: Rgb,
+    /// Content on `error_container`.
+    pub on_error_container: Rgb,
+    /// The default background.
+    pub surface: Rgb,
+    /// Text and icons on any surface.
+    pub on_surface: Rgb,
+    /// Lower-emphasis text and icons on any surface.
+    pub on_surface_variant: Rgb,
+    /// The lowest surface container (the page).
+    pub surface_container_lowest: Rgb,
+    /// A low surface container (the desk around the page, drawers).
+    pub surface_container_low: Rgb,
+    /// The default surface container (menus, the ribbon).
+    pub surface_container: Rgb,
+    /// A high surface container (dialogs).
+    pub surface_container_high: Rgb,
+    /// The highest surface container (text fields, code blocks).
+    pub surface_container_highest: Rgb,
+    /// Important boundaries: text-field outlines.
+    pub outline: Rgb,
+    /// Decorative boundaries: dividers.
+    pub outline_variant: Rgb,
+    /// The background of snackbars and tooltips.
+    pub inverse_surface: Rgb,
+    /// The dimming layer behind a modal.
+    pub scrim: Rgb,
+    /// Shadows under elevated surfaces.
+    pub shadow: Rgb,
+}
+
+impl M3Roles {
+    /// Checks every `on_x` role against its `x` role at [`AA_CONTRAST`], and
+    /// `outline` against `surface` at [`UI_CONTRAST`].
+    ///
+    /// # Arguments
+    ///
+    /// * `theme` - the theme name the messages carry.
+    ///
+    /// # Returns
+    ///
+    /// One message per pair below its floor, empty when all pass.
+    #[must_use]
+    pub fn contrast_failures(&self, theme: &str) -> Vec<String> {
+        let pairs = [
+            (
+                "on_primary",
+                self.on_primary,
+                "primary",
+                self.primary,
+                AA_CONTRAST,
+            ),
+            (
+                "on_primary_container",
+                self.on_primary_container,
+                "primary_container",
+                self.primary_container,
+                AA_CONTRAST,
+            ),
+            (
+                "on_secondary",
+                self.on_secondary,
+                "secondary",
+                self.secondary,
+                AA_CONTRAST,
+            ),
+            (
+                "on_secondary_container",
+                self.on_secondary_container,
+                "secondary_container",
+                self.secondary_container,
+                AA_CONTRAST,
+            ),
+            (
+                "on_tertiary",
+                self.on_tertiary,
+                "tertiary",
+                self.tertiary,
+                AA_CONTRAST,
+            ),
+            (
+                "on_tertiary_container",
+                self.on_tertiary_container,
+                "tertiary_container",
+                self.tertiary_container,
+                AA_CONTRAST,
+            ),
+            ("on_error", self.on_error, "error", self.error, AA_CONTRAST),
+            (
+                "on_error_container",
+                self.on_error_container,
+                "error_container",
+                self.error_container,
+                AA_CONTRAST,
+            ),
+            (
+                "on_surface",
+                self.on_surface,
+                "surface",
+                self.surface,
+                AA_CONTRAST,
+            ),
+            (
+                "on_surface_variant",
+                self.on_surface_variant,
+                "surface",
+                self.surface,
+                AA_CONTRAST,
+            ),
+            (
+                "on_surface",
+                self.on_surface,
+                "surface_container_highest",
+                self.surface_container_highest,
+                AA_CONTRAST,
+            ),
+            (
+                "outline",
+                self.outline,
+                "surface",
+                self.surface,
+                UI_CONTRAST,
+            ),
+        ];
+        pairs
+            .into_iter()
+            .filter_map(|(fg_name, fg, bg_name, bg, floor)| {
+                let ratio = contrast_ratio(fg, bg);
+                (ratio < floor).then(|| {
+                    format!(
+                        "theme `{theme}`: m3.{fg_name} has contrast {ratio:.1}:1 on \
+                         m3.{bg_name}, below {floor}:1"
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+/// Mixes `amount` (0.0 to 1.0) of `b` into `a`, per sRGB channel.
+fn mix(a: Rgb, b: Rgb, amount: f32) -> Rgb {
+    let channel = |x: u8, y: u8| {
+        // The mix of two u8 values is within 0.0..=255.0.
+        f32::from(x)
+            .mul_add(1.0 - amount, f32::from(y) * amount)
+            .round() as u8
+    };
+    Rgb(channel(a.0, b.0), channel(a.1, b.1), channel(a.2, b.2))
+}
+
+/// White or black, whichever contrasts more with `fill`.
+fn on_colour(fill: Rgb) -> Rgb {
+    let (white, black) = (Rgb(255, 255, 255), Rgb(0, 0, 0));
+    if contrast_ratio(white, fill) >= contrast_ratio(black, fill) {
+        white
+    } else {
+        black
+    }
 }
 
 impl ThemeTokens {
+    /// The theme's Material Design 3 colour roles.
+    ///
+    /// # Returns
+    ///
+    /// The theme file's `m3` block when it has one. Otherwise roles derived
+    /// from the other tokens: `accent` is `primary`, `text.muted` is
+    /// `secondary`, `markdown.link` is `tertiary`, `state.error` is `error`,
+    /// the `bg` ladder gives the surface containers and the borders give the
+    /// outlines. Containers are their colour mixed 20% into `bg.base`, and
+    /// content on a solid fill is white or black, whichever contrasts more.
+    #[must_use]
+    pub fn roles(&self) -> M3Roles {
+        if let Some(roles) = self.m3 {
+            return roles;
+        }
+        let base = self.bg.base;
+        let container = |colour: Rgb| mix(base, colour, 0.2);
+        M3Roles {
+            primary: self.accent,
+            on_primary: on_colour(self.accent),
+            primary_container: container(self.accent),
+            on_primary_container: self.text.base,
+            secondary: self.text.muted,
+            on_secondary: base,
+            secondary_container: self.bg.raised2,
+            on_secondary_container: self.text.base,
+            tertiary: self.markdown.link,
+            on_tertiary: on_colour(self.markdown.link),
+            tertiary_container: container(self.markdown.link),
+            on_tertiary_container: self.text.base,
+            error: self.state.error,
+            on_error: on_colour(self.state.error),
+            error_container: container(self.state.error),
+            on_error_container: self.text.base,
+            surface: base,
+            on_surface: self.text.base,
+            on_surface_variant: self.text.muted,
+            surface_container_lowest: base,
+            surface_container_low: mix(base, self.bg.raised1, 0.5),
+            surface_container: self.bg.raised1,
+            surface_container_high: self.bg.raised2,
+            surface_container_highest: mix(self.bg.raised2, self.text.base, 0.08),
+            outline: self.text.subtle,
+            outline_variant: self.border.base,
+            inverse_surface: self.text.base,
+            scrim: Rgb(0, 0, 0),
+            shadow: Rgb(0, 0, 0),
+        }
+    }
+
     /// Parses a theme from JSON in the token shape.
     ///
     /// The name is trimmed and lowercased, so a theme is selected, listed and
@@ -278,7 +540,9 @@ impl ThemeTokens {
     /// Checks the theme's text colours against its window background.
     ///
     /// Body and secondary text must reach [`AA_CONTRAST`]; de-emphasised text,
-    /// the accent and the state colours must reach [`UI_CONTRAST`].
+    /// the accent and the state colours must reach [`UI_CONTRAST`]. A theme
+    /// file's own `m3` block is checked with [`M3Roles::contrast_failures`];
+    /// derived roles are not, so a token failure is reported once.
     ///
     /// Returns one message per colour below its floor, empty when all pass.
     #[must_use]
@@ -293,7 +557,7 @@ impl ThemeTokens {
             ("state.error", self.state.error, UI_CONTRAST),
             ("state.info", self.state.info, UI_CONTRAST),
         ];
-        checks
+        let mut failures: Vec<String> = checks
             .into_iter()
             .filter_map(|(token, color, floor)| {
                 let ratio = contrast_ratio(color, self.bg.base);
@@ -304,7 +568,11 @@ impl ThemeTokens {
                     )
                 })
             })
-            .collect()
+            .collect();
+        if let Some(roles) = &self.m3 {
+            failures.extend(roles.contrast_failures(&self.name));
+        }
+        failures
     }
 }
 

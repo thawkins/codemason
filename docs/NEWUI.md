@@ -56,7 +56,17 @@ Each phase ends with `cargo fmt --check`, `cargo clippy -p codemason-gui`, and
 `cargo nextest run -p codemason-gui`. Estimates are for one engineer familiar
 with egui.
 
-### Phase 1: M3 design tokens (1 to 2 days)
+### Phase 1: M3 design tokens (1 to 2 days) - DONE
+
+Done as planned, with these differences:
+- The `document-*` schemes are generated with HCT tones approximated in
+  CIE L*Ch (tone = L*), not the exact CAM16-based HCT; the values are fixed
+  in the theme JSON.
+- The M3 contrast check runs only on a theme file's own `m3` block; derived
+  roles are covered by a test over the built-in themes instead, so a bad
+  token is not reported twice.
+- Only the three existing radii changed (SM 8, MD 12, LG 16); the XS 4 and
+  XL 28 radii are added in Phase 3, where they are first used.
 
 1. Add `M3Roles` to `theme_tokens.rs`: `primary`, `on_primary`,
    `primary_container`, `on_primary_container`, `secondary(+on/container)`,

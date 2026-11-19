@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added: Material Design 3 colour roles for every theme (`ThemeTokens::roles`). A theme file may carry them in an optional `m3` block, which is contrast-checked on load; otherwise they are derived from the existing tokens. Two new built-in themes, `document-light` and `document-dark`, carry their own roles, generated from one blue seed. Neither is the default; select them with `/theme` (NEWUI Phase 1).
+- Changed: the GUI's corner radii (8/12/16 pt) and caption and heading sizes (11 pt, 22 pt) now follow the Material Design 3 shape and type scales (NEWUI Phase 1).
 - Added: `docs/NEWUI.md`, a plan to restyle the GUI with a word-processor layout (ribbon, page on a desk, side sheets, status bar) built from Material Design 3 components and tokens. Plan only; no code changes.
 - Added: the GUI bundles the Lucide icon font (lucide-static 1.66.0, ISC licence; Feather-derived icons MIT). Activity rows show an icon for their main kind of work, and a finished tool call shows a check or a cross; without the font they fall back to ASCII.
 - Added: the permission dialog previews exactly the call it asks about, with the input it will run with after any hook: every hunk of an edit (a write to an existing file is diffed against its current contents), or a shell call's full command. Permission requests raised for a tool call now carry that call (`tool_call` on `PermissionRequested`; not in the SSE payload).

@@ -1,0 +1,91 @@
+{
+  "name": "document-light",
+  "dark": false,
+  "text": {
+    "base": "#1a1b21",
+    "muted": "#444652",
+    "subtle": "#747684"
+  },
+  "bg": {
+    "base": "#f8f9ff",
+    "raised1": "#ecedf5",
+    "raised2": "#e1e2ea",
+    "overlay": "#ffffff"
+  },
+  "border": {
+    "base": "#c4c6d5",
+    "focus": "#155bbb"
+  },
+  "accent": "#155bbb",
+  "state": {
+    "success": "#17794a",
+    "warning": "#8a5a00",
+    "error": "#b12938",
+    "info": "#0c7285"
+  },
+  "diff": {
+    "added": "#17794a",
+    "removed": "#b12938",
+    "context": "#444652",
+    "added_bg": "#dff3e7",
+    "removed_bg": "#fbe3e5",
+    "line_number": "#747684"
+  },
+  "syntax": {
+    "keyword": "#8839c2",
+    "string": "#17794a",
+    "comment": "#747684",
+    "function": "#155bbb",
+    "type": "#0c7285",
+    "number": "#a8500a",
+    "operator": "#3a6ea5",
+    "punctuation": "#444652"
+  },
+  "markdown": {
+    "heading": "#155bbb",
+    "link": "#0c7285",
+    "code": "#8a5a00",
+    "blockquote": "#444652"
+  },
+  "categorical": [
+    "#155bbb",
+    "#17794a",
+    "#8a5a00",
+    "#c22f3a",
+    "#8839c2",
+    "#0c7285",
+    "#a8500a",
+    "#b03a84"
+  ],
+  "m3": {
+    "primary": "#155bbb",
+    "on_primary": "#ffffff",
+    "primary_container": "#dde1fe",
+    "on_primary_container": "#011a40",
+    "secondary": "#585d77",
+    "on_secondary": "#ffffff",
+    "secondary_container": "#dde1ff",
+    "on_secondary_container": "#141b30",
+    "tertiary": "#7f5068",
+    "on_tertiary": "#ffffff",
+    "tertiary_container": "#ffd8eb",
+    "on_tertiary_container": "#350c24",
+    "error": "#b12938",
+    "on_error": "#ffffff",
+    "error_container": "#fedad8",
+    "on_error_container": "#410004",
+    "surface": "#f8f9ff",
+    "on_surface": "#1a1b21",
+    "on_surface_variant": "#444652",
+    "surface_container_lowest": "#ffffff",
+    "surface_container_low": "#f2f3fb",
+    "surface_container": "#ecedf5",
+    "surface_container_high": "#e7e8ef",
+    "surface_container_highest": "#e1e2ea",
+    "outline": "#747684",
+    "outline_variant": "#c4c6d5",
+    "inverse_surface": "#2f3036",
+    "scrim": "#000000",
+    "shadow": "#000000"
+  }
+}
