@@ -11,6 +11,7 @@
 //! - [`icon_button`]: standard, filled and toggle icon buttons;
 //! - [`segmented`]: segmented buttons;
 //! - [`tabs`]: primary tabs;
+//! - [`list`]: dense one- and two-line list items;
 //! - [`menu`]: the menu surface and its items;
 //! - [`card`]: elevated, filled and outlined cards;
 //! - [`text_field`]: the outlined text field;
@@ -31,6 +32,7 @@ pub mod chip;
 pub mod dialog;
 pub mod feedback;
 pub mod icon_button;
+pub mod list;
 pub mod menu;
 pub mod segmented;
 pub mod sheet;

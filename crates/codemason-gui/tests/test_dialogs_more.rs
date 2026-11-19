@@ -550,7 +550,11 @@ fn test_session_menu_click_runs_the_item() {
         app.sidebar.menu = Some(selection_menu());
     });
     harness.run();
-    assert!(dialog_shown(&harness, SESSION_MENU_TITLE));
+    assert!(
+        harness
+            .query_by_role_and_label(Role::Menu, SESSION_MENU_TITLE)
+            .is_some()
+    );
 
     harness.get_by_label("Clear selection").click();
     harness.run();

@@ -4,6 +4,11 @@
 
 ### Added
 
+- Changed: the provider setup steps that pick from a list (Select provider, Thinking level, Switch provider, Reset provider, Provider configuration, Select agent, Azure resource) show their entries as a visible Material list instead of a drop-down: the highlighted entry is filled, a click highlights an entry, a double click (or Continue) chooses it, and Up/Down scroll the highlighted entry into view. The list is labelled for screen readers with the step's list name (for example "Provider").
+- Changed: the provider and model setup dialogs (`/provider`, `/model`) use the Material components: the dialog surface and headline, outlined fields (the API key is shown masked in a read-only outlined field, with a step's error as its supporting text), a right-aligned action row with the confirming button filled, and the model list as list items with the context window and cost at the right edge. A model's id is shown under its name only when the name does not already contain it. An empty model list says whether the provider listed no models (and what to check) or nothing matches the filter. The highlighted model scrolls into view as Up/Down move it. The key step's title reads `<provider> API key`.
+- Added: `material::list::list_item` (dense one- and two-line list items) and `material::text_field::outlined_value` (a read-only outlined field) and `field_id`.
+- Changed: AGENTS.md records that GUI work uses the Material components and layouts first.
+- Changed: right-clicking a session or project row in the Sessions panel opens a popup menu at the pointer (under the highlighted row when opened from the keyboard) instead of a centred dialog. It has no heading, Close button or key hints; accelerators sit at the right edge, items that open a submenu show a chevron, the submenu opens beside its item, and a click outside closes the menu without acting on what is under it.
 - Changed: the title strip shows the focused session's name (its `/name`, or `untitled` and its id) instead of the project folder.
 - Added: whether the ribbon is collapsed is remembered across restarts, in `gui-ribbon.json` in the codemason config directory.
 - Added: a side panel fades in over 200 ms when it is shown (off when egui's animation time is zero).

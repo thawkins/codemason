@@ -216,8 +216,74 @@ fn test_sessions_panel_right_click_opens_session_menu() {
     assert!(rig.harness.state().app().sidebar.menu.is_some());
     assert!(
         rig.harness
-            .query_by_role_and_label(Role::Dialog, SESSION_MENU_TITLE)
+            .query_by_role_and_label(Role::Menu, SESSION_MENU_TITLE)
             .is_some()
+    );
+}
+
+#[test]
+fn test_sessions_panel_session_menu_pops_up_at_the_pointer() {
+    let mut ids = None;
+    let mut rig = rig(|rt, app| ids = Some(two_sessions(rt, app)));
+    let (a, _b) = ids.expect("sessions");
+    rig.harness.run();
+
+    let label = untitled(&a);
+    let row = rig.harness.get_by_label_contains(&label);
+    let pointer = row.rect().center();
+    row.click_secondary();
+    rig.harness.run();
+
+    let menu = rig
+        .harness
+        .get_by_role_and_label(Role::Menu, SESSION_MENU_TITLE)
+        .rect();
+    assert!(
+        (menu.min.x - pointer.x).abs() < 1.0 && (menu.min.y - pointer.y).abs() < 1.0,
+        "menu at {:?}, pointer at {pointer:?}",
+        menu.min
+    );
+}
+
+#[test]
+fn test_sessions_panel_session_menu_click_outside_closes_it() {
+    let mut ids = None;
+    let mut rig = rig(|rt, app| ids = Some(two_sessions(rt, app)));
+    let (a, _b) = ids.expect("sessions");
+    rig.harness.run();
+    let label = untitled(&a);
+    let row = rig.harness.get_by_label_contains(&label);
+    let target = row.rect().center();
+    row.click_secondary();
+    rig.harness.run();
+    assert!(rig.harness.state().app().sidebar.menu.is_some());
+
+    // A click on the row away from the menu's corner: it closes the menu
+    // and does not switch to that session.
+    let other = egui::pos2(4.0, target.y);
+    for pressed in [true, false] {
+        rig.harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerButton {
+                pos: other,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        rig.harness.step();
+    }
+    rig.harness.run();
+
+    assert!(rig.harness.state().app().sidebar.menu.is_none());
+    assert_ne!(
+        rig.harness.state().app().session.session_id.as_deref(),
+        Some(a.as_str())
+    );
+    assert!(
+        rig.harness
+            .query_by_role_and_label(Role::Menu, SESSION_MENU_TITLE)
+            .is_none()
     );
 }
 
@@ -249,6 +315,22 @@ fn test_sessions_panel_keys_move_and_m_opens_session_menu() {
     let app = rig.harness.state().app();
     assert!(app.sidebar.menu.is_some(), "m opens the session menu");
     assert_eq!(app.session.input, "", "the sidebar's keys never type");
+
+    // Opened from the keyboard, the menu pops up under the highlighted row.
+    rig.harness.run();
+    let menu = rig
+        .harness
+        .get_by_role_and_label(Role::Menu, SESSION_MENU_TITLE)
+        .rect();
+    let list = rig
+        .harness
+        .get_by_role_and_label(Role::List, SESSIONS_LABEL)
+        .rect();
+    assert!(
+        list.x_range().contains(menu.min.x) && list.y_range().contains(menu.min.y),
+        "menu at {:?}, sessions list {list:?}",
+        menu.min
+    );
 }
 
 #[test]

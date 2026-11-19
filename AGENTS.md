@@ -227,6 +227,13 @@ team_wait                          ← REQUIRED: blocks until all idle
 team_status                        ← read what they found
 ```
 
+## GUI Design: Material First
+
+- Build GUI (`crates/codemason-gui`) screens, dialogs and panels from the Material Design 3 components and layouts in `codemason_gui::material` (buttons, menus, dialogs, text fields, lists, sheets, chips, feedback) and the palette's Material roles (`Palette::m3`), before reaching for plain egui widgets.
+- If a screen needs a component the module lacks, add it to `codemason_gui::material` (with a test) and use it from there; do not draw a one-off look in the screen itself.
+- Plain egui widgets are acceptable only where `material` has no equivalent; note the gap so it can be added.
+- See `docs/NEWUI.md` for the plan and component list.
+
 ## General Preferences
 
 1. Don't suggest features unless asked to.

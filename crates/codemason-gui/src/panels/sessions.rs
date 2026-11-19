@@ -37,6 +37,7 @@ use codemason_app_core::sessions_sidebar_state::{
 };
 use egui::{Atom, Atoms, Color32, IdSalt, IntoAtoms, Rect, RichText, Role, ScrollArea, WidgetInfo};
 
+use crate::dialogs::session_menu;
 use crate::icons::{Icon, icon_label};
 use crate::palette::Palette;
 use crate::styled_text::drawable;
@@ -295,6 +296,9 @@ impl SessionsView {
                 .unwrap_or(u16::MAX)
                 .saturating_add(2),
         };
+        if app.sidebar.menu.is_none() {
+            session_menu::forget_anchor(ui.ctx());
+        }
         let cursor = app.sidebar.cursor;
         let focused = app.sidebar.focused;
         let mut scroll = ScrollArea::vertical()
@@ -345,7 +349,13 @@ impl SessionsView {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);
                     clicked = Some((index, ctrl));
                 }
+                if index == cursor {
+                    session_menu::note_cursor_row(ui.ctx(), response.rect);
+                }
                 if response.secondary_clicked() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        session_menu::note_pointer(ui.ctx(), pos);
+                    }
                     menu = Some(index);
                 }
             }

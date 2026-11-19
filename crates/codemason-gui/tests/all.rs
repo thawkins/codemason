@@ -98,6 +98,8 @@ mod test_bridge;
 mod test_clipboard;
 #[path = "test_command_palette.rs"]
 mod test_command_palette;
+#[path = "test_dialog_bounds_gui.rs"]
+mod test_dialog_bounds_gui;
 #[path = "test_dialogs.rs"]
 mod test_dialogs;
 #[path = "test_dialogs_more.rs"]
@@ -138,6 +140,8 @@ mod test_material_dialog;
 mod test_material_feedback;
 #[path = "test_material_icon_button.rs"]
 mod test_material_icon_button;
+#[path = "test_material_list.rs"]
+mod test_material_list;
 #[path = "test_material_menu.rs"]
 mod test_material_menu;
 #[path = "test_material_segmented.rs"]
