@@ -4,6 +4,10 @@
 
 ### Added
 
+- Changed: the title strip shows the focused session's name (its `/name`, or `untitled` and its id) instead of the project folder.
+- Added: whether the ribbon is collapsed is remembered across restarts, in `gui-ribbon.json` in the codemason config directory.
+- Added: a side panel fades in over 200 ms when it is shown (off when egui's animation time is zero).
+- Fixed: `/name` now refreshes the sessions sidebar, which kept showing the old title until something else reloaded it.
 - Changed: the ribbon is tighter. Its band is 16 points shorter (80 instead of 96), spans the window on every tab so switching tabs no longer changes its width, and each button is as wide as its label (at least 56 points) instead of a fixed 72. The View tab's Log, Profile, Tasks and Memory buttons are filled while their panel is open, and report it to screen readers as a toggled state.
 - Fixed: in a window too narrow for a ribbon tab's buttons, the band scrolls sideways (with a plain mouse wheel over it, or its scrollbar) instead of cutting the last buttons off. At normal widths nothing changes.
 - Fixed: in a narrow window the status bar's `Details` button and the rest of its row no longer run under the zoom slider; the row wraps in the width left of the slider, and the bar is only as tall as its rows.

@@ -20,7 +20,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A running window in theme `theme`: its runtime and harness.
 struct Rig {
-    _runtime: tokio::runtime::Runtime,
+    runtime: tokio::runtime::Runtime,
     harness: Harness<'static, Shell>,
 }
 
@@ -43,10 +43,7 @@ fn rig(theme: &str) -> Rig {
         .allow_missing_glyphs()
         .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
     harness.run();
-    Rig {
-        _runtime: runtime,
-        harness,
-    }
+    Rig { runtime, harness }
 }
 
 /// Every ribbon and quick access item.
@@ -181,4 +178,68 @@ fn test_ribbon_band_scrolls_when_the_window_is_too_narrow() {
         compact.right() <= width && compact.left() >= 0.0,
         "Compact is still out of view: {compact:?}"
     );
+}
+
+/// A fresh, empty scratch directory under the git-ignored `target/temp`.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/test_ribbon")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    dir
+}
+
+#[test]
+fn test_ribbon_state_file_round_trips_and_defaults() {
+    use codemason_gui::ribbon::{RibbonState, load_ribbon, save_ribbon};
+
+    let dir = scratch("round_trip");
+    let path = dir.join("gui-ribbon.json");
+    // Missing or invalid: expanded, on Home.
+    assert_eq!(load_ribbon(&path), RibbonState::default());
+    std::fs::write(&path, "not json").expect("write");
+    assert_eq!(load_ribbon(&path), RibbonState::default());
+    let collapsed = RibbonState {
+        collapsed: true,
+        ..RibbonState::default()
+    };
+    save_ribbon(&path, &collapsed).expect("save");
+    assert_eq!(load_ribbon(&path), collapsed);
+}
+
+#[test]
+fn test_ribbon_collapse_is_saved_and_restored() {
+    let path = scratch("shell").join("gui-ribbon.json");
+    let build = |path: &std::path::Path| {
+        let shell = Shell::new(support::make_app()).with_ribbon_file(path.to_path_buf());
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
+        harness.run();
+        harness
+    };
+    let mut first = build(&path);
+    first.get_by_label("Collapse the ribbon").click();
+    first.run();
+    assert!(path.exists(), "collapsing saves the state");
+    drop(first);
+    // A new window starts collapsed.
+    let second = build(&path);
+    second.get_by_label("Expand the ribbon");
+    assert!(second.query_by_label("Compact").is_none());
+}
+
+#[test]
+fn test_ribbon_title_strip_shows_the_session_name() {
+    let mut rig = rig("codemason-light");
+    {
+        let runtime = &rig.runtime;
+        let app = rig.harness.state_mut().app_mut();
+        runtime.block_on(app.execute_slash_command("/session new"));
+        runtime.block_on(app.execute_slash_command("/name Release prep"));
+    }
+    rig.harness.run();
+    rig.harness.get_by_label("codemason - Release prep");
 }

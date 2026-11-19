@@ -120,6 +120,10 @@ pub struct SidebarState {
     /// instead of starting it.
     #[doc(hidden)]
     pub launch_log: Option<Vec<crate::open_in::LaunchSpec>>,
+    /// The stored title of the focused session when the sidebar does not
+    /// list it (archived, child or non-interactive), as `(id, title)`; read
+    /// once per focused session and dropped on every refresh.
+    pub focused_title: Option<(String, String)>,
 }
 
 impl Default for SidebarState {
@@ -151,6 +155,7 @@ impl Default for SidebarState {
             selected: BTreeSet::new(),
             project_order: Vec::new(),
             launch_log: None,
+            focused_title: None,
         }
     }
 }
@@ -318,6 +323,8 @@ pub fn refresh_if_dirty(app: &mut App) {
             app.sidebar.unread = unread;
             app.sidebar.sections = sections;
             app.sidebar.session_section = session_section;
+            // A rename or other change re-reads the unlisted focused title.
+            app.sidebar.focused_title = None;
             app.sidebar.dirty = false;
         }
         (Err(e), ..)
@@ -374,6 +381,52 @@ fn display_title(id: &str, title: &str) -> String {
     } else {
         title.to_string()
     }
+}
+
+/// The display title of the focused session (its stored title, or
+/// `untitled <id tail>`).
+///
+/// Read from the sidebar's cached rows; a session the sidebar does not list
+/// (archived, child or non-interactive, e.g. one resumed at startup) is read
+/// from storage once and kept in [`SidebarState::focused_title`] until the
+/// focus moves or the sidebar refreshes. So a frontend may call this every
+/// frame; call [`refresh_if_dirty`] first for a title renamed since the last
+/// refresh.
+///
+/// # Returns
+///
+/// `None` when no session is focused.
+pub fn current_title(app: &mut App) -> Option<String> {
+    let id = app.session.session_id.clone()?;
+    let listed = app
+        .sidebar
+        .groups
+        .iter()
+        .flat_map(|group| group.sessions.iter())
+        .find(|session| session.id == id)
+        .map(|session| display_title(&session.id, &session.title));
+    if listed.is_some() {
+        return listed;
+    }
+    if app
+        .sidebar
+        .focused_title
+        .as_ref()
+        .is_none_or(|(cached, _)| *cached != id)
+    {
+        let title = match app.storage.get_session(&id) {
+            Ok(row) => row.map(|row| row.title).unwrap_or_default(),
+            Err(err) => {
+                tracing::warn!(error = %err, "focused session title not read");
+                String::new()
+            }
+        };
+        app.sidebar.focused_title = Some((id.clone(), title));
+    }
+    app.sidebar
+        .focused_title
+        .as_ref()
+        .map(|(id, title)| display_title(id, title))
 }
 
 /// Builds the rows the sidebar shows, honouring pins, collapse and filter.

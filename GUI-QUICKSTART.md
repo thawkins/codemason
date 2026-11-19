@@ -78,8 +78,9 @@ The window has a word-processor layout on every theme (the
 `document-light` and `document-dark` themes are Material colour schemes made
 for it):
 
-- A title strip shows the project and four quick buttons: New session,
-  Undo, Copy transcript and Stop.
+- A title strip shows the session's name (set it with `/name`; otherwise
+  `untitled` and its id) and four quick buttons: New session, Undo, Copy
+  transcript and Stop.
 - A ribbon carries the commands. Its tabs are File (open a project, a
   new project folder, About, Quit), Home (sessions, undo and redo, copy,
   stop, compact), Insert (attach images, templates), Agent (model, agent,
@@ -90,10 +91,12 @@ for it):
   window, so it keeps its size when you switch tabs; in a window too narrow
   for a tab's buttons, scroll the mouse wheel over the band to reach the rest.
 - The chevron at the right of the tabs collapses the ribbon to its tabs;
-  clicking any tab opens it again.
+  clicking any tab opens it again. codemason remembers whether the ribbon was
+  collapsed (`gui-ribbon.json` in its config directory).
 - The transcript fills its pane as a page, and the prompt is an outlined
   field under it, as wide as its pane.
-- The side panels use the theme's Material surfaces, the sessions list has
+- A side panel fades in when you open it. The side panels use the theme's
+  Material surfaces, the sessions list has
   wider rows, and the status bar ends with a zoom slider (50% to 200%;
   Ctrl+Plus and Ctrl+Minus still work). In a narrow window the rest of the
   status bar wraps beside the slider instead of running under it.

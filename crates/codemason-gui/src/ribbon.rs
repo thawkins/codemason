@@ -23,15 +23,22 @@
 //! When the app draws the window frame ([`crate::title_bar`]), the title
 //! strip is also the window's title bar, with the caption buttons.
 //!
+//! Whether the ribbon is collapsed is kept in `gui-ribbon.json` in the
+//! codemason config directory ([`load_ribbon`], [`save_ribbon`]).
+//!
 //! Dependencies: `egui`, `craft-ui` (tabs), `craft-window` (the title bar),
+//! `serde`/`serde_json` and `codemason-config` (the saved state),
 //! `codemason-app-core` (key presses), and this crate's material
 //! components, icons, menus and file dialogs.
+
+use std::path::{Path, PathBuf};
 
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use craft_ui::tabs::{Tab, fit_whole};
 use craft_window::Button;
 use craft_window::policy::Frame;
 use egui::{CornerRadius, Rect, Response, Role, Sense, Stroke, Vec2, WidgetInfo};
+use serde::{Deserialize, Serialize};
 
 use crate::dock::PaneId;
 use crate::icons::Icon;
@@ -325,11 +332,9 @@ pub fn title_strip_ui(
         // Outermost last: the leftmost button is the last of the list.
         let left: Vec<Button> = left.iter().rev().copied().collect();
         caption_buttons(ui, palette, &left);
-        ui.label(
-            egui::RichText::new(title)
-                .size(text_size::BODY)
-                .color(rgb(palette.m3.on_surface_variant)),
-        );
+        // The buttons at the right are laid out first, so a long title is
+        // shortened with an ellipsis in the room left, never pushing them
+        // out of the window.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let right: Vec<Button> = right.iter().rev().copied().collect();
             caption_buttons(ui, palette, &right);
@@ -350,6 +355,16 @@ pub fn title_strip_ui(
                         chosen = Some(item.action);
                     }
                 }
+            });
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(title)
+                            .size(text_size::BODY)
+                            .color(rgb(palette.m3.on_surface_variant)),
+                    )
+                    .truncate(),
+                );
             });
         });
     });
@@ -653,4 +668,70 @@ fn ribbon_button(
     ui.painter().galley(text_pos, text, content);
     paint_focus_ring(ui, &response, corner, palette);
     response
+}
+
+/// File name of the persisted ribbon state inside the codemason config
+/// directory.
+const RIBBON_FILE: &str = "gui-ribbon.json";
+
+/// What `gui-ribbon.json` holds: whether the ribbon is collapsed.
+#[derive(Debug, Serialize, Deserialize)]
+struct RibbonFile {
+    collapsed: bool,
+}
+
+/// The ribbon state file: `<config_dir>/codemason/gui-ribbon.json`.
+///
+/// # Returns
+///
+/// `None` when the platform config directory cannot be determined.
+#[must_use]
+pub fn ribbon_path() -> Option<PathBuf> {
+    codemason_config::config::Config::global_config_dir().map(|dir| dir.join(RIBBON_FILE))
+}
+
+/// Load the ribbon state saved at `path`.
+///
+/// # Returns
+///
+/// The saved collapsed flag, on the Home tab; the default state (expanded)
+/// when the file is missing, and with a warning when it cannot be read.
+#[must_use]
+pub fn load_ribbon(path: &Path) -> RibbonState {
+    let collapsed = match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<RibbonFile>(&text) {
+            Ok(file) => file.collapsed,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), %err, "invalid ribbon state; using default");
+                false
+            }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), %err, "cannot read ribbon state; using default");
+            false
+        }
+    };
+    RibbonState {
+        collapsed,
+        ..RibbonState::default()
+    }
+}
+
+/// Save `state`'s collapsed flag to `path`, creating its directory.
+///
+/// # Errors
+///
+/// Returns the I/O or serialization error.
+pub fn save_ribbon(path: &Path, state: &RibbonState) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let json = serde_json::to_string_pretty(&RibbonFile {
+        collapsed: state.collapsed,
+    })
+    .context("serializing ribbon state")?;
+    std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
 }

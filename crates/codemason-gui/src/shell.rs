@@ -46,7 +46,7 @@
 //! [`KeyRouter`] before any widget reads them. After drawing it runs the key
 //! presses the dialogs' buttons sent ([`dialogs::take_keys`]).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -141,6 +141,10 @@ pub struct Shell {
     shutdown_signal: Option<Arc<AtomicBool>>,
     /// The ribbon's open tab and collapsed state.
     ribbon: RibbonState,
+    /// Where the ribbon's collapsed state is saved, when it is.
+    ribbon_file: Option<PathBuf>,
+    /// When (egui time) each pane was last shown, while it fades in.
+    opened: BTreeMap<PaneId, f64>,
     /// Who draws the window frame ([`crate::title_bar`]); the system unless
     /// [`Shell::with_title_bar`] says otherwise.
     frame: craft_window::policy::Frame,
@@ -200,6 +204,8 @@ impl Shell {
             geometry: None,
             shutdown_signal: None,
             ribbon: RibbonState::default(),
+            ribbon_file: None,
+            opened: BTreeMap::new(),
             frame: craft_window::policy::Frame::Native,
             #[cfg(target_os = "macos")]
             movable_applied: None,
@@ -241,6 +247,31 @@ impl Shell {
         (self.layout, self.hidden) = dock::load_dock(&path);
         self.layout_file = Some(path);
         self
+    }
+
+    /// Load the ribbon's collapsed state from `path` and save it there
+    /// whenever it changes ([`crate::ribbon::load_ribbon`],
+    /// [`crate::ribbon::save_ribbon`]).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - the JSON state file, e.g. [`crate::ribbon::ribbon_path`].
+    ///
+    /// # Returns
+    ///
+    /// The shell with the saved ribbon state.
+    #[must_use]
+    pub fn with_ribbon_file(mut self, path: PathBuf) -> Self {
+        self.ribbon = crate::ribbon::load_ribbon(&path);
+        self.ribbon_file = Some(path);
+        self
+    }
+
+    /// The panes still fading in after being shown.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn fading_panes(&self) -> Vec<PaneId> {
+        self.opened.keys().copied().collect()
     }
 
     /// The dock layout as last drawn.
@@ -480,6 +511,7 @@ impl Shell {
             // The caption buttons stay usable while a modal asks.
             chosen = title_strip_ui(ui, &palette, &title, menus_enabled, frame);
         });
+        let was_collapsed = self.ribbon.collapsed;
         egui::Panel::top("ribbon").show(ui, |ui| {
             ui.add_enabled_ui(menus_enabled, |ui| {
                 let app = &self.app;
@@ -487,6 +519,12 @@ impl Shell {
                 chosen = ribbon_ui(ui, &palette, &mut self.ribbon, &shown).or(chosen);
             });
         });
+        if self.ribbon.collapsed != was_collapsed
+            && let Some(path) = &self.ribbon_file
+            && let Err(err) = crate::ribbon::save_ribbon(path, &self.ribbon)
+        {
+            tracing::warn!(%err, "ribbon state not saved");
+        }
         if let Some(action) = chosen {
             self.run_ribbon_action(ui.ctx(), action);
         }
@@ -560,12 +598,23 @@ impl Shell {
     fn sync_dock(&mut self, ctx: &egui::Context) {
         let app = &self.app;
         let sidebar_was_front = self.layout.panel_state(&PaneId::Sessions) == PanelState::Front;
+        let shown_before: BTreeSet<PaneId> = PaneId::ALL
+            .into_iter()
+            .filter(|pane| self.layout.contains(pane))
+            .collect();
         match dock::sync_visibility(&mut self.layout, &mut self.hidden, |pane| {
             dock::pane_wanted(app, pane)
         }) {
             Ok(true) => {
                 self.layout_dirty = true;
                 ctx.request_repaint();
+                // A pane that has just come back fades in.
+                let now = ctx.input(|i| i.time);
+                for pane in PaneId::ALL {
+                    if self.layout.contains(&pane) && !shown_before.contains(&pane) {
+                        self.opened.insert(pane, now);
+                    }
+                }
                 // A pane toggled on in the focused sidebar's tab group (Alt+P,
                 // Alt+M) is now in front of it. The TUI shows both side by
                 // side; here the new pane stays in front and the sidebar gives
@@ -618,9 +667,18 @@ impl Shell {
     /// Draw the dock and apply what the user did to it; returns the
     /// sessions sidebar's rectangle when it was drawn.
     /// The title strip's text: the app name and the project folder.
-    fn window_title(&self) -> String {
-        match self.app.cwd_path.file_name() {
-            Some(name) => format!("codemason - {}", name.to_string_lossy()),
+    /// The title strip's text: the focused session's title (as the
+    /// sidebar lists it), else the project folder, after the app name.
+    fn window_title(&mut self) -> String {
+        sessions_sidebar_state::refresh_if_dirty(&mut self.app);
+        let subject = sessions_sidebar_state::current_title(&mut self.app).or_else(|| {
+            self.app
+                .cwd_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+        match subject {
+            Some(subject) => format!("codemason - {subject}"),
             None => "codemason".to_string(),
         }
     }
@@ -667,11 +725,14 @@ impl Shell {
         let mut style = DockStyle::from_ui(ui);
         m3_dock_style(&mut style, palette);
         let mut sessions_rect = None;
+        let now = ui.input(|i| i.time);
+        let fade = crate::material::motion_time(ui.ctx());
         let Self {
             app,
             messages,
             sessions,
             layout,
+            opened,
             ..
         } = self;
         let sessions_tab = crate::panels::sessions::tab_title(app);
@@ -684,32 +745,46 @@ impl Shell {
                 other => other.label().to_string(),
             },
             |pane: &PaneId| pane.permissions(),
-            |ui, pane| match pane {
-                PaneId::Messages => {
-                    page_ui(ui, palette, PageStyle::Page, |ui| {
-                        messages_body(ui, app, messages, palette);
-                    });
+            |ui, pane| {
+                // A pane that has just come back fades in.
+                if let Some(&start) = opened.get(pane) {
+                    match crate::material::fade_in_opacity(now - start, fade) {
+                        Some(opacity) => {
+                            ui.set_opacity(opacity);
+                            ui.ctx().request_repaint();
+                        }
+                        None => {
+                            opened.remove(pane);
+                        }
+                    }
                 }
-                PaneId::Prompt => {
-                    page_ui(ui, palette, PageStyle::Field, |ui| {
-                        queue_ui(ui, app);
-                        prompt_ui(ui, app);
-                    });
+                match pane {
+                    PaneId::Messages => {
+                        page_ui(ui, palette, PageStyle::Page, |ui| {
+                            messages_body(ui, app, messages, palette);
+                        });
+                    }
+                    PaneId::Prompt => {
+                        page_ui(ui, palette, PageStyle::Field, |ui| {
+                            queue_ui(ui, app);
+                            prompt_ui(ui, app);
+                        });
+                    }
+                    PaneId::Sessions => {
+                        crate::material::sheet::drawer_style(ui.style_mut(), palette);
+                        sessions.show(ui, app, palette);
+                        sessions_rect = Some(ui.max_rect());
+                    }
+                    PaneId::Log => log_ui(ui, app, palette),
+                    PaneId::Profile => profile_ui(ui, app, palette),
+                    PaneId::Tasks => tasks_ui(ui, app, palette),
+                    PaneId::Memory => memory_ui(ui, app, palette),
+                    PaneId::Context => context_ui(ui, app, palette),
+                    PaneId::ActiveAgents => agents_ui(ui, app, palette),
+                    PaneId::Teams => teams_ui(ui, app, palette),
+                    PaneId::Queue => placeholder(ui, *pane),
+                    PaneId::Diff => crate::panels::diff::diff_pane_ui(ui, app, palette),
                 }
-                PaneId::Sessions => {
-                    crate::material::sheet::drawer_style(ui.style_mut(), palette);
-                    sessions.show(ui, app, palette);
-                    sessions_rect = Some(ui.max_rect());
-                }
-                PaneId::Log => log_ui(ui, app, palette),
-                PaneId::Profile => profile_ui(ui, app, palette),
-                PaneId::Tasks => tasks_ui(ui, app, palette),
-                PaneId::Memory => memory_ui(ui, app, palette),
-                PaneId::Context => context_ui(ui, app, palette),
-                PaneId::ActiveAgents => agents_ui(ui, app, palette),
-                PaneId::Teams => teams_ui(ui, app, palette),
-                PaneId::Queue => placeholder(ui, *pane),
-                PaneId::Diff => crate::panels::diff::diff_pane_ui(ui, app, palette),
             },
         );
         if let Some(err) = output.error {
