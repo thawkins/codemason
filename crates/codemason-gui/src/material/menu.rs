@@ -17,6 +17,10 @@ use crate::palette::{Palette, rgb};
 /// Height of a menu item, in points.
 pub const ITEM_HEIGHT: f32 = 48.0;
 
+/// Height of a dense menu item, in points: the desktop context menu, where
+/// 48-point rows would make a long menu taller than it needs to be.
+pub const DENSE_ITEM_HEIGHT: f32 = 32.0;
+
 /// Narrowest menu item, in points.
 const MIN_WIDTH: f32 = 112.0;
 

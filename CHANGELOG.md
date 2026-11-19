@@ -4,6 +4,7 @@
 
 ### Added
 
+- Changed: right-clicking a session or project row in the Sessions panel opens a popup menu at the pointer (under the highlighted row when opened from the keyboard) instead of a centred dialog. It has no heading, Close button or key hints; accelerators sit at the right edge, items that open a submenu show a chevron, the submenu opens beside its item, and a click outside closes the menu without acting on what is under it.
 - Changed: the title strip shows the focused session's name (its `/name`, or `untitled` and its id) instead of the project folder.
 - Added: whether the ribbon is collapsed is remembered across restarts, in `gui-ribbon.json` in the codemason config directory.
 - Added: a side panel fades in over 200 ms when it is shown (off when egui's animation time is zero).
