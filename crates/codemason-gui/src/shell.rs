@@ -79,7 +79,7 @@ use crate::panels::status_bar::status_bar_ui;
 use crate::panels::tasks::tasks_ui;
 use crate::panels::teams::teams_ui;
 use crate::platform::clipboard;
-use crate::platform::files::{self, FileDialogs, file_menu};
+use crate::platform::files::{self, FileDialogs};
 use crate::platform::menu::{self, MenuAction};
 use crate::platform::window::{CloseGuard, WindowGeometry};
 use crate::ribbon::{RibbonAction, RibbonState, ribbon_ui, title_strip_ui};
@@ -122,7 +122,7 @@ pub struct Shell {
     close_keys: Vec<KeyInput>,
     /// Installs the visuals of the App's theme, again when it changes.
     theme: ThemeApplier,
-    /// The native file dialogs the File menu queues.
+    /// The native file dialogs the ribbon queues.
     files: FileDialogs,
     /// What a close request does: quit, or ask while a turn runs.
     close: CloseGuard,
@@ -139,8 +139,7 @@ pub struct Shell {
     geometry: Option<WindowGeometry>,
     /// Set by the Ctrl+C / SIGTERM task ([`crate::signal`]): quit.
     shutdown_signal: Option<Arc<AtomicBool>>,
-    /// The ribbon's open tab and collapsed state (the word-processor
-    /// layout of the `document-*` themes).
+    /// The ribbon's open tab and collapsed state.
     ribbon: RibbonState,
     /// Who draws the window frame ([`crate::title_bar`]); the system unless
     /// [`Shell::with_title_bar`] says otherwise.
@@ -474,50 +473,32 @@ impl Shell {
         self.sync_dock(ui.ctx());
         let palette = Palette::from_tokens(&tokens);
         let menus_enabled = !dialogs::locks_prompt(&self.app);
-        // The word-processor layout belongs to the themes with their own
-        // Material roles; every other theme keeps the plain menu bar.
-        let document = tokens.m3.is_some();
-        let app_bar = crate::title_bar::app_drawn(&self.frame);
         let mut chosen = None;
-        if document || app_bar {
-            let title = self.window_title();
-            let frame = &self.frame;
-            egui::Panel::top("title_strip").show(ui, |ui| {
-                // The caption buttons stay usable while a modal asks.
-                chosen = title_strip_ui(ui, &palette, &title, document, menus_enabled, frame);
+        let title = self.window_title();
+        let frame = &self.frame;
+        egui::Panel::top("title_strip").show(ui, |ui| {
+            // The caption buttons stay usable while a modal asks.
+            chosen = title_strip_ui(ui, &palette, &title, menus_enabled, frame);
+        });
+        egui::Panel::top("ribbon").show(ui, |ui| {
+            ui.add_enabled_ui(menus_enabled, |ui| {
+                chosen = ribbon_ui(ui, &palette, &mut self.ribbon).or(chosen);
             });
-        }
-        if document {
-            egui::Panel::top("ribbon").show(ui, |ui| {
-                ui.add_enabled_ui(menus_enabled, |ui| {
-                    chosen = ribbon_ui(ui, &palette, &mut self.ribbon).or(chosen);
-                });
-            });
-            if let Some(action) = chosen {
-                self.run_ribbon_action(ui.ctx(), action);
-            }
-        } else {
-            egui::Panel::top("menu_bar").show(ui, |ui| {
-                egui::MenuBar::new().ui(ui, |ui| {
-                    file_menu(ui, &mut self.files, &self.app.cwd_path, menus_enabled);
-                });
-            });
+        });
+        if let Some(action) = chosen {
+            self.run_ribbon_action(ui.ctx(), action);
         }
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            if document {
-                ui.horizontal(|ui| {
-                    status_bar_ui(ui, &mut self.app, &palette);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        crate::panels::status_bar::zoom_ui(ui, &palette);
-                    });
-                });
-            } else {
+            ui.horizontal(|ui| {
                 status_bar_ui(ui, &mut self.app, &palette);
-            }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    crate::panels::status_bar::zoom_ui(ui, &palette);
+                });
+            });
         });
         let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
-            sessions_rect = self.show_dock(ui, &palette, document);
+            sessions_rect = self.show_dock(ui, &palette);
         });
         if self.app.palette.is_some() {
             dialogs::palette::set_action_keys(ui.ctx(), self.keys.action_keys());
@@ -641,7 +622,7 @@ impl Shell {
     /// Run a ribbon or quick access command, as the native menu runs its
     /// commands: a key press through `App::handle_key`, a slash command
     /// through `App::execute_slash_command`, a panel toggle as its keymap
-    /// command's key press, and a file dialog through the File menu's
+    /// command's key press, and a file dialog through the window's
     /// dialogs. Without attached sources there is no runtime, so key presses
     /// and slash commands are dropped.
     fn run_ribbon_action(&mut self, ctx: &egui::Context, action: RibbonAction) {
@@ -675,16 +656,9 @@ impl Shell {
         ctx.request_repaint();
     }
 
-    fn show_dock(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: &Palette,
-        document: bool,
-    ) -> Option<egui::Rect> {
+    fn show_dock(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<egui::Rect> {
         let mut style = DockStyle::from_ui(ui);
-        if document {
-            m3_dock_style(&mut style, palette);
-        }
+        m3_dock_style(&mut style, palette);
         let mut sessions_rect = None;
         let Self {
             app,
@@ -700,26 +674,19 @@ impl Shell {
             |pane: &PaneId| pane.label().to_string(),
             |pane: &PaneId| pane.permissions(),
             |ui, pane| match pane {
-                PaneId::Messages if document => {
+                PaneId::Messages => {
                     page_ui(ui, palette, PageStyle::Page, |ui| {
                         messages_body(ui, app, messages, palette);
                     });
                 }
-                PaneId::Messages => messages_body(ui, app, messages, palette),
-                PaneId::Prompt if document => {
+                PaneId::Prompt => {
                     page_ui(ui, palette, PageStyle::Field, |ui| {
                         queue_ui(ui, app);
                         prompt_ui(ui, app);
                     });
                 }
-                PaneId::Prompt => {
-                    queue_ui(ui, app);
-                    prompt_ui(ui, app);
-                }
                 PaneId::Sessions => {
-                    if document {
-                        crate::material::sheet::drawer_style(ui.style_mut(), palette);
-                    }
+                    crate::material::sheet::drawer_style(ui.style_mut(), palette);
                     sessions.show(ui, app, palette);
                     sessions_rect = Some(ui.max_rect());
                 }
@@ -1245,7 +1212,7 @@ impl eframe::App for Shell {
         let _context = runtime.as_ref().map(Handle::enter);
         // eframe has just called `logic` for this frame.
         self.draw_frame(ui);
-        // Show a dialog the File menu queued, with the window as parent.
+        // Show a dialog the ribbon queued, with the window as parent.
         self.files.show_pending(Some(frame));
     }
 

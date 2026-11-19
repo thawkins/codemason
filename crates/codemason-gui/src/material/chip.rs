@@ -76,7 +76,7 @@ pub fn chip(
             ChipKind::Assist => rgb(m3.on_surface),
         },
     );
-    let text = text_galley(ui, label, label_large(), content);
+    let text = text_galley(ui, label, label_large(ui.ctx()), content);
     let leading = if icon.is_some() {
         ICON_PADDING
     } else {

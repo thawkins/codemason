@@ -86,7 +86,7 @@ fn paint_tab(ui: &egui::Ui, palette: &Palette, response: &Response, label: &str,
         },
     );
     paint_state_layer(ui, response, CornerRadius::ZERO, content);
-    let text = text_galley(ui, label, label_large(), content);
+    let text = text_galley(ui, label, label_large(ui.ctx()), content);
     let text_width = text.size().x;
     ui.painter()
         .galley(rect.center() - text.size() / 2.0, text, content);

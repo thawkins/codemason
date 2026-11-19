@@ -73,7 +73,7 @@ pub fn button(
         ButtonKind::Outlined | ButtonKind::Text => (None, rgb(m3.primary)),
     };
     let content = content_colour(ui, palette, content);
-    let text = text_galley(ui, label, label_large(), content);
+    let text = text_galley(ui, label, label_large(ui.ctx()), content);
     let leading = if icon.is_some() {
         ICON_PADDING
     } else {

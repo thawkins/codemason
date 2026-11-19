@@ -1,7 +1,6 @@
 //! Tests for the word-processor layout's panes and status bar: the drawer
 //! style of the sessions sidebar, and the status bar's zoom slider, drawn
-//! only for themes with their own Material roles and bound to the window's
-//! zoom factor.
+//! on every theme and bound to the window's zoom factor.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -50,9 +49,9 @@ fn test_document_panes_drawer_style_makes_pill_rows() {
 }
 
 #[test]
-fn test_document_panes_zoom_slider_only_in_document_themes() {
+fn test_document_panes_zoom_slider_sets_the_zoom() {
     let (_runtime, legacy) = harness("codemason-light");
-    assert!(legacy.query_by_label(ZOOM_LABEL).is_none());
+    legacy.get_by_label(ZOOM_LABEL);
     let (_runtime, mut document) = harness("document-light");
     // A click in the middle of 50%..200% zooms to 125%.
     document.get_by_label(ZOOM_LABEL).click();

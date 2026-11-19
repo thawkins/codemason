@@ -4,6 +4,8 @@
 
 ### Added
 
+- Changed: the word-processor layout (title strip with quick access, ribbon, Material panes and the status-bar zoom slider) is drawn on every theme, in that theme's colours, not only in the `document-*` themes; the ribbon replaces the `File` menu bar on every theme (File > Open project / New folder, Insert > Images). The transcript and the prompt now fill their panes instead of a centred column at most 816 points wide.
+- Fixed: a click on the Diff pane's text gives the pane the keyboard (egui's text selection had cleared the focus the pane asked for), as a click on its empty space does.
 - Changed: the border of a markdown table in the transcript is drawn twice as wide as before (2 pt with the default style). Only replies that contain a table are affected; a horizontal rule or task-list checkbox in the same reply is drawn with the wider line too.
 - Added: motion in the word-processor layout: the ribbon's band slides open and shut and the open tab's underline glides to the next tab (200 ms, decelerating), and the snackbar and tooltip fade in. Setting egui's animation time to zero turns the motion off (NEWUI Phase 6).
 - Changed: the `high-contrast` theme's accent (`#0096ff` to `#1a9fff`) and error colour (`#ff3232` to `#ff6060`) are lighter, so they reach the WCAG AAA ratio (7:1) on its black background, as text and as fills under black text (NEWUI Phase 6).

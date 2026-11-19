@@ -4,8 +4,8 @@
 //! "macos")`): the app menu (About codemason, Services, Hide, Hide Others,
 //! Show All, Quit codemason with Cmd+Q), a View menu with the panel toggles
 //! the keymap defines (with their keymap chords as shortcuts), and AppKit's
-//! Window and Help menus. Elsewhere the window keeps its in-window File menu
-//! and nothing here is installed; the model ([`menu_bar`]), its Mac layout
+//! Window and Help menus. Elsewhere the window's own ribbon
+//! ([`crate::ribbon`]) carries the commands and nothing here is installed; the model ([`menu_bar`]), its Mac layout
 //! ([`mac_menu_layout`]) and the command mapping ([`menu_action`]) are
 //! platform-free, so they build and are tested everywhere.
 //!

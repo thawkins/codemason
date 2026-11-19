@@ -1,5 +1,5 @@
 //! Tests for the native file dialogs (`codemason_gui::platform::files`):
-//! a File menu item queues the dialog, the answer is taken on a later frame
+//! a ribbon button queues the dialog, the answer is taken on a later frame
 //! and runs the app-core action a typed path reaches, and a cancelled
 //! dialog changes nothing.
 //!
@@ -18,9 +18,8 @@ use std::rc::Rc;
 use codemason_app_core::app::App;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
-use codemason_gui::platform::files::{
-    ATTACH_LABEL, FILE_MENU_LABEL, NEW_PROJECT_DIR_LABEL, OPEN_PROJECT_LABEL,
-};
+use codemason_gui::platform::files::FileIntent;
+use codemason_gui::ribbon::{RibbonAction, TABS};
 use craft_dialogs::{Answer, Kind, Request};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -74,11 +73,21 @@ fn rig(
     (runtime, harness, requests)
 }
 
-/// Open the File menu and choose `item`, then run the frames that show the
-/// dialog and take its answer.
-fn choose(harness: &mut Harness<'static, Shell>, item: &str) {
+/// Click the ribbon button that opens `intent`'s dialog (opening its tab
+/// first), then run the frames that show the dialog and take its answer.
+fn choose(harness: &mut Harness<'static, Shell>, intent: FileIntent) {
+    let (tab, item) = TABS
+        .iter()
+        .find_map(|tab| {
+            tab.groups
+                .iter()
+                .flat_map(|group| group.items.iter())
+                .find(|item| item.action == RibbonAction::Files(intent))
+                .map(|item| (tab.label, item.label))
+        })
+        .expect("a ribbon button opens every file dialog");
     harness.run();
-    harness.get_by_label(FILE_MENU_LABEL).click();
+    harness.get_by_label(tab).click();
     harness.run();
     harness.get_by_label(item).click();
     harness.run();
@@ -96,7 +105,7 @@ fn test_attach_dialog_answer_adds_attachment() {
     std::fs::write(&image, b"png").expect("write image");
     let (_runtime, mut harness, requests) = rig(Answer::Paths(vec![image.clone()]));
 
-    choose(&mut harness, ATTACH_LABEL);
+    choose(&mut harness, FileIntent::Attach);
 
     let requests = requests.borrow();
     assert_eq!(requests.len(), 1);
@@ -131,7 +140,11 @@ fn test_cancelled_dialog_changes_nothing() {
         )
     };
 
-    for item in [ATTACH_LABEL, OPEN_PROJECT_LABEL, NEW_PROJECT_DIR_LABEL] {
+    for item in [
+        FileIntent::Attach,
+        FileIntent::OpenProject,
+        FileIntent::NewProjectDir,
+    ] {
         choose(&mut harness, item);
     }
 
@@ -203,7 +216,7 @@ fn test_open_project_dialog_registers_the_folder_as_a_project() {
     let folder = permitted_folder(&mut harness, "open-project", "Ann's App");
     let requests = answer_with(&mut harness, Answer::Paths(vec![folder.clone()]));
 
-    choose(&mut harness, OPEN_PROJECT_LABEL);
+    choose(&mut harness, FileIntent::OpenProject);
 
     assert_folder_dialog(&requests);
     // `/project add` registers the checkout the folder belongs to (here
@@ -235,7 +248,7 @@ fn test_new_project_dir_dialog_opens_a_session_in_any_folder_name() {
         let folder = permitted_folder(&mut harness, tag, name);
         let requests = answer_with(&mut harness, Answer::Paths(vec![folder.clone()]));
 
-        choose(&mut harness, NEW_PROJECT_DIR_LABEL);
+        choose(&mut harness, FileIntent::NewProjectDir);
 
         assert_folder_dialog(&requests);
         let app = harness.state().app();
@@ -260,7 +273,7 @@ fn test_new_project_dir_refusal_expires_like_a_typed_command() {
     support::allow_session_root(harness.state().app(), &root);
     let requests = answer_with(&mut harness, Answer::Paths(vec![outside]));
 
-    choose(&mut harness, NEW_PROJECT_DIR_LABEL);
+    choose(&mut harness, FileIntent::NewProjectDir);
 
     assert_folder_dialog(&requests);
     let app = harness.state().app();
@@ -280,7 +293,7 @@ fn test_new_project_dir_refusal_expires_like_a_typed_command() {
 fn test_unavailable_dialog_is_logged_and_changes_nothing_else() {
     let (_runtime, mut harness, _requests) = rig(Answer::Unavailable("no portal".to_string()));
 
-    choose(&mut harness, ATTACH_LABEL);
+    choose(&mut harness, FileIntent::Attach);
 
     let app = harness.state().app();
     assert_eq!(
