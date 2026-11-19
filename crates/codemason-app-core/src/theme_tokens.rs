@@ -332,6 +332,10 @@ pub struct M3Roles {
     pub outline_variant: Rgb,
     /// The background of snackbars and tooltips.
     pub inverse_surface: Rgb,
+    /// Text and icons on `inverse_surface`.
+    pub inverse_on_surface: Rgb,
+    /// Actions on `inverse_surface`, such as a snackbar's button.
+    pub inverse_primary: Rgb,
     /// The dimming layer behind a modal.
     pub scrim: Rgb,
     /// Shadows under elevated surfaces.
@@ -340,7 +344,8 @@ pub struct M3Roles {
 
 impl M3Roles {
     /// Checks every `on_x` role against its `x` role at [`AA_CONTRAST`], and
-    /// `outline` against `surface` at [`UI_CONTRAST`].
+    /// `outline` against `surface` and `inverse_primary` against
+    /// `inverse_surface` at [`UI_CONTRAST`].
     ///
     /// # Arguments
     ///
@@ -430,6 +435,20 @@ impl M3Roles {
                 self.surface,
                 UI_CONTRAST,
             ),
+            (
+                "inverse_on_surface",
+                self.inverse_on_surface,
+                "inverse_surface",
+                self.inverse_surface,
+                AA_CONTRAST,
+            ),
+            (
+                "inverse_primary",
+                self.inverse_primary,
+                "inverse_surface",
+                self.inverse_surface,
+                UI_CONTRAST,
+            ),
         ];
         pairs
             .into_iter()
@@ -478,6 +497,8 @@ impl ThemeTokens {
     /// the `bg` ladder gives the surface containers and the borders give the
     /// outlines. Containers are their colour mixed 20% into `bg.base`, and
     /// content on a solid fill is white or black, whichever contrasts more.
+    /// The inverse surface is `text.base` with `bg.base` on it, and its
+    /// action colour is the accent mixed half into `bg.base`.
     #[must_use]
     pub fn roles(&self) -> M3Roles {
         if let Some(roles) = self.m3 {
@@ -513,6 +534,8 @@ impl ThemeTokens {
             outline: self.text.subtle,
             outline_variant: self.border.base,
             inverse_surface: self.text.base,
+            inverse_on_surface: base,
+            inverse_primary: mix(base, self.accent, 0.5),
             scrim: Rgb(0, 0, 0),
             shadow: Rgb(0, 0, 0),
         }

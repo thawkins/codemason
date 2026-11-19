@@ -95,7 +95,8 @@ pub fn widget_palette(palette: &Palette) -> WidgetPalette {
 /// `border.base` and hovered or pressed ones in `border.focus`, the link,
 /// warning and error colours, and the selection colour under body text.
 /// Corners use the radius scale: small for widgets, medium for menus, large
-/// for windows.
+/// for windows. A theme with its own Material roles (an `m3` block) is then
+/// re-coloured from them by [`apply_m3`].
 #[must_use]
 pub fn visuals_for(tokens: &ThemeTokens) -> egui::Visuals {
     let palette = Palette::from_tokens(tokens);
@@ -132,7 +133,67 @@ pub fn visuals_for(tokens: &ThemeTokens) -> egui::Visuals {
     ] {
         widget.bg_stroke = Stroke::new(1.0, outline);
     }
+    if tokens.m3.is_some() {
+        apply_m3(&mut visuals, &palette);
+    }
     visuals
+}
+
+/// Re-colour `visuals` from the Material roles of `palette`, for a theme
+/// that carries its own (an `m3` block).
+///
+/// Panels go on `surface`, windows on `surface_container_high` with
+/// extra-large corners and the elevation-3 shadow, menus get extra-small
+/// corners and the elevation-2 shadow, text fields and code on
+/// `surface_container_highest`, the selection on `primary_container`, links
+/// in `primary`, and egui's own buttons become tonal buttons
+/// (`secondary_container`, with the Material state layers when hovered and
+/// pressed). Labels stay in `on_surface`.
+fn apply_m3(visuals: &mut egui::Visuals, palette: &Palette) {
+    use crate::material::{HOVER_OPACITY, PRESS_OPACITY, elevation_shadow};
+    use crate::metrics::radius;
+    use crate::palette::rgb;
+
+    let m3 = &palette.m3;
+    visuals.panel_fill = rgb(m3.surface);
+    visuals.window_fill = rgb(m3.surface_container_high);
+    visuals.window_stroke = Stroke::new(1.0, rgb(m3.outline_variant));
+    visuals.window_corner_radius = CornerRadius::same(radius::XL);
+    visuals.window_shadow = elevation_shadow(3, palette);
+    visuals.popup_shadow = elevation_shadow(2, palette);
+    visuals.menu_corner_radius = CornerRadius::same(radius::XS);
+    visuals.extreme_bg_color = rgb(m3.surface_container_highest);
+    visuals.faint_bg_color = rgb(m3.surface_container);
+    visuals.code_bg_color = rgb(m3.surface_container_highest);
+    visuals.hyperlink_color = rgb(m3.primary);
+    visuals.error_fg_color = rgb(m3.error);
+    visuals.selection.bg_fill = rgb(m3.primary_container);
+    visuals.selection.stroke = Stroke::new(1.0, rgb(m3.on_primary_container));
+    let tonal = rgb(m3.secondary_container);
+    let on_tonal = rgb(m3.on_secondary_container);
+    WidgetPalette {
+        noninteractive: rgb(m3.surface_container),
+        inactive: tonal,
+        hovered: mix(tonal, on_tonal, HOVER_OPACITY),
+        active: mix(tonal, on_tonal, PRESS_OPACITY),
+        open: tonal,
+    }
+    .apply_to(
+        &mut visuals.widgets,
+        CornerRadius::same(radius::SM),
+        Stroke::new(1.0, on_tonal),
+    );
+    let widgets = &mut visuals.widgets;
+    widgets.noninteractive.fg_stroke = Stroke::new(1.0, rgb(m3.on_surface));
+    for (widget, outline) in [
+        (&mut widgets.noninteractive, m3.outline_variant),
+        (&mut widgets.inactive, m3.outline_variant),
+        (&mut widgets.hovered, m3.primary),
+        (&mut widgets.active, m3.primary),
+        (&mut widgets.open, m3.outline_variant),
+    ] {
+        widget.bg_stroke = Stroke::new(1.0, rgb(outline));
+    }
 }
 
 /// Keeps the egui context's visuals in step with the App's theme.

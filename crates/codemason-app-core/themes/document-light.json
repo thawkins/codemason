@@ -85,6 +85,8 @@
     "outline": "#747684",
     "outline_variant": "#c4c6d5",
     "inverse_surface": "#2f3036",
+    "inverse_on_surface": "#eff0f8",
+    "inverse_primary": "#b8c4ff",
     "scrim": "#000000",
     "shadow": "#000000"
   }

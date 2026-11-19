@@ -32,7 +32,10 @@ Every theme also has Material Design 3 colour roles (`ThemeTokens::roles`). A
 theme file may give them in an optional `m3` block (the `document-*` themes
 do); otherwise they are derived from the other tokens. An `m3` block is
 checked for contrast when the file is loaded: every `on_x` role against its
-`x` role at 4.5:1, and `outline` against `surface` at 3:1.
+`x` role at 4.5:1 (including `inverse_on_surface` on `inverse_surface`), and
+`outline` against `surface` and `inverse_primary` against `inverse_surface` at
+3:1. A theme with its own `m3` block also restyles egui's built-in widgets
+from those roles.
 
 ## Syntax
 

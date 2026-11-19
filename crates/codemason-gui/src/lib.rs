@@ -43,6 +43,7 @@ pub mod fonts;
 pub mod icons;
 pub mod keys;
 pub mod main_thread;
+pub mod material;
 pub mod metrics;
 pub mod palette;
 pub mod panels;

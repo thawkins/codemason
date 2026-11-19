@@ -118,6 +118,28 @@ mod test_launch;
 mod test_main_thread;
 #[path = "test_markdown.rs"]
 mod test_markdown;
+#[path = "test_material_button.rs"]
+mod test_material_button;
+#[path = "test_material_card.rs"]
+mod test_material_card;
+#[path = "test_material_chip.rs"]
+mod test_material_chip;
+#[path = "test_material_dialog.rs"]
+mod test_material_dialog;
+#[path = "test_material_feedback.rs"]
+mod test_material_feedback;
+#[path = "test_material_icon_button.rs"]
+mod test_material_icon_button;
+#[path = "test_material_menu.rs"]
+mod test_material_menu;
+#[path = "test_material_segmented.rs"]
+mod test_material_segmented;
+#[path = "test_material_sheet.rs"]
+mod test_material_sheet;
+#[path = "test_material_tabs.rs"]
+mod test_material_tabs;
+#[path = "test_material_text_field.rs"]
+mod test_material_text_field;
 #[path = "test_menu.rs"]
 mod test_menu;
 #[path = "test_messages.rs"]

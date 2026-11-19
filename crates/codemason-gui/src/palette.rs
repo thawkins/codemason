@@ -15,7 +15,7 @@
 use codemason_app_core::app::App;
 use codemason_app_core::styled::ThemeColor;
 use codemason_app_core::syntax_highlight::SyntaxRole;
-use codemason_app_core::theme_tokens::{Rgb, ThemeTokens};
+use codemason_app_core::theme_tokens::{M3Roles, Rgb, ThemeTokens};
 use egui::Color32;
 
 /// Channel levels of the xterm-256 6x6x6 colour cube (indices 16..232).
@@ -114,6 +114,9 @@ pub struct Palette {
     pub blockquote: Color32,
     /// [`ThemeColor::Categorical`]: eight colours for telling agents apart.
     pub categorical: [Color32; 8],
+    /// The theme's Material Design 3 colour roles
+    /// ([`ThemeTokens::roles`]), drawn by `crate::material`.
+    pub m3: M3Roles,
     /// Code-block highlighting colours, by [`SyntaxRole`].
     pub syntax: SyntaxColors,
 }
@@ -190,6 +193,7 @@ impl Palette {
             code: rgb(tokens.markdown.code),
             blockquote: rgb(tokens.markdown.blockquote),
             categorical: tokens.categorical.map(rgb),
+            m3: tokens.roles(),
             syntax: SyntaxColors {
                 keyword: rgb(tokens.syntax.keyword),
                 string: rgb(tokens.syntax.string),

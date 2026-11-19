@@ -109,7 +109,17 @@ Done as planned, with these differences:
    - Verify: existing icon/font tests pass; a test that every `Icon` has a
      glyph present in the bundled face.
 
-### Phase 3: `material` component module (3 to 4 days)
+### Phase 3: `material` component module (3 to 4 days) - DONE
+
+Done as planned, with these differences:
+- `visuals_for` maps egui's widgets onto the M3 roles only for themes with
+  their own `m3` block (`document-*`), so the default and ported themes look
+  exactly as before.
+- Two roles were added for the snackbar and tooltip: `inverse_on_surface`
+  and `inverse_primary` (required in an `m3` block, derived otherwise).
+- The tooltip is drawn as its own `Area` (`plain_tooltip`) rather than
+  restyling egui's hover popup, whose frame cannot be changed per call.
+- `examples/material_gallery.rs` shows every component for review.
 
 New module `crates/codemason-gui/src/material/` with one file per component.
 Each takes `&Palette` and returns an `egui::Response`; no state beyond what

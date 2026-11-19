@@ -85,11 +85,18 @@ fn test_theme_text_is_readable_in_every_builtin_theme() {
             }
         }
         // Selected text.
-        assert_eq!(visuals.selection.bg_fill, palette.selection, "{name}");
         let selected = contrast_ratio(visuals.selection.stroke.color, visuals.selection.bg_fill);
         assert!(selected >= AA_CONTRAST, "{name} selection {selected:.2}");
-        // Links.
-        assert_eq!(visuals.hyperlink_color, palette.link, "{name}");
+        // Labels on the panel.
+        let label = contrast_ratio(
+            visuals.widgets.noninteractive.fg_stroke.color,
+            visuals.panel_fill,
+        );
+        assert!(label >= AA_CONTRAST, "{name} label {label:.2}");
+        if tokens.m3.is_none() {
+            assert_eq!(visuals.selection.bg_fill, palette.selection, "{name}");
+            assert_eq!(visuals.hyperlink_color, palette.link, "{name}");
+        }
     }
     let dark = Palette::from_tokens(&theme("codemason-dark"));
     assert!(contrast_ratio(dark.accent, dark.background) >= AAA_CONTRAST);
@@ -97,7 +104,9 @@ fn test_theme_text_is_readable_in_every_builtin_theme() {
 
 #[test]
 fn test_theme_visuals_come_from_the_tokens() {
-    for tokens in themes() {
+    // Themes with their own Material roles are covered by
+    // `test_theme_m3_visuals_come_from_the_roles`.
+    for tokens in themes().into_iter().filter(|t| t.m3.is_none()) {
         let name = &tokens.name;
         let visuals = visuals_for(&tokens);
         let palette = Palette::from_tokens(&tokens);
@@ -232,4 +241,56 @@ async fn test_theme_command_changes_the_palette() {
         before.window_stroke, after.window_stroke,
         "high contrast draws different outlines"
     );
+}
+
+#[test]
+fn test_theme_m3_visuals_come_from_the_roles() {
+    use codemason_gui::palette::rgb;
+
+    for name in ["document-light", "document-dark"] {
+        let tokens = theme(name);
+        let m3 = tokens.roles();
+        let visuals = visuals_for(&tokens);
+        assert_eq!(visuals.dark_mode, tokens.dark, "{name}");
+        assert_eq!(visuals.panel_fill, rgb(m3.surface), "{name}");
+        assert_eq!(
+            visuals.window_fill,
+            rgb(m3.surface_container_high),
+            "{name}"
+        );
+        assert_eq!(
+            visuals.extreme_bg_color,
+            rgb(m3.surface_container_highest),
+            "{name}"
+        );
+        assert_eq!(
+            visuals.selection.bg_fill,
+            rgb(m3.primary_container),
+            "{name}"
+        );
+        assert_eq!(visuals.hyperlink_color, rgb(m3.primary), "{name}");
+        assert_eq!(
+            visuals.window_corner_radius,
+            egui::CornerRadius::same(codemason_gui::metrics::radius::XL)
+        );
+        let widgets = &visuals.widgets;
+        assert_eq!(
+            widgets.inactive.bg_fill,
+            rgb(m3.secondary_container),
+            "{name}"
+        );
+        assert_eq!(
+            widgets.noninteractive.fg_stroke.color,
+            rgb(m3.on_surface),
+            "{name}"
+        );
+        for (state, widget) in [
+            ("inactive", &widgets.inactive),
+            ("hovered", &widgets.hovered),
+            ("active", &widgets.active),
+        ] {
+            let ratio = contrast_ratio(widget.fg_stroke.color, widget.bg_fill);
+            assert!(ratio >= AA_CONTRAST, "{name} {state} text {ratio:.2}");
+        }
+    }
 }
