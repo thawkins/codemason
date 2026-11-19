@@ -61,7 +61,6 @@ fn app() -> App {
     let mut app = make_app();
     app.session.session_id = Some(LEAD_SESSION.to_string());
     app.session.agent_name = "general".to_string();
-    app.needs_redraw = false;
     app
 }
 

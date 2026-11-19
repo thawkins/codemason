@@ -19,7 +19,6 @@ mod support;
 fn app_with_session(session: &str) -> App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     app
 }
 

@@ -27,7 +27,7 @@ use codemason_agent::{
 use codemason_app_core::app::App;
 use codemason_app_core::app::{
     ConfiguredProvider, FileMenuEntry, FileMenuState, HistoryPickerState, LogEntry, LogLevel,
-    OutputViewState, OutputViewTarget, ProviderSetupStep, ProviderSource, ScreenMode,
+    OutputViewState, OutputViewTarget, ProviderSetupStep, ProviderSource,
 };
 
 /// Build an [`App`] backed by an in-memory database.
@@ -420,18 +420,6 @@ async fn test_slash_help_shows_commands() {
     assert!(text.contains("/model"), "help should mention /model");
     assert!(text.contains("/help"), "help should mention /help");
     assert!(text.contains("/spec"), "help should mention /spec");
-}
-
-#[tokio::test]
-async fn test_slash_help_executes_in_chat_screen() {
-    let mut app = make_app();
-    app.session.session_id = Some("s1".to_string());
-    // App now starts in Chat mode - home screen has been removed
-    assert_eq!(app.current_screen, ScreenMode::Chat);
-
-    app.execute_slash_command("/help").await;
-    // Should remain in Chat mode
-    assert_eq!(app.current_screen, ScreenMode::Chat);
 }
 
 // -- /quit -----------------------------------------------------------
@@ -2231,7 +2219,6 @@ async fn test_chat_keystrokes_produce_expected_edit_result() {
     // Test that input handling works correctly in chat mode
     let mut chat = make_app();
     // App now starts in Chat mode - home screen has been removed
-    assert_eq!(chat.current_screen, ScreenMode::Chat);
 
     let sequence = vec![
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),

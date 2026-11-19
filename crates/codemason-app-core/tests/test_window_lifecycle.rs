@@ -63,7 +63,6 @@ fn app_with_window(tasks: Vec<TaskEntry>) -> App {
     app.session.agent_name = "general".to_string();
     app.active_tasks = tasks;
     app.show_agents_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -78,7 +77,6 @@ fn app_with_team() -> App {
     member.session_id = Some("tm-001-session".to_string());
     app.session.team_members.push(member);
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -95,10 +93,6 @@ fn an_already_closed_or_occupied_window_is_untouched_by_the_auto_close() {
     app.show_agents_window = false;
     app.close_agents_window_when_empty();
     assert!(!app.show_agents_window);
-    assert!(
-        !app.needs_redraw,
-        "a redundant close on a closed window paints nothing (NFR-005)"
-    );
 
     // Still has a subject: the window stays open.
     let mut app = app_with_window(vec![task("a1b2c3d4", "explore", TaskStatus::Running)]);

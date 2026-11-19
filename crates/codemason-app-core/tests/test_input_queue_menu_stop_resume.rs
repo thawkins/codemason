@@ -286,31 +286,3 @@ async fn test_resume_row_without_a_session_reports_no_active_session() {
 // ---------------------------------------------------------------------------
 // NFR-008 - the action repaints on the next frame
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_stop_row_sets_the_redraw_flag() {
-    let mut app = app_with_session();
-    app.session.is_processing = true;
-    app.session.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
-    app.needs_redraw = false;
-
-    app.queue_menu_select_halt();
-
-    assert!(
-        app.needs_redraw,
-        "NFR-008: the Stop/Resume action must repaint on the next frame"
-    );
-}
-
-#[tokio::test]
-async fn test_resume_row_sets_the_redraw_flag() {
-    let mut app = app_with_session();
-    app.needs_redraw = false;
-
-    app.queue_menu_select_halt();
-
-    assert!(
-        app.needs_redraw,
-        "NFR-008: the Stop/Resume action must repaint on the next frame"
-    );
-}

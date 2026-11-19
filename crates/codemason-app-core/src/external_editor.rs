@@ -110,7 +110,6 @@ impl App {
         self.external_editor_open = true;
         self.external_editor_owner = self.session.session_id.clone();
         self.status = "editor: waiting for the external editor".to_string();
-        self.needs_redraw = true;
         Some(self.session.input.clone())
     }
 
@@ -148,6 +147,5 @@ impl App {
                 self.status = format!("editor: {e:#}");
             }
         }
-        self.needs_redraw = true;
     }
 }

@@ -540,7 +540,6 @@ impl App {
         } else {
             self.status = format!("[bee] swarm: all teammates spawned");
         }
-        self.needs_redraw = true;
     }
 
     /// Periodically (every 2s) check the active swarm's overall completion
@@ -776,7 +775,6 @@ impl App {
         if let Some(ref mut s) = self.session.swarm_state {
             s.completed = true;
         }
-        self.needs_redraw = true;
     }
 }
 

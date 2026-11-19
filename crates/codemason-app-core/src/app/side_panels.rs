@@ -96,6 +96,5 @@ impl App {
     /// * `index` - the row, in the panel's category-then-id order.
     pub fn select_memory_row(&mut self, index: usize) {
         self.memory_cursor = index.min(self.memory_row_count.saturating_sub(1));
-        self.needs_redraw = true;
     }
 }

@@ -546,7 +546,6 @@ impl App {
         });
         self.status = if focused { summary.to_string() } else { status };
         tracing::info!(session_id, kind, summary, "autofix trigger");
-        self.needs_redraw = true;
     }
 
     /// Opens stored session `session_id` in the background, leaving the

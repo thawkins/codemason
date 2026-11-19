@@ -306,7 +306,6 @@ impl super::App {
         if let Some(ref mut timings) = self.startup_timings {
             timings.record("Code index (background)", result.elapsed);
         }
-        self.needs_redraw = true;
     }
 }
 

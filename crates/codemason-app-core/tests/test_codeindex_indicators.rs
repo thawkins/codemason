@@ -62,7 +62,6 @@ fn test_poll_codeindex_bg_result_noop_when_empty() {
 fn test_graph_busy_latch_clears_when_no_index_attached() {
     let mut app = make_app();
     app.code_index_graph_busy = true;
-    app.needs_redraw = false;
     // Age out the refresh throttle so the refresh body actually runs.
     app.code_index_stats_last_refresh = std::time::Instant::now()
         .checked_sub(std::time::Duration::from_secs(10))

@@ -63,7 +63,6 @@ fn app() -> App {
     let mut app = make_app();
     app.session.session_id = Some(LEAD_SESSION.to_string());
     app.session.agent_name = "general".to_string();
-    app.needs_redraw = false;
     app
 }
 
@@ -116,20 +115,11 @@ async fn alt_a_toggles_the_window_and_requests_a_redraw() {
         app.show_agents_window,
         "FR-022: the first Alt+A opens the window"
     );
-    assert!(
-        app.needs_redraw,
-        "opening the window requests a redraw, as the click does"
-    );
 
-    app.needs_redraw = false;
     app.handle_key_event(alt_a()).await;
     assert!(
         !app.show_agents_window,
         "FR-022: the second Alt+A closes it"
-    );
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
     );
 }
 
@@ -145,13 +135,11 @@ async fn alt_a_without_a_subject_still_opens_the_window() {
         app.show_agents_window,
         "with nothing to show the window still opens, as the click does"
     );
-    assert!(app.needs_redraw, "opening the window requests a redraw");
     assert_eq!(
         app.status, "ready",
         "an empty open is not an error, so it reports nothing"
     );
 
-    app.needs_redraw = false;
     app.handle_key_event(alt_a()).await;
     assert!(!app.show_agents_window, "the second chord closes it again");
 }
@@ -162,16 +150,11 @@ async fn alt_a_closes_an_open_window_even_when_its_subject_vanished() {
     // that opened it must still be able to dismiss it.
     let mut app = app();
     app.show_agents_window = true;
-    app.needs_redraw = false;
 
     app.handle_key_event(alt_a()).await;
     assert!(
         !app.show_agents_window,
         "an open window always closes, whatever its subject is now"
-    );
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
     );
 }
 

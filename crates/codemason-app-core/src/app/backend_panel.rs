@@ -131,20 +131,17 @@ impl App {
             &self.cwd_path,
             &self.session.active_backend,
         ));
-        self.needs_redraw = true;
     }
 
     /// Dismiss the `/backend` panel (`Esc`).
     pub fn close_backend_panel(&mut self) {
         self.backend_panel = None;
-        self.needs_redraw = true;
     }
 
     /// Move the panel highlight up (`Up`).
     pub fn backend_panel_move_up(&mut self) {
         if let Some(panel) = self.backend_panel.as_mut() {
             panel.move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -152,7 +149,6 @@ impl App {
     pub fn backend_panel_move_down(&mut self) {
         if let Some(panel) = self.backend_panel.as_mut() {
             panel.move_down();
-            self.needs_redraw = true;
         }
     }
 

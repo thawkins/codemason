@@ -14,7 +14,7 @@ use codemason_agent::{
 };
 
 // State types from app/state.rs
-use crate::app::state::{App, LogLevel, ScreenMode};
+use crate::app::state::{App, LogLevel};
 
 // Theme status types
 use crate::status::StatusHistory;
@@ -268,7 +268,6 @@ impl App {
             quota_percent: None,
             model_loading_state: None,
             model_download_state: None,
-            current_screen: ScreenMode::Chat,
             cwd,
             plugin_commands: crate::app::state::plugin_commands_for_surface(&cwd_path),
             user_commands: crate::app::state::user_commands_for_surface(&cwd_path),
@@ -496,7 +495,6 @@ impl App {
             themes,
             mouse_enabled: true,
             status_history: StatusHistory::new(),
-            needs_redraw: true,
             code_index: None,
             code_index_enabled: app_config.code_index.enabled,
             code_index_stats_last_refresh: std::time::Instant::now(),

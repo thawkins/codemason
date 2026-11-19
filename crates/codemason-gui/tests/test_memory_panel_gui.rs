@@ -32,7 +32,7 @@ use crate::term_events::{KeyCode, KeyEvent, KeyModifiers};
 use tempfile::TempDir;
 
 use codemason_agent::storage::Storage;
-use codemason_app_core::{app::App, app::ScreenMode, input::InputAction};
+use codemason_app_core::{app::App, input::InputAction};
 
 /// Build an [`App`] backed by an in-memory database.
 /// A test [`App`] built on the shared fixture, with the log panel open.
@@ -142,7 +142,6 @@ async fn test_memory_stored_event_marks_panel_cache_dirty() {
     let mut app = make_app();
     app.session.session_id = Some("sess-dirty".to_string());
     app.show_memory = true;
-    app.current_screen = ScreenMode::Chat;
 
     // First render primes the cache with the empty state.
     crate::frame::publish(&mut app);
@@ -182,7 +181,6 @@ async fn test_memory_cursor_down_and_up_moves_selection() {
     app.show_log = false;
     app.show_profile = false;
     app.show_tasks_panel = false;
-    app.current_screen = ScreenMode::Chat;
 
     crate::frame::publish(&mut app);
     assert_eq!(app.memory_row_count, 2);
@@ -225,7 +223,6 @@ async fn test_memory_enter_with_non_empty_input_sends_message() {
     app.show_log = false;
     app.show_profile = false;
     app.show_tasks_panel = false;
-    app.current_screen = ScreenMode::Chat;
     app.session.input = "send this message".to_string();
 
     crate::frame::publish(&mut app);
@@ -257,7 +254,6 @@ async fn test_memory_enter_opens_full_memory_view() {
     app.show_log = false;
     app.show_profile = false;
     app.show_tasks_panel = false;
-    app.current_screen = ScreenMode::Chat;
 
     crate::frame::publish(&mut app);
     assert_eq!(app.memory_row_count, 1);
@@ -286,7 +282,6 @@ async fn test_memory_delete_shows_confirmation_and_cancel_clears_it() {
     app.show_log = false;
     app.show_profile = false;
     app.show_tasks_panel = false;
-    app.current_screen = ScreenMode::Chat;
 
     crate::frame::publish(&mut app);
     assert_eq!(app.memory_row_count, 1);
@@ -323,7 +318,6 @@ async fn test_memory_delete_confirmation_deletes_memory() {
     app.show_log = false;
     app.show_profile = false;
     app.show_tasks_panel = false;
-    app.current_screen = ScreenMode::Chat;
 
     crate::frame::publish(&mut app);
     assert_eq!(app.memory_row_count, 1);

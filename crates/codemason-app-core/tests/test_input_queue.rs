@@ -141,33 +141,6 @@ fn test_load_session_clears_the_input_queue() {
 
 // -- T-004: two-digit queue counter render --------------------------------
 
-#[test]
-fn test_clear_input_queue_sets_redraw_flag() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(entry("one"));
-    app.needs_redraw = false;
-
-    app.clear_input_queue();
-
-    assert!(
-        app.needs_redraw,
-        "clearing a non-empty queue must repaint to drop the counter (NFR-003)"
-    );
-}
-
-#[test]
-fn test_clear_empty_queue_does_not_force_redraw() {
-    let mut app = support::make_app();
-    app.needs_redraw = false;
-
-    app.clear_input_queue();
-
-    assert!(
-        !app.needs_redraw,
-        "clearing an already-empty queue must not schedule a spurious repaint"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // T-011 - configurable capacity with a 32 default (FR-015)
 // ---------------------------------------------------------------------------

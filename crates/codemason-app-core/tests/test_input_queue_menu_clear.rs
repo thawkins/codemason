@@ -181,16 +181,3 @@ async fn test_clear_row_leaves_the_running_turn_untouched() {
 // ---------------------------------------------------------------------------
 // NFR-008 - the action repaints on the next frame
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_clear_row_sets_the_redraw_flag() {
-    let mut app = app_with_session();
-    app.needs_redraw = false;
-
-    app.queue_menu_select_clear();
-
-    assert!(
-        app.needs_redraw,
-        "NFR-008: the Clear action must repaint on the next frame"
-    );
-}

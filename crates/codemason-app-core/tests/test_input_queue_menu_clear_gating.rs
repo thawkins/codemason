@@ -92,17 +92,12 @@ async fn test_yes_removes_every_entry_and_closes_the_dialog() {
 async fn test_yes_resets_the_selection_and_arms_a_redraw() {
     let mut app = app_with_dialog_open();
     app.handle_key_event(key(KeyCode::Right)).await;
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Enter)).await;
 
     assert_eq!(
         app.queue_clear_confirm_selected, QUEUE_CLEAR_CONFIRM_NO,
         "FR-034: the selection resets to `No` for the next open"
-    );
-    assert!(
-        app.needs_redraw,
-        "NFR-011: emptying the queue must repaint on the next frame"
     );
 }
 

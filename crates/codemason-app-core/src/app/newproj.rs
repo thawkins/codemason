@@ -281,7 +281,6 @@ impl App {
                 text.push_str(&line);
             }
             self.newproj_progress_text = Some(text);
-            self.needs_redraw = true;
         }
         if self.newproj_progress_text.is_some() {
             self.refresh_newproj_progress_message();
@@ -292,7 +291,6 @@ impl App {
             return;
         };
         self.newproj_running = false;
-        self.needs_redraw = true;
         // The panel is final: drop its text so a later poll (in whichever
         // session is focused) cannot recreate it.
         self.newproj_progress_text = None;

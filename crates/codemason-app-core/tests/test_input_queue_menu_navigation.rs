@@ -69,7 +69,6 @@ async fn test_down_moves_the_highlight_to_the_next_row() {
         app.queue_menu_selected, QUEUE_MENU_ROW_HALT,
         "Down moves the highlight down one row"
     );
-    assert!(app.needs_redraw, "the move must repaint on the next frame");
 }
 
 #[tokio::test]

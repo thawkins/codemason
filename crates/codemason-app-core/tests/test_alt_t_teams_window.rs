@@ -38,7 +38,6 @@ fn app() -> App {
     let mut app = make_app();
     app.session.session_id = Some(LEAD_SESSION.to_string());
     app.session.agent_name = "general".to_string();
-    app.needs_redraw = false;
     app
 }
 
@@ -92,18 +91,9 @@ async fn alt_t_toggles_the_window_and_requests_a_redraw() {
         app.show_teams_window,
         "FR-045: the first Alt+T opens the window"
     );
-    assert!(
-        app.needs_redraw,
-        "opening the window requests a redraw, as the click does"
-    );
 
-    app.needs_redraw = false;
     app.handle_key_event(alt_t()).await;
     assert!(!app.show_teams_window, "FR-045: the second Alt+T closes it");
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
-    );
 }
 
 #[tokio::test]
@@ -118,13 +108,11 @@ async fn alt_t_without_a_team_still_opens_the_window() {
         app.show_teams_window,
         "with no team the window still opens on its lead row and empty-state hint"
     );
-    assert!(app.needs_redraw, "opening the window requests a redraw");
     assert_eq!(
         app.status, "ready",
         "an empty open is not an error, so it reports nothing"
     );
 
-    app.needs_redraw = false;
     app.handle_key_event(alt_t()).await;
     assert!(!app.show_teams_window, "the second chord closes it again");
 }
@@ -154,16 +142,11 @@ async fn alt_t_closes_an_open_window_even_when_its_team_vanished() {
     // still be able to dismiss it.
     let mut app = app();
     app.show_teams_window = true;
-    app.needs_redraw = false;
 
     app.handle_key_event(alt_t()).await;
     assert!(
         !app.show_teams_window,
         "an open window always closes, whatever its subject is now"
-    );
-    assert!(
-        app.needs_redraw,
-        "closing the window requests a redraw, as the click does"
     );
 }
 

@@ -148,7 +148,6 @@ fn enter_on_the_cursor_opens_the_task_painted_on_that_row() {
         Some(1),
         "two Down presses land on the second painted sub-agent row"
     );
-    app.needs_redraw = false;
     app.agents_cursor_open_output();
 
     let view = app.output_view.as_ref().expect("output view opens");
@@ -166,7 +165,6 @@ fn enter_on_the_cursor_opens_the_task_painted_on_that_row() {
         Some("task-9"),
         "Space/Del on the recorded ordinal must reach the opened task (FR-034)"
     );
-    assert!(app.needs_redraw, "opening the view repaints (NFR-005)");
 }
 
 #[test]
@@ -246,7 +244,6 @@ fn app_with_team() -> App {
     app.session.active_team = Some(TeamConfig::new("alpha", LEAD_SESSION));
     app.session.team_members = vec![member("tm-001", "reviewer"), member("tm-002", "tester")];
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -262,7 +259,6 @@ fn enter_on_the_teammate_cursor_focuses_the_teammate_and_reports_it() {
         Some(0),
         "the first Down lands on the first teammate row"
     );
-    app.needs_redraw = false;
     app.teams_cursor_focus();
 
     assert_eq!(
@@ -282,7 +278,6 @@ fn enter_on_the_teammate_cursor_focuses_the_teammate_and_reports_it() {
         matches!(view.target, OutputViewTarget::TeamMember { .. }),
         "the keyboard focus opens the teammate's output view (FR-038)"
     );
-    assert!(app.needs_redraw, "a focus change repaints (NFR-005)");
 }
 
 /// The cursor range covers teammate rows only: there is no keyboard path that

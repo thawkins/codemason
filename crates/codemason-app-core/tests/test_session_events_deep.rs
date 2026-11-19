@@ -42,7 +42,6 @@ mod support;
 fn app_with_session(session: &str) -> App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     app
 }
 
@@ -132,7 +131,6 @@ fn connector_catalogue_search_box_edit_and_clear_paths() {
     app.connector_catalogue_push_char('i');
     let browser = app.connector_store.as_ref().expect("panel open");
     assert_eq!(browser.query, "gi");
-    assert!(app.needs_redraw);
 
     assert!(app.connector_catalogue_edit_or_close());
     assert!(app.connector_catalogue_edit_or_close());
@@ -163,7 +161,6 @@ fn connector_catalogue_focus_toggle_and_nav_moves_apply_category() {
     app.connector_catalogue_category_move_down();
     app.connector_catalogue_category_confirm();
     assert!(!app.connector_catalogue_nav_focused());
-    assert!(app.needs_redraw);
 
     app.connector_catalogue_category_move_up();
     app.connector_catalogue_clear_category();
@@ -208,7 +205,6 @@ fn connector_catalogue_next_category_cycles_and_returns_to_all() {
         }
     }
     assert!(saw_non_all, "the cycle visits declared categories");
-    assert!(app.needs_redraw);
 }
 
 #[test]
@@ -255,7 +251,6 @@ fn connector_catalogue_poll_install_result_applies_success_and_failure() {
             succeeded: false,
         });
     app.poll_connector_catalogue_install_result();
-    assert!(app.needs_redraw);
 
     *app.connector_catalogue_install_result.lock().expect("slot") =
         Some(ConnectorCatalogueInstallResult {
@@ -278,25 +273,19 @@ fn connector_catalogue_poll_install_result_applies_success_and_failure() {
 #[test]
 fn connector_catalogue_poll_install_result_noop_when_empty_slot() {
     let mut app = open_connector_catalogue(vec![connector("github", "developer")]);
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.poll_connector_catalogue_install_result();
-    assert!(!app.needs_redraw, "an empty slot is a no-op");
+    assert!(app.connector_store.is_some());
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
 fn refresh_connector_catalogue_installed_is_noop_without_panel() {
     let mut app = support::make_app();
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.refresh_connector_catalogue_installed();
-    assert!(!app.needs_redraw);
-}
-
-#[test]
-fn refresh_connector_catalogue_installed_redraws_with_panel() {
-    let mut app = open_connector_catalogue(vec![connector("github", "developer")]);
-    app.needs_redraw = false;
-    app.refresh_connector_catalogue_installed();
-    assert!(app.needs_redraw);
+    assert!(app.connector_store.is_none());
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
@@ -316,7 +305,6 @@ fn connector_catalogue_poll_result_records_refused_marketplace() {
             .any(|e| e.message.contains("skipped")),
         "a refused marketplace is surfaced as a warning log"
     );
-    assert!(app.needs_redraw);
 }
 
 #[test]
@@ -340,21 +328,17 @@ fn connector_catalogue_poll_result_failure_sets_panel_failed_status() {
 }
 
 #[test]
-fn connector_catalogue_poll_result_without_panel_does_not_redraw() {
+fn connector_catalogue_poll_result_without_panel_stays_closed() {
     use codemason_app_core::app::ConnectorCatalogueResult;
 
     let mut app = support::make_app();
-    app.needs_redraw = false;
     *app.connector_catalogue_result.lock().expect("slot") = Some(ConnectorCatalogueResult {
         outcome: Ok(vec![connector("github", "developer")]),
         skipped: 0,
         refused_marketplace: None,
     });
     app.poll_connector_catalogue_result();
-    assert!(
-        !app.needs_redraw,
-        "a late result never fills a closed browser"
-    );
+    assert!(app.connector_store.is_none());
 }
 
 #[test]
@@ -383,7 +367,6 @@ fn connector_catalogue_poll_enrichment_applies_matching_generation() {
         .expect("slot")
         .push(ConnectorEnrichResult::Finished { generation });
     app.poll_connector_enrichment();
-    assert!(app.needs_redraw);
     assert!(
         app.connector_store
             .as_ref()
@@ -432,9 +415,10 @@ fn connector_catalogue_poll_enrichment_drops_stale_generation() {
 #[test]
 fn connector_catalogue_poll_enrichment_empty_queue_is_noop() {
     let mut app = open_connector_catalogue(vec![connector("github", "developer")]);
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.poll_connector_enrichment();
-    assert!(!app.needs_redraw);
+    assert!(app.connector_store.is_some());
+    assert_eq!(app.status, status_before);
 }
 
 // ===========================================================================
@@ -450,7 +434,6 @@ fn plugin_store_push_char_and_clear_search_round_trip() {
     app.plugin_store_push_char('a');
     app.plugin_store_push_char('l');
     assert_eq!(app.plugin_store.as_ref().expect("panel open").query, "al");
-    assert!(app.needs_redraw);
 
     app.plugin_store_clear_search();
     assert_eq!(app.plugin_store.as_ref().expect("panel open").query, "");
@@ -459,9 +442,10 @@ fn plugin_store_push_char_and_clear_search_round_trip() {
 #[test]
 fn plugin_store_clear_search_on_empty_query_is_noop() {
     let mut app = open_plugin_store(StoreKind::Codex, vec![store_entry("alpha", "one")]);
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.plugin_store_clear_search();
-    assert!(!app.needs_redraw, "clearing an empty query is a no-op");
+    assert!(app.plugin_store.is_some());
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
@@ -481,7 +465,6 @@ fn plugin_store_focus_next_and_prev_cycle_the_three_panes() {
         app.plugin_store.as_ref().expect("panel").focus,
         StorePane::Results
     );
-    assert!(app.needs_redraw);
 }
 
 #[test]
@@ -499,7 +482,7 @@ fn plugin_store_category_and_marketplace_nav_helpers_apply() {
     app.plugin_store_marketplace_move_up();
     app.plugin_store_marketplace_confirm();
     app.plugin_store_clear_marketplace();
-    assert!(app.needs_redraw);
+    assert!(app.plugin_store.is_some());
 }
 
 #[test]
@@ -534,9 +517,10 @@ fn plugin_store_install_selected_refuses_installed_and_notifies_empty() {
 #[test]
 fn plugin_store_install_selected_without_panel_is_noop() {
     let mut app = support::make_app();
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.plugin_store_install_selected();
-    assert!(!app.needs_redraw);
+    assert!(app.plugin_store.is_none());
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
@@ -572,10 +556,6 @@ fn plugin_store_install_result_for_other_kind_does_not_touch_panel() {
     });
     app.poll_plugin_store_install_result();
     assert!(
-        app.needs_redraw,
-        "the report still reaches the message window"
-    );
-    assert!(
         app.plugin_store
             .as_ref()
             .expect("panel")
@@ -588,17 +568,10 @@ fn plugin_store_install_result_for_other_kind_does_not_touch_panel() {
 #[test]
 fn plugin_store_refresh_installed_noop_without_panel() {
     let mut app = support::make_app();
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.refresh_plugin_store_installed();
-    assert!(!app.needs_redraw);
-}
-
-#[test]
-fn plugin_store_refresh_installed_redraws_with_panel() {
-    let mut app = open_plugin_store(StoreKind::Codex, vec![store_entry("alpha", "one")]);
-    app.needs_redraw = false;
-    app.refresh_plugin_store_installed();
-    assert!(app.needs_redraw);
+    assert!(app.plugin_store.is_none());
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
@@ -620,9 +593,8 @@ fn plugin_store_edit_or_close_without_panel_is_false() {
 fn plugin_store_close_is_idempotent() {
     let mut app = open_plugin_store(StoreKind::Codex, vec![store_entry("alpha", "one")]);
     app.close_plugin_store();
-    app.needs_redraw = false;
     app.close_plugin_store();
-    assert!(!app.needs_redraw, "closing a closed panel is a no-op");
+    assert!(app.plugin_store.is_none());
 }
 
 #[test]
@@ -679,9 +651,10 @@ fn plugin_store_poll_result_stale_kind_is_ignored() {
 #[test]
 fn plugin_store_poll_result_noop_when_empty_slot() {
     let mut app = open_plugin_store(StoreKind::Codex, Vec::new());
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.poll_plugin_store_result();
-    assert!(!app.needs_redraw);
+    assert!(app.plugin_store.is_some());
+    assert_eq!(app.status, status_before);
 }
 
 // ===========================================================================
@@ -703,15 +676,14 @@ fn poll_rollback_result_handles_all_three_outcomes() {
     *app.session.rollback_result.lock().expect("slot") = Some(Err("io error".to_string()));
     app.poll_rollback_result();
     assert!(app.status.contains("rollback failed"));
-    assert!(app.needs_redraw);
 }
 
 #[test]
 fn poll_rollback_result_empty_slot_is_noop() {
     let mut app = support::make_app();
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.poll_rollback_result();
-    assert!(!app.needs_redraw);
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
@@ -755,9 +727,9 @@ fn poll_websearch_test_result_appends_report_and_sets_status() {
 #[test]
 fn poll_websearch_test_result_empty_slot_is_noop() {
     let mut app = support::make_app();
-    app.needs_redraw = false;
+    let status_before = app.status.clone();
     app.poll_websearch_test_result();
-    assert!(!app.needs_redraw);
+    assert_eq!(app.status, status_before);
 }
 
 #[test]
@@ -772,7 +744,6 @@ fn queue_clear_confirm_toggle_flips_yes_no() {
     assert_eq!(app.queue_clear_confirm_selected, QUEUE_CLEAR_CONFIRM_YES);
     app.queue_clear_confirm_toggle();
     assert_eq!(app.queue_clear_confirm_selected, QUEUE_CLEAR_CONFIRM_NO);
-    assert!(app.needs_redraw);
 }
 
 #[test]
@@ -875,7 +846,7 @@ async fn service_start_error_surfaces_a_failure() {
         error: "failed to start".to_string(),
     })
     .await;
-    assert!(app.needs_redraw);
+    assert_eq!(app.status, "ollama failed to start");
 }
 
 #[tokio::test]

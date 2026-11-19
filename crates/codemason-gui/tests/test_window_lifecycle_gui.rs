@@ -89,7 +89,6 @@ fn app_with_window(tasks: Vec<TaskEntry>) -> App {
     app.session.agent_name = "general".to_string();
     app.active_tasks = tasks;
     app.show_agents_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -104,7 +103,6 @@ fn app_with_team() -> App {
     member.session_id = Some("tm-001-session".to_string());
     app.session.team_members.push(member);
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -136,10 +134,6 @@ async fn the_last_subagent_completion_closes_the_agents_window() {
     assert!(
         !app.show_agents_window,
         "the last row's completion must close the Agents window (FR-063)"
-    );
-    assert!(
-        app.needs_redraw,
-        "the auto-close must request a repaint (NFR-005)"
     );
 
     // The next frame paints the chat without the Agents window and leaves no
@@ -201,7 +195,6 @@ async fn the_last_background_task_completion_closes_the_window() {
         !app.show_agents_window,
         "an emptied background shell list closes the window (FR-063)"
     );
-    assert!(app.needs_redraw, "the auto-close repaints (NFR-005)");
 
     // Background empties while a sub-agent still runs.
     let mut app = app_with_window(vec![task("a1b2c3d4", "explore", TaskStatus::Running)]);
@@ -271,7 +264,6 @@ fn reconciliation_empting_the_list_closes_the_window() {
         !app.show_agents_window,
         "a reconciliation that empties the list closes the window (FR-063)"
     );
-    assert!(app.needs_redraw, "the auto-close must repaint (NFR-005)");
 }
 
 // ---------------------------------------------------------------------------

@@ -83,19 +83,6 @@ fn queue_show_move_down_clamps_at_last_entry() {
 }
 
 #[test]
-fn queue_show_move_down_sets_redraw_flag() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(entry("a"));
-    app.session.input_queue.push_back(entry("b"));
-    app.queue_show_open = true;
-    app.queue_show_selected = 0;
-    app.needs_redraw = false;
-
-    app.queue_show_move_down();
-    assert!(app.needs_redraw);
-}
-
-#[test]
 fn queue_show_promote_swaps_toward_front_and_follows() {
     let mut app = support::make_app();
     for text in ["a", "b", "c"] {
@@ -126,7 +113,6 @@ fn queue_show_promote_at_front_is_a_noop() {
     app.session.input_queue.push_back(entry("b"));
     app.queue_show_open = true;
     app.queue_show_selected = 0;
-    app.needs_redraw = false;
 
     app.queue_show_promote_selected();
     assert_eq!(
@@ -137,7 +123,6 @@ fn queue_show_promote_at_front_is_a_noop() {
             .collect::<Vec<_>>(),
         vec!["a", "b"]
     );
-    assert!(!app.needs_redraw);
 }
 
 #[test]
@@ -205,12 +190,10 @@ fn queue_show_close_resets_highlight() {
     let mut app = support::make_app();
     app.queue_show_open = true;
     app.queue_show_selected = 4;
-    app.needs_redraw = false;
 
     app.queue_show_close();
     assert!(!app.queue_show_open);
     assert_eq!(app.queue_show_selected, 0);
-    assert!(app.needs_redraw);
 }
 
 // ===========================================================================
@@ -225,11 +208,9 @@ fn queue_menu_move_up_skips_unselectable_empty_next_row() {
     let mut app = support::make_app();
     app.session.input_queue.push_back(entry("a"));
     app.queue_menu_selected = 2;
-    app.needs_redraw = false;
 
     app.queue_menu_move_up();
     assert_eq!(app.queue_menu_selected, 1);
-    assert!(app.needs_redraw);
 
     app.queue_menu_move_up();
     assert_eq!(

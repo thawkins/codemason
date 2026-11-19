@@ -108,19 +108,6 @@ async fn test_alt_q_resets_menu_selection_to_first_row() {
 }
 
 #[tokio::test]
-async fn test_alt_q_sets_redraw_flag() {
-    let mut app = support::make_app();
-    app.needs_redraw = false;
-
-    app.handle_key_event(alt(KeyCode::Char('q'))).await;
-
-    assert!(
-        app.needs_redraw,
-        "NFR-008/NFR-009: opening the menu must request a repaint"
-    );
-}
-
-#[tokio::test]
 async fn test_alt_q_does_not_dispatch_or_enqueue_a_message() {
     let mut app = support::make_app();
     app.session.is_processing = true;

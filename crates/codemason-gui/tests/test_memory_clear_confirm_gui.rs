@@ -22,7 +22,7 @@ mod support;
 use tempfile::TempDir;
 
 use codemason_agent::storage::Storage;
-use codemason_app_core::{app::App, app::ScreenMode};
+use codemason_app_core::app::App;
 
 // -----------------------------------------------------------------------------
 // App fixture (mirrors `test_memory_panel.rs`)
@@ -96,7 +96,6 @@ async fn test_memory_clear_opens_confirmation_without_deleting() {
 
     let mut app = make_app();
     seed_project_memory(&app.storage, dir.path(), "keep me: alpha");
-    app.current_screen = ScreenMode::Chat;
 
     app.execute_slash_command("/memory clear").await;
 

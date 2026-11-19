@@ -360,7 +360,6 @@ pub fn show_plugin_store(ctx: &egui::Context, app: &mut App) -> bool {
             }
         }
     }
-    app.needs_redraw = true;
     true
 }
 
@@ -413,6 +412,5 @@ pub fn show_connector_store(ctx: &egui::Context, app: &mut App) -> bool {
             }
         }
     }
-    app.needs_redraw = true;
     true
 }

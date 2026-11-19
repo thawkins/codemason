@@ -105,7 +105,6 @@ fn app_with_task() -> App {
     app.active_tasks
         .push(task("a1b2c3d4", "explore", TaskStatus::Running));
     app.show_agents_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -120,7 +119,6 @@ fn app_with_team(app_status: MemberStatus) -> App {
         .team_members
         .push(member("tm-001", "reviewer", app_status));
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -148,7 +146,6 @@ async fn mouse_click_outside_the_dialog_is_swallowed() {
     render(&mut app);
     let area = app.row_action_confirm_area;
     app.status = "sentinel".to_string();
-    app.needs_redraw = false;
 
     // The input-area left edge is far from the centred dialog at a
     // 120-column terminal.
@@ -156,11 +153,7 @@ async fn mouse_click_outside_the_dialog_is_swallowed() {
 
     assert!(
         app.row_action_confirm_open(),
-        "a click outside the dialog must not alter it"
-    );
-    assert!(
-        !app.needs_redraw,
-        "a swallowed click paints nothing (area outside {area:?})"
+        "a click outside the dialog (area {area:?}) must not alter it"
     );
     assert_eq!(app.status, "sentinel", "nothing beneath reacts (FR-070)");
 }
@@ -198,10 +191,6 @@ async fn shift_k_on_a_selected_agent_row_opens_the_kill_dialog() {
         },
         None => unreachable!(),
     }
-    assert!(
-        app.needs_redraw,
-        "arming the dialog requests a redraw (NFR-005)"
-    );
 }
 
 /// The keyboard cursor cannot reach the primary row at all: it never lands
@@ -233,7 +222,6 @@ async fn teammate_space_on_a_working_member_opens_the_suspend_dialog() {
     // The cursor list covers the painted teammate rows; ordinal 0 = tm-001.
     app.move_teams_cursor(1);
     assert_eq!(app.teams_cursor_teammate, Some(0));
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))
         .await;
@@ -249,7 +237,6 @@ async fn teammate_space_on_a_working_member_opens_the_suspend_dialog() {
         }
         other => panic!("expected SuspendTeammate, got {other:?}"),
     }
-    assert!(app.needs_redraw, "arming the dialog requests a redraw");
 }
 
 /// Space on an ALREADY SUSPENDED teammate resumes it directly: no dialog opens
@@ -259,7 +246,6 @@ async fn teammate_space_on_a_suspended_member_resumes_without_a_dialog() {
     let mut app = app_with_team(MemberStatus::Suspended);
     render(&mut app);
     app.move_teams_cursor(1);
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))
         .await;
@@ -267,10 +253,6 @@ async fn teammate_space_on_a_suspended_member_resumes_without_a_dialog() {
     assert!(
         !app.row_action_confirm_open(),
         "a resume must not open the confirmation dialog"
-    );
-    assert!(
-        app.needs_redraw,
-        "the resume request line repaints the log panel (NFR-005)"
     );
 }
 
@@ -281,7 +263,6 @@ async fn teammate_del_opens_the_shutdown_dialog() {
     let mut app = app_with_team(MemberStatus::Working);
     render(&mut app);
     app.move_teams_cursor(1);
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Delete, KeyModifiers::NONE))
         .await;
@@ -297,7 +278,6 @@ async fn teammate_del_opens_the_shutdown_dialog() {
         }
         other => panic!("expected ShutdownTeammate, got {other:?}"),
     }
-    assert!(app.needs_redraw, "arming the dialog requests a redraw");
 }
 
 /// `Space` and `Shift+K` on the cursor-selected teammate route through the

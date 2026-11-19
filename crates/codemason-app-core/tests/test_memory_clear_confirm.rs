@@ -17,7 +17,7 @@ use crate::term_events::{KeyCode, KeyEvent, KeyModifiers};
 use tempfile::TempDir;
 
 use codemason_agent::storage::Storage;
-use codemason_app_core::{app::App, app::ScreenMode};
+use codemason_app_core::app::App;
 
 // -----------------------------------------------------------------------------
 // App fixture (mirrors `test_memory_panel.rs`)
@@ -83,7 +83,6 @@ async fn test_memory_clear_esc_keeps_memories() {
 
     let mut app = make_app();
     seed_project_memory(&app.storage, dir.path(), "keep me: alpha");
-    app.current_screen = ScreenMode::Chat;
 
     app.execute_slash_command("/memory clear").await;
     app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
@@ -108,7 +107,6 @@ async fn test_memory_clear_no_keeps_memories() {
 
     let mut app = make_app();
     seed_project_memory(&app.storage, dir.path(), "keep me: alpha");
-    app.current_screen = ScreenMode::Chat;
 
     app.execute_slash_command("/memory clear").await;
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
@@ -134,7 +132,6 @@ async fn test_memory_clear_yes_deletes_project_memories() {
     let mut app = make_app();
     seed_project_memory(&app.storage, dir.path(), "delete me: alpha");
     seed_project_memory(&app.storage, dir.path(), "delete me: beta");
-    app.current_screen = ScreenMode::Chat;
 
     app.execute_slash_command("/memory clear").await;
     // Right arrow moves the selection from No to Yes.

@@ -1700,7 +1700,6 @@ fn poll_question_expiry_falls_back_to_the_first_option() {
     assert_eq!(app.session.question_queue.len(), 0);
     assert_eq!(app.session.pending_question_input, "");
     assert_eq!(app.session.question_selected_index, 0);
-    assert!(app.needs_redraw);
     assert!(
         app.log_entries.iter().any(|e| e
             .message

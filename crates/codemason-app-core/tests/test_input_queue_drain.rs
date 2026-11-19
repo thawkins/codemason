@@ -219,22 +219,6 @@ async fn test_drain_is_skipped_when_a_post_compact_send_is_pending() {
 }
 
 #[tokio::test]
-async fn test_drain_requests_redraw_for_the_decremented_counter() {
-    let mut app = app_with_session();
-    app.session.is_processing = true;
-    app.session.input_queue.push_back(entry("one"));
-    app.session.input_queue.push_back(entry("two"));
-    app.needs_redraw = false;
-
-    message_end(&mut app, FinishReason::Stop).await;
-
-    assert!(
-        app.needs_redraw,
-        "FR-008: the decremented counter must be painted on the next frame"
-    );
-}
-
-#[tokio::test]
 async fn test_drain_uses_the_async_dispatch_path_without_blocking() {
     let mut app = app_with_session();
     app.session.is_processing = true;

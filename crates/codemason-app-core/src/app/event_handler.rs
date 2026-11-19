@@ -170,8 +170,7 @@ impl App {
     }
 
     /// Dispatch a single [`Event`] for the focused session (`self.session`)
-    /// to the appropriate UI handler. Marks the UI dirty on every event so the
-    /// next render reflects the state change.
+    /// to the appropriate UI handler.
     ///
     /// [`App::handle_event`] routes here; for a background session it first
     /// swaps that session into `self.session` (see `app/sessions.rs`).
@@ -182,8 +181,6 @@ impl App {
         if Self::event_handles_pending_args(&event) {
             self.drain_pending_tool_args();
         }
-        // Mark UI dirty for any event handling
-        self.needs_redraw = true;
         match event {
             Event::SessionCreated { ref session_id } if self.session.session_id.is_none() => {
                 self.on_session_created(session_id);
@@ -205,7 +202,6 @@ impl App {
                 let n = name.clone();
                 self.status = format!("research: viewing {n}");
                 self.open_research_view(n, p, md);
-                self.needs_redraw = true;
             }
             Event::ReasoningDelta {
                 ref session_id,
@@ -219,7 +215,6 @@ impl App {
             {
                 self.session.compress_in_progress = true;
                 self.status = "compressing context...".to_string();
-                self.needs_redraw = true;
                 self.push_log_no_agent(LogLevel::Info, "Context compression started".to_string());
             }
             Event::CompressionFinished {
@@ -972,7 +967,6 @@ impl App {
     ) {
         self.session.compress_in_progress = false;
         self.session.last_input_tokens = compressed_tokens as u64;
-        self.needs_redraw = true;
         telemetry_counters::increment_context_compressions(1);
         if did_compress {
             let saved = original_tokens.saturating_sub(compressed_tokens);
@@ -1056,7 +1050,6 @@ impl App {
             agent_tag,
             log_session_id,
         );
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::ToolCallEnd`] for the focused session.
@@ -1099,7 +1092,6 @@ impl App {
             // panel is closed or a refresh is already in flight).
             self.schedule_context_snapshot_refresh();
         }
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::ToolCallBatch`] for the focused session.
@@ -1180,7 +1172,6 @@ impl App {
             // so refresh the Context panel snapshot off the UI thread.
             self.schedule_context_snapshot_refresh();
         }
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::MessageStart`] for the focused session.
@@ -1452,7 +1443,6 @@ impl App {
             // question being answered leaves them alone.
             self.note_question_front();
             self.status = "awaiting question".to_string();
-            self.needs_redraw = true;
             self.push_log_no_agent(LogLevel::Warn, format!("question requested: {}", question));
         }
     }
@@ -1748,7 +1738,6 @@ impl App {
             );
         }
         self.session.compact_in_progress = false;
-        self.needs_redraw = true;
         // Full details go to the log panel only
         self.push_log_no_agent(LogLevel::Error, format!("agent error: {}", error)); // Clean summary for the status bar and chat panel
         let summary = summarise_error(error);
@@ -1785,7 +1774,6 @@ impl App {
         // context size sent to the model this turn ("Sent to model"
         // row), so refresh the Context panel snapshot immediately.
         self.schedule_context_snapshot_refresh();
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::LoopTerminated`] for the focused session.
@@ -1817,7 +1805,6 @@ impl App {
         self.session.force_new_message = true;
         self.append_assistant_text(&banner);
         self.push_log_no_agent(LogLevel::Info, line);
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::LoopChangeSummary`] for the focused session.
@@ -1876,7 +1863,6 @@ impl App {
         });
         self.status =
             "loop ended - Enter: roll back to pre-loop snapshot, Esc: keep changes".to_string();
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::RunCostSummary`] for the focused session.
@@ -1900,7 +1886,6 @@ impl App {
         );
         self.session.run_cost_banner = Some(banner);
         self.session.run_cost_banner_at = Some(std::time::Instant::now());
-        self.needs_redraw = true;
         // Full details always go to the log panel (model + ms precision).
         self.push_log_no_agent(
                     LogLevel::Info,
@@ -2027,7 +2012,6 @@ impl App {
             LogLevel::Tool,
             format!("{}-> {}({})", step_tag, tool, preview),
         );
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::ToolResult`] for the focused session.
@@ -2082,7 +2066,6 @@ impl App {
         // T-010/FR-013: the tool result changed the conversation
         // history/tool-call payload, so refresh the Context panel.
         self.schedule_context_snapshot_refresh();
-        self.needs_redraw = true;
     }
 
     /// Handle [`Event::SubagentStart`] for the focused session.
@@ -2930,7 +2913,6 @@ impl App {
             None,
             row_session,
         );
-        self.needs_redraw = true;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let bg = self.session_processor.bg_service.get().cloned();
             let id = task_id.to_string();
@@ -2981,7 +2963,6 @@ impl App {
              The task keeps running until its agent loop reaches the next step boundary; the \
              Agents window updates when it settles."
         ));
-        self.needs_redraw = true;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let tm = self.session_processor.agent_manager.get().cloned();
             let id = task_id.to_string();
@@ -3023,7 +3004,6 @@ impl App {
             None,
             child_session,
         );
-        self.needs_redraw = true;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let tm = self.session_processor.agent_manager.get().cloned();
             let id = task_id.to_string();
@@ -3052,7 +3032,6 @@ impl App {
             None,
             child_session,
         );
-        self.needs_redraw = true;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let tm = self.session_processor.agent_manager.get().cloned();
             let id = task_id.to_string();
@@ -3081,7 +3060,6 @@ impl App {
             None,
             child_session,
         );
-        self.needs_redraw = true;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let tm = self.session_processor.agent_manager.get().cloned();
             let id = task_id.to_string();
@@ -3176,7 +3154,6 @@ impl App {
             None,
             session_id,
         );
-        self.needs_redraw = true;
     }
 
     /// Open the output view for one team member, identified by team and agent.
@@ -3188,8 +3165,6 @@ impl App {
         session_id: Option<String>,
     ) {
         self.session.selected_agent_session_id = session_id.clone();
-        // Opening the overlay is a content change: repaint (NFR-005).
-        self.needs_redraw = true;
         self.output_view = Some(OutputViewState {
             target: OutputViewTarget::TeamMember {
                 team_name,
@@ -3375,7 +3350,6 @@ impl App {
                 m.session_id.clone(),
             );
             self.status = format!("team: focused -> {}", m.name);
-            self.needs_redraw = true;
         }
     }
 
@@ -3525,7 +3499,6 @@ impl App {
             );
             self.arm_status_expiry();
         }
-        self.needs_redraw = true;
     }
 
     /// Returns the session id for a team member by agent id, if known.

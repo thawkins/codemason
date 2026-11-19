@@ -99,7 +99,6 @@ fn open_sets_a_loading_browser_for_the_requested_store() {
     assert_eq!(browser.all, [] as [codemason_plugins::StoreEntry; 0]);
     assert_eq!(browser.cursor, 0);
     assert!(!browser.refresh);
-    assert!(app.needs_redraw, "opening the panel requests a repaint");
 }
 
 #[test]
@@ -140,17 +139,12 @@ fn a_refresh_launch_records_the_request() {
 fn close_clears_the_browser_and_is_idempotent() {
     let mut app = support::make_app();
     app.open_plugin_store(StoreKind::Codex, "x", false);
-    app.needs_redraw = false;
 
     app.close_plugin_store();
     assert!(app.plugin_store.is_none());
-    assert!(app.needs_redraw, "closing the panel requests a repaint");
 
-    // A second close is a harmless no-op (and no spurious repaint).
-    app.needs_redraw = false;
     app.close_plugin_store();
     assert!(app.plugin_store.is_none());
-    assert!(!app.needs_redraw);
 }
 
 #[test]

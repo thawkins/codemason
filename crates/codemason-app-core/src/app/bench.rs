@@ -72,7 +72,6 @@ impl App {
                 .unwrap_or(0);
             self.clear_active_bench();
             self.status = "bench: timed out".to_string();
-            self.needs_redraw = true;
             self.push_log_no_agent(
                 LogLevel::Warn,
                 format!(
@@ -138,7 +137,6 @@ impl App {
                 self.push_log_no_agent(LogLevel::Warn, format!("bench error: {msg}"));
             }
         }
-        self.needs_redraw = true;
     }
 
     pub(crate) fn drain_bench_progress_events(&mut self) {

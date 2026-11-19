@@ -826,7 +826,6 @@ fn decode_rejects_unknown_status_and_bad_json() {
 fn app_with_session(session: &str) -> codemason_app_core::app::App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     // Point the research store at a fresh tempdir so no run touches the repo.
     let dir = temp_dir("research-deep");
     app.cwd_path = dir;

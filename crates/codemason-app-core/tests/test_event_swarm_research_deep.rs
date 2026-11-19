@@ -42,7 +42,6 @@ use slash_support::{app_with_session, enter_project, last_message};
 fn new_app(session: &str) -> App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     app
 }
 

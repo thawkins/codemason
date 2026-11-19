@@ -372,7 +372,6 @@ impl App {
         self.context_menu = None;
         self.slash_menu = None;
         self.file_menu = None;
-        self.needs_redraw = true;
         let short = self
             .session
             .session_id
@@ -1057,7 +1056,6 @@ impl App {
         self.notice_message = message;
         self.notice_detail = detail;
         self.notice_open = true;
-        self.needs_redraw = true;
     }
 
     /// Closes the notice dialog without acting.
@@ -1066,7 +1064,6 @@ impl App {
         self.notice_title.clear();
         self.notice_message.clear();
         self.notice_detail = None;
-        self.needs_redraw = true;
     }
 
     /// Opens directory `dir` in `target` (editor, file manager, terminal).

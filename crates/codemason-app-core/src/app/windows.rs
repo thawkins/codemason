@@ -18,9 +18,7 @@
 //!   [`App::row_action_confirm_cancel`] to answer it (spec `agentui` T-009,
 //!   FR-036, FR-037, FR-040, FR-069).
 //!
-//! Every path that actually repaints a window sets [`App::needs_redraw`] so the
-//! next frame reflects the change without waiting for an unrelated event
-//! (NFR-005). An empty window is not a refusal: the operator asked to see the
+//! An empty window is not a refusal: the operator asked to see the
 //! panel, so it opens and paints its empty-state hint (FR-026), and the status
 //! line is left to report real outcomes.
 //!
@@ -162,7 +160,6 @@ impl App {
         }
         self.show_agents_window = true;
         self.show_teams_window = false;
-        self.needs_redraw = true;
     }
 
     /// Toggle the Teams window (spec `agentui` FR-030, FR-031).
@@ -181,7 +178,6 @@ impl App {
         }
         self.show_teams_window = true;
         self.show_agents_window = false;
-        self.needs_redraw = true;
     }
 
     /// Dismiss the Agents window via its Close button (spec `agentui` FR-032).
@@ -194,7 +190,6 @@ impl App {
             return;
         }
         self.show_agents_window = false;
-        self.needs_redraw = true;
     }
 
     /// Close the Agents window when its subject has emptied
@@ -230,7 +225,6 @@ impl App {
             return;
         }
         self.show_teams_window = false;
-        self.needs_redraw = true;
     }
 
     /// Close the output view overlay (spec `agentui` FR-075).
@@ -246,7 +240,6 @@ impl App {
         self.output_view = None;
         self.session.selected_agent_session_id = None;
         self.selected_agent_index = None;
-        self.needs_redraw = true;
     }
 
     // -- Destructive row-action confirmation dialog (T-009) -------------------
@@ -262,7 +255,6 @@ impl App {
             action,
             selected: ROW_ACTION_CONFIRM_NO,
         });
-        self.needs_redraw = true;
     }
 
     /// Whether the destructive row-action confirmation dialog is open.
@@ -274,8 +266,7 @@ impl App {
     /// Flip the destructive row-action dialog selection between `Yes` and `No`
     /// (spec `agentui` T-009). The dialog has exactly two options, so any
     /// horizontal move (`Left` / `Right` / `Tab` / `BackTab`) simply toggles
-    /// the current selection; the redraw flag is set so the change paints on
-    /// the next frame (NFR-005).
+    /// the current selection (NFR-005).
     pub fn row_action_confirm_toggle(&mut self) {
         let Some(pending) = self.row_action_confirm.as_mut() else {
             return;
@@ -285,7 +276,6 @@ impl App {
         } else {
             ROW_ACTION_CONFIRM_YES
         };
-        self.needs_redraw = true;
     }
 
     /// Whether the destructive row-action dialog currently has `Yes` selected.
@@ -308,7 +298,6 @@ impl App {
         let Some(pending) = self.row_action_confirm.take() else {
             return;
         };
-        self.needs_redraw = true;
         match pending.action {
             RowAction::KillSubagent { task_id, .. } => {
                 if self.active_tasks.iter().any(|t| t.id == task_id) {
@@ -368,9 +357,7 @@ impl App {
     /// Dismiss the destructive row-action dialog: the `No` option or `Esc`.
     /// Leaves the row untouched (FR-069) and only resets the dialog state.
     pub fn row_action_confirm_cancel(&mut self) {
-        if self.row_action_confirm.take().is_some() {
-            self.needs_redraw = true;
-        }
+        self.row_action_confirm = None;
     }
 }
 
@@ -463,7 +450,6 @@ impl App {
                     .map(|id| crate::app::helpers::short_id(id))
                     .unwrap_or_default()
             );
-            self.needs_redraw = true;
         }
     }
 
@@ -495,7 +481,6 @@ impl App {
                     .map(|id| crate::app::helpers::short_id(id))
                     .unwrap_or_default()
             );
-            self.needs_redraw = true;
         }
     }
 
@@ -547,7 +532,6 @@ impl App {
         else {
             // Stale cursor (row vanished between frames): a consumed no-op.
             self.status = "agents: selected row is gone".to_string();
-            self.needs_redraw = true;
             return;
         };
         if task.status == codemason_agent::task::TaskStatus::Suspended {
@@ -568,7 +552,6 @@ impl App {
             .and_then(|id| self.active_tasks.iter().find(|t| t.id == id).cloned())
         else {
             self.status = "agents: selected row is gone".to_string();
-            self.needs_redraw = true;
             return;
         };
         self.open_row_action(crate::app::RowAction::KillSubagent {
@@ -607,7 +590,6 @@ impl App {
                 .map(|id| crate::app::helpers::short_id(id))
                 .unwrap_or_default()
         );
-        self.needs_redraw = true;
         true
     }
 
@@ -622,7 +604,6 @@ impl App {
             .and_then(|id| self.active_tasks.iter().find(|t| t.id == id).cloned())
         else {
             self.status = "agents: selected row is gone".to_string();
-            self.needs_redraw = true;
             return;
         };
         self.open_output_view_session(
@@ -633,7 +614,6 @@ impl App {
                 crate::app::helpers::short_id(&task.id)
             ),
         );
-        self.needs_redraw = true;
     }
 
     /// Move the Teams-window cursor by `direction` rows (-1 = up, 1 = down)
@@ -667,7 +647,6 @@ impl App {
                     .cloned()
                     .unwrap_or_default()
             );
-            self.needs_redraw = true;
         }
     }
 
@@ -693,7 +672,6 @@ impl App {
                     .cloned()
                     .unwrap_or_default()
             );
-            self.needs_redraw = true;
         }
     }
 
@@ -752,7 +730,6 @@ impl App {
                 .cloned()
                 .unwrap_or_default()
         );
-        self.needs_redraw = true;
         true
     }
 
@@ -772,7 +749,6 @@ impl App {
                 .cloned()
         }) else {
             self.status = "teams: selected row is gone".to_string();
-            self.needs_redraw = true;
             return;
         };
         // Both parked statuses are resumable (FR-010): `Suspended` because the
@@ -812,7 +788,6 @@ impl App {
                 .cloned()
         }) else {
             self.status = "teams: selected row is gone".to_string();
-            self.needs_redraw = true;
             return;
         };
         if member.status == codemason_agent::team::MemberStatus::Blocked {
@@ -838,7 +813,6 @@ impl App {
             .and_then(|c| self.teams_teammate_agent_ids.get(c).cloned());
         let Some(agent_id) = agent_id else {
             self.status = "teams: selected row is gone".to_string();
-            self.needs_redraw = true;
             return;
         };
         self.focus_teammate_by_id(&agent_id);

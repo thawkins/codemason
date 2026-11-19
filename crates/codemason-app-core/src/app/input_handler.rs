@@ -71,7 +71,6 @@ impl App {
         };
         picker.selected = index;
         self.theme = selection;
-        self.needs_redraw = true;
     }
 
     /// Serves a key while the `/theme` picker is open: Up/Down (or k/j) move
@@ -98,7 +97,6 @@ impl App {
             }
             _ => {}
         }
-        self.needs_redraw = true;
     }
 
     pub(crate) fn handle_history_picker_key(&mut self, key: KeyInput) {
@@ -272,7 +270,6 @@ impl App {
                     browser.category_select_row(target);
                     browser.focus = CataloguePane::Categories;
                 }
-                self.needs_redraw = true;
             }
             MouseKind::Down(MouseButton::Left) if in_marketplace => {
                 let row = event.row.saturating_sub(marketplace_area.y) as usize;
@@ -283,7 +280,6 @@ impl App {
                     browser.marketplace_select_row(target);
                     browser.focus = CataloguePane::Marketplaces;
                 }
-                self.needs_redraw = true;
             }
             MouseKind::Down(MouseButton::Left) if in_results => {
                 let row = event.row.saturating_sub(result_area.y) as usize;
@@ -296,43 +292,36 @@ impl App {
                     }
                     browser.focus = CataloguePane::Results;
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown if in_nav => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.category_scroll_by(SCROLL_STEP_LINES as i16);
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp if in_nav => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.category_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown if in_marketplace => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.marketplace_scroll_by(SCROLL_STEP_LINES as i16);
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp if in_marketplace => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.marketplace_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown if in_results => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.scroll_results_by(SCROLL_STEP_LINES as i16);
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp if in_results => {
                 if let Some(browser) = self.connector_store.as_mut() {
                     browser.scroll_results_by(-(SCROLL_STEP_LINES as i16));
                 }
-                self.needs_redraw = true;
             }
             // Anything else over the modal is swallowed so nothing behind it reacts.
             _ => {}
@@ -388,7 +377,6 @@ impl App {
                     browser.category_select_row(target);
                     browser.focus = StorePane::Categories;
                 }
-                self.needs_redraw = true;
             }
             MouseKind::Down(MouseButton::Left) if in_marketplace => {
                 let row = event.row.saturating_sub(marketplace_area.y) as usize;
@@ -399,7 +387,6 @@ impl App {
                     browser.marketplace_select_row(target);
                     browser.focus = StorePane::Marketplaces;
                 }
-                self.needs_redraw = true;
             }
             MouseKind::Down(MouseButton::Left) if in_results => {
                 let row = event.row.saturating_sub(result_area.y) as usize;
@@ -412,43 +399,36 @@ impl App {
                         browser.cursor = target;
                     }
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown if in_nav => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.category_scroll_by(SCROLL_STEP_LINES as i16);
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp if in_nav => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.category_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown if in_marketplace => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.marketplace_scroll_by(SCROLL_STEP_LINES as i16);
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp if in_marketplace => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.marketplace_scroll_by(-(SCROLL_STEP_LINES as i16));
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown if in_results => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.scroll_results_by(SCROLL_STEP_LINES as i16);
                 }
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp if in_results => {
                 if let Some(browser) = self.plugin_store.as_mut() {
                     browser.scroll_results_by(-(SCROLL_STEP_LINES as i16));
                 }
-                self.needs_redraw = true;
             }
             // Anything else over the modal is swallowed so nothing behind it reacts.
             _ => {}
@@ -504,7 +484,6 @@ impl App {
                 mods: Modifiers::NONE,
             };
             input::handle_provider_setup_key(self, key);
-            self.needs_redraw = true;
         }
         true
     }
@@ -612,7 +591,6 @@ impl App {
                         .contains((event.column, event.row)) =>
             {
                 self.scroll_output_view_by(SCROLL_STEP_LINES as i16);
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown
                 if self.output_view.is_some()
@@ -621,7 +599,6 @@ impl App {
                         .contains((event.column, event.row)) =>
             {
                 self.scroll_output_view_by(-(SCROLL_STEP_LINES as i16));
-                self.needs_redraw = true;
             }
             // While an agentui popup table is open its wheel owns the scroll:
             // the offset moves by SCROLL_STEP_LINES and re-clamps to the
@@ -637,14 +614,12 @@ impl App {
                     .active_agents_scroll_offset
                     .saturating_add(SCROLL_STEP_LINES))
                 .min(self.active_agents_max_scroll);
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown
                 if self.active_agents_area.contains((event.column, event.row)) =>
             {
                 self.active_agents_scroll_offset =
                     self.active_agents_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp
                 if self.teams_area.contains((event.column, event.row)) =>
@@ -653,14 +628,12 @@ impl App {
                     SCROLL_STEP_LINES,
                 ))
                 .min(self.teams_max_scroll);
-                self.needs_redraw = true;
             }
             MouseKind::ScrollDown
                 if self.teams_area.contains((event.column, event.row)) =>
             {
                 self.teams_scroll_offset =
                     self.teams_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                self.needs_redraw = true;
             }
             MouseKind::ScrollUp => {
                 if self.research_view.is_some()
@@ -1246,7 +1219,6 @@ impl App {
         // processing so the first keystroke is not lost.
         if self.session.run_cost_banner.take().is_some() {
             self.session.run_cost_banner_at = None;
-            self.needs_redraw = true;
             let is_plain_char = matches!(key.key, Key::Char(_))
                 && !key.mods.contains(Modifiers::CTRL)
                 && !key.mods.contains(Modifiers::ALT);
@@ -1642,36 +1614,30 @@ impl App {
                         }
                     }
                 }
-                InputAction::ToggleYolo => {
-                    match codemason_config::yolo::toggle_persist() {
-                        Ok(enabled) => {
-                            self.status = if enabled {
-                                "YOLO mode enabled".to_string()
+                InputAction::ToggleYolo => match codemason_config::yolo::toggle_persist() {
+                    Ok(enabled) => {
+                        self.status = if enabled {
+                            "YOLO mode enabled".to_string()
+                        } else {
+                            "YOLO mode disabled".to_string()
+                        };
+                        self.push_log_no_agent(
+                            if enabled {
+                                LogLevel::Warn
                             } else {
-                                "YOLO mode disabled".to_string()
-                            };
-                            self.push_log_no_agent(
-                                if enabled {
-                                    LogLevel::Warn
-                                } else {
-                                    LogLevel::Info
-                                },
-                                format!(
-                                    "YOLO mode {}",
-                                    if enabled { "enabled" } else { "disabled" }
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            self.status = format!("[!] failed to persist YOLO mode: {e}");
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("YOLO persist failed: {e}"),
-                            );
-                        }
+                                LogLevel::Info
+                            },
+                            format!("YOLO mode {}", if enabled { "enabled" } else { "disabled" }),
+                        );
                     }
-                    self.needs_redraw = true;
-                }
+                    Err(e) => {
+                        self.status = format!("[!] failed to persist YOLO mode: {e}");
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("YOLO persist failed: {e}"),
+                        );
+                    }
+                },
                 InputAction::ToggleTasksPanel => {
                     // Toggle the TASKS side panel visibility (Alt+I). Implements
                     // FR-002 (toggle) and FR-003 (mutual exclusion of side
@@ -1714,7 +1680,6 @@ impl App {
                     } else {
                         "tasks panel hidden".to_string()
                     };
-                    self.needs_redraw = true;
                 }
                 // Alt+M toggles the Memory side panel (FR-003). Implements
                 // mutual exclusion with the log / profile / TODO panels
@@ -1757,7 +1722,6 @@ impl App {
                     } else {
                         "memory panel hidden".to_string()
                     };
-                    self.needs_redraw = true;
                 }
                 InputAction::MemoryCursorUp => {
                     self.move_memory_cursor(-1);
@@ -1817,7 +1781,6 @@ impl App {
                         ));
                         self.push_log_no_agent(LogLevel::Info, "autopilot enabled".to_string());
                     }
-                    self.needs_redraw = true;
                 }
                 InputAction::ToggleContextPanel => {
                     // Toggle the Context side panel visibility (Alt+C). Mutually
@@ -1855,34 +1818,27 @@ impl App {
                     } else {
                         "context panel hidden".to_string()
                     };
-                    self.needs_redraw = true;
                 }
-                InputAction::ToggleEditLog => {
-                    match codemason_config::edit_log::toggle_persist() {
-                        Ok(enabled) => {
-                            self.status = if enabled {
-                                "Edit log enabled".to_string()
-                            } else {
-                                "Edit log disabled".to_string()
-                            };
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                format!(
-                                    "Edit log {}",
-                                    if enabled { "enabled" } else { "disabled" }
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            self.status = format!("[!] failed to persist edit log state: {e}");
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("Edit log persist failed: {e}"),
-                            );
-                        }
+                InputAction::ToggleEditLog => match codemason_config::edit_log::toggle_persist() {
+                    Ok(enabled) => {
+                        self.status = if enabled {
+                            "Edit log enabled".to_string()
+                        } else {
+                            "Edit log disabled".to_string()
+                        };
+                        self.push_log_no_agent(
+                            LogLevel::Info,
+                            format!("Edit log {}", if enabled { "enabled" } else { "disabled" }),
+                        );
                     }
-                    self.needs_redraw = true;
-                }
+                    Err(e) => {
+                        self.status = format!("[!] failed to persist edit log state: {e}");
+                        self.push_log_no_agent(
+                            LogLevel::Error,
+                            format!("Edit log persist failed: {e}"),
+                        );
+                    }
+                },
                 InputAction::ToggleGcf => {
                     // Alt+G: toggle GCF tool-result encoding and persist the
                     // new state (same semantics as Alt+Y / Alt+E and `/gcf
@@ -1911,7 +1867,6 @@ impl App {
                             );
                         }
                     }
-                    self.needs_redraw = true;
                 }
                 InputAction::ToggleAgentsWindow => {
                     // Alt+A: toggle the Agents window (spec `agentssetup`
@@ -1919,8 +1874,8 @@ impl App {
                     // `App::toggle_agents_window` the Agents button's left
                     // click calls, so the keyboard and the mouse share one
                     // visibility path - including the named refusal when the
-                    // window has no subject to open on, the Teams-window
-                    // exclusion, and the redraw flag. Nothing else is touched:
+                    // window has no subject to open on, and the Teams-window
+                    // exclusion. Nothing else is touched:
                     // the input buffer, staged attachments and a running turn
                     // are left as they were.
                     self.toggle_agents_window();
@@ -1944,7 +1899,6 @@ impl App {
                 InputAction::OpenQueueMenu => {
                     self.queue_menu_open = true;
                     self.queue_menu_selected = 0;
-                    self.needs_redraw = true;
                 }
                 InputAction::OutputViewPageUp => {
                     self.scroll_output_view_by(5);
@@ -2250,7 +2204,6 @@ impl App {
                             "rollback declined; changes kept".to_string(),
                         );
                         self.status = "rollback declined - changes kept".to_string();
-                        self.needs_redraw = true;
                     }
                 }
                 // `Clear the input queue?` confirmation dialog (spec `inputqueue`
@@ -2262,10 +2215,8 @@ impl App {
                         self.queue_clear_confirm_open = false;
                         self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
                         // FR-036: `Yes` drains every entry and refreshes the
-                        // counter (clear_input_queue sets needs_redraw).
+                        // counter.
                         self.clear_input_queue();
-                        // NFR-011: the closure must paint on the next frame.
-                        self.needs_redraw = true;
                     }
                 }
                 InputAction::CancelQueueClear => {
@@ -2274,7 +2225,6 @@ impl App {
                         self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
                         // FR-035: dismissing with `No`/`Esc` leaves the queue
                         // unchanged; only the dialog state is reset.
-                        self.needs_redraw = true;
                     }
                 }
                 // The single-button notice dialog only reports a message; both
@@ -2418,7 +2368,6 @@ impl App {
         };
         self.memory_cursor = new_cursor;
         self.scroll_memory_cursor_into_view();
-        self.needs_redraw = true;
     }
 
     /// Scroll the Memory panel so the cursor's preview line is within the
@@ -2468,7 +2417,6 @@ impl App {
                 source_generation: 0,
             },
         });
-        self.needs_redraw = true;
     }
 
     /// Show the delete-confirmation dialog for the memory under the cursor.
@@ -2488,7 +2436,6 @@ impl App {
             id: row.id,
             preview,
         });
-        self.needs_redraw = true;
     }
 
     /// Confirm and execute a pending memory deletion.
@@ -2519,6 +2466,5 @@ impl App {
                 self.push_log_no_agent(LogLevel::Error, format!("memory delete failed: {e}"));
             }
         }
-        self.needs_redraw = true;
     }
 }
