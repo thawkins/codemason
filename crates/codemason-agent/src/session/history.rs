@@ -627,11 +627,6 @@ pub fn estimate_tool_definition_bytes(tools: &[ToolDefinition]) -> u64 {
         .sum::<usize>() as u64
 }
 
-/// Kept for backward compatibility - now delegates to the cheap estimator.
-pub fn chat_request_payload_bytes(request: &ChatRequest) -> u64 {
-    estimate_request_bytes(request)
-}
-
 /// Return `true` when the error message indicates a token-overflow / context-
 /// length-exceeded condition (which is handled by emergency compression rather
 /// than treated as a fatal API error).

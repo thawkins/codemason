@@ -159,11 +159,11 @@ fn test_written_paths_reads_each_metadata_shape() {
     // A tool that is not a file writer is never formatted.
     assert_eq!(
         written_paths("read", &json!({ "path": "/work/a.rs" }), wd),
-        Vec::<std::path::PathBuf>::new()
+        [] as [std::path::PathBuf; 0]
     );
     assert_eq!(
         written_paths("rm", &json!({ "path": "/work/a.rs" }), wd),
-        Vec::<std::path::PathBuf>::new()
+        [] as [std::path::PathBuf; 0]
     );
 }
 

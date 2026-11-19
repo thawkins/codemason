@@ -8,8 +8,8 @@ use std::sync::Arc;
 use codemason_agent::llm::{ChatContent, ChatMessage, ChatRequest, ContentPart, ToolDefinition};
 use codemason_agent::message::{MessagePart, ToolCallState, ToolCallStatus};
 use codemason_agent::session::history::{
-    chat_request_payload_bytes, detect_incomplete_file_task, estimate_request_bytes,
-    estimate_request_bytes_with_tool_bytes, estimate_tool_definition_bytes,
+    detect_incomplete_file_task, estimate_request_bytes, estimate_request_bytes_with_tool_bytes,
+    estimate_tool_definition_bytes,
 };
 
 fn text_request(content: &str) -> ChatRequest {
@@ -37,8 +37,6 @@ fn estimate_request_bytes_grows_with_content() {
     let small = estimate_request_bytes(&text_request("hi"));
     let large = estimate_request_bytes(&text_request(&"x".repeat(1000)));
     assert!(large > small, "{large} should exceed {small}");
-    // The legacy alias delegates to the same estimator.
-    assert_eq!(chat_request_payload_bytes(&text_request("hi")), small);
 }
 
 #[test]

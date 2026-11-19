@@ -370,7 +370,6 @@ Key events the loop emits: `MessageStart`, `ToolsSent`, `RequestStarted`,
 - `tool_result_content_for_llm` — `history.rs:220` (12k char cap, head/tail)
 - `estimate_request_bytes` — `history.rs:276`
 - `estimate_tool_definition_bytes` — `history.rs:331`
-- `chat_request_payload_bytes` — `history.rs:339`
 - `is_token_overflow_error_message` — `history.rs:346`
 - `is_permanent_llm_api_error` — `history.rs:376`
 - `stream_has_meaningful_partial_output` — `history.rs:437`

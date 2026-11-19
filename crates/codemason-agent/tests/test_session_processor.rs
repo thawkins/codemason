@@ -13,10 +13,9 @@ use codemason_agent::llm::{ChatContent, ChatMessage, ChatRequest};
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCallStatus};
 use codemason_agent::permission::{PermissionAction, PermissionChecker};
 use codemason_agent::session::processor::{
-    build_detailed_tool_reference_section, chat_request_payload_bytes,
-    check_permission_with_prompt, history_to_chat_messages, is_permanent_llm_api_error,
-    is_token_overflow_error_message, should_retry_stream_error,
-    stream_has_meaningful_partial_output, tool_result_content_for_llm,
+    build_detailed_tool_reference_section, check_permission_with_prompt, estimate_request_bytes,
+    history_to_chat_messages, is_permanent_llm_api_error, is_token_overflow_error_message,
+    should_retry_stream_error, stream_has_meaningful_partial_output, tool_result_content_for_llm,
 };
 use codemason_agent::tool::create_default_registry;
 use serde_json::{Value, json};
@@ -343,7 +342,7 @@ async fn test_history_to_chat_messages_uses_tool_output_content_field() {
 }
 
 #[test]
-fn test_chat_request_payload_bytes_counts_serialized_request() {
+fn test_estimate_request_bytes_counts_request() {
     let request = ChatRequest {
         model: "demo".to_string(),
         messages: Arc::new(vec![ChatMessage {
@@ -362,7 +361,7 @@ fn test_chat_request_payload_bytes_counts_serialized_request() {
         thinking: None,
     };
 
-    assert!(chat_request_payload_bytes(&request) >= 40);
+    assert!(estimate_request_bytes(&request) >= 40);
 }
 
 #[test]

@@ -88,8 +88,11 @@ fn test_user_command_skips_collisions_bad_names_and_empty_bodies() {
 fn test_user_command_missing_directory_is_empty() {
     let missing = scratch("missing").join("nope");
     let (commands, diagnostics) = load_user_commands_from(&[missing], &BTreeSet::new());
-    assert_eq!(commands.len(), 0);
-    assert_eq!(diagnostics, Vec::<String>::new());
+    assert_eq!(
+        commands,
+        [] as [codemason_agent::user_command::UserCommand; 0]
+    );
+    assert_eq!(diagnostics, [] as [std::string::String; 0]);
 }
 
 #[test]
