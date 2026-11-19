@@ -8,13 +8,12 @@ model runners, suite adapters, and workbook output.
 
 - codemason-agent
 - codemason-llm
-- codemason-tools-core
 - codemason-types
 
 ## External Dependencies
 
 - anyhow, serde, serde_json, chrono, uuid, sha2, hex, tokio
-- futures, reqwest, async-trait
+- futures, reqwest, async-trait, rust_xlsxwriter
 
 Dev-dependencies: criterion, calamine, rustc-hash, tempfile.
 
