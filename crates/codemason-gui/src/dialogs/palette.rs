@@ -53,6 +53,46 @@ pub fn set_action_keys(ctx: &egui::Context, keys: BTreeMap<String, String>) {
     ctx.data_mut(|d| d.insert_temp(keys_id(), Arc::new(keys)));
 }
 
+/// Hold back this frame's Up, Down and Enter presses when the frame also
+/// types into the search field, and send them after it is drawn: the router
+/// runs before the field applies the text, so Enter would otherwise run a row
+/// of the old query.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context, before the router reads input.
+pub fn prepare(ctx: &egui::Context) {
+    let held = ctx.input_mut(|input| {
+        let types = input
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)));
+        if !types {
+            return Vec::new();
+        }
+        let mut held = Vec::new();
+        input.events.retain(|event| {
+            let egui::Event::Key { key, pressed, .. } = event else {
+                return true;
+            };
+            let app_key = match key {
+                egui::Key::Enter => Key::Enter,
+                egui::Key::ArrowUp => Key::Up,
+                egui::Key::ArrowDown => Key::Down,
+                _ => return true,
+            };
+            if *pressed {
+                held.push(app_key);
+            }
+            false
+        });
+        held
+    });
+    for key in held {
+        send_key(ctx, plain(key));
+    }
+}
+
 /// Draw the palette while the App shows it.
 ///
 /// # Returns

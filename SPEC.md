@@ -2287,7 +2287,9 @@ and its warnings, which go to the Log pane at startup: an unreadable or
 invalid file (defaults are used), an unknown action id, a key that does not
 parse or is reserved (each entry ignored), and a user binding that takes a
 chord another action holds by default (the default is removed so the user's
-binding runs; the warning names both ids). Every other key is forwarded to
+binding runs; the warning names both ids). An action moved off its default
+chord no longer runs on that chord: the router drops the raw press that
+app-core would still map to it. Every other key is forwarded to
 `App::handle_key`; an Alt+character chord with no binding is ignored and never
 typed, `Esc` stops a running agent (the `Alt+X` binding was removed), and `Tab`
 completes the slash-command menu.
@@ -2306,7 +2308,11 @@ as its terminal key press or through `App::run_action`, else the frontend runs
 it (`App::take_frontend_action`); a slash command that takes arguments
 (`get_parameter_hint`) is put in the prompt as `/<trigger> `, one that does not
 runs; a theme is selected; an agent runs `/agent <name>`; a session is switched
-to. The GUI dialog (`dialogs::palette`) draws a focused search field that edits
+to. A slash command or agent row is queued for the next turn boundary while a
+turn runs, as a typed command is, and the user's draft in the prompt is kept.
+Keyless actions (the palette, the pickers) do not run while a modal dialog has
+the keyboard, and Enter or an arrow typed in the same frame as query text runs
+after the query is updated (`dialogs::palette::prepare`). The GUI dialog (`dialogs::palette`) draws a focused search field that edits
 the query in place and the rows with their hint and, for an action, the key the
 keymap binds it to now (`KeyRouter::action_keys`); a click highlights a row, a
 double click runs it.
@@ -2323,7 +2329,8 @@ first (`App::sort_favorites_first`, applied by `models_for_provider` and
 `picker_entries_from_models`) and the GUI marks them with `*`. Choosing a model
 in the picker records it in the recent list, newest first, distinct, at most 5
 (`RECENT_MODELS_MAX`). `model.cycle_recent` (`F2`) switches to the recent model
-after the current one, wrapping, without reordering the list
+after the current one, wrapping, without reordering the list, skipping a model
+whose provider is no longer configured or no longer lists it
 (`App::cycle_recent_model`). Both lists are JSON in the storage settings
 (`favorite_models`, an array of `provider/id`; `recent_models`, an array of
 `RecentModel`), beside `selected_model`. The GUI model picker's filter is a
@@ -2335,7 +2342,8 @@ fuzzy match on the name or id (`fuzzy::fuzzy_score`), best match first.
 off a non-URL reference into `ParsedRef::range`; an invalid suffix (`#45-20`,
 `#0`, not numeric) stays part of the path, and a URL keeps its `#` fragment.
 The resolver includes only those lines, under their own numbers, clamped to
-the file's length, and tags the block `<file path=".." lines="20-45">`. The
+the file's length (for a PDF, lines of the extracted text, before the size
+cap), and tags the block `<file path=".." lines="20-45">`. The
 `@` file menu closes once a `#` follows the path, so Enter sends the mention
 rather than replacing it.
 
@@ -2344,8 +2352,11 @@ edit the prompt in `$VISUAL`, else `$EDITOR`
 (`external_editor::edit_in_external_editor`): the prompt is written to a
 temporary file, the editor command runs through the shell with the file as
 its last argument, and the saved text (less one trailing newline) replaces the
-prompt. App-core locks the prompt meanwhile (`App::begin_external_edit` /
-`finish_external_edit`, `external_editor_open`); a failure or a missing editor
+prompt of the session it was started in, focused or not. App-core locks the
+prompt meanwhile (`App::begin_external_edit` / `finish_external_edit`,
+`external_editor_open`): no key edits or submits it, Esc still stops a running
+agent, and dialogs keep their keys. A draft in the prompt survives `/editor`
+run from the palette or the queue; a failure or a missing editor
 is reported in the status line and keeps the prompt. `/editor` asks the
 frontend (`prompt.editor` frontend action); the GUI runs the editor on a
 worker thread (`external_edit::ExternalEdit`) so the window keeps drawing.

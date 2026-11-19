@@ -932,8 +932,14 @@ impl Shell {
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
-        for action in self.keys.take_actions() {
-            self.run_action(ctx, &action);
+        // A modal dialog (or a locked prompt) keeps the keyboard: a keyless
+        // action such as the palette must not open over it. Keyed actions
+        // went through `App::handle_key`, which applies the same guards.
+        let actions = self.keys.take_actions();
+        if dialogs::active(&self.app).is_none() && !self.app.is_input_locked() {
+            for action in actions {
+                self.run_action(ctx, &action);
+            }
         }
         // An action a palette row handed to the frontend.
         while let Some(action) = self.app.take_frontend_action() {

@@ -372,9 +372,9 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::Properties) => properties::prepare(ctx, app),
         Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx, app),
         Some(ActiveDialog::ContextMenu) => context_menu::prepare(ctx, app),
+        Some(ActiveDialog::Palette) => palette::prepare(ctx),
         Some(
             ActiveDialog::ConfigSavePicker
-            | ActiveDialog::Palette
             | ActiveDialog::ThemePicker
             | ActiveDialog::HistoryPicker
             | ActiveDialog::RouterSave

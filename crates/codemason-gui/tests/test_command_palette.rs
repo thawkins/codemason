@@ -197,6 +197,35 @@ fn test_f2_cycles_the_recent_models() {
     {
         let app = harness.state_mut().app_mut();
         app.storage
+            .set_provider_auth("openai", "sk-test")
+            .expect("store key");
+        let models: Vec<codemason_agent::provider::ModelInfo> = ["gpt-4o", "o3"]
+            .iter()
+            .map(|id| codemason_agent::provider::ModelInfo {
+                id: (*id).to_string(),
+                provider_id: "openai".to_string(),
+                name: (*id).to_string(),
+                cost: codemason_config::Cost {
+                    input: 0.0,
+                    output: 0.0,
+                },
+                capabilities: codemason_config::Capabilities {
+                    reasoning: false,
+                    streaming: true,
+                    vision: false,
+                    tool_use: true,
+                    thinking_levels: Vec::new(),
+                },
+                context_window: 128_000,
+                max_output: None,
+                request_multiplier: None,
+                thinking_config: None,
+            })
+            .collect();
+        app.storage
+            .set_discovered_models("openai", &serde_json::to_string(&models).expect("json"))
+            .expect("seed models");
+        app.storage
             .set_setting(
                 codemason_app_core::app::RECENT_MODELS_KEY,
                 r#"[{"provider_id":"openai","provider_name":"OpenAI","id":"gpt-4o",
@@ -213,5 +242,43 @@ fn test_f2_cycles_the_recent_models() {
     assert_eq!(
         harness.state().app().session.selected_model.as_deref(),
         Some("openai/o3")
+    );
+}
+
+#[test]
+fn test_ctrl_p_does_not_open_the_palette_over_a_modal_dialog() {
+    let (_rt, mut harness) = rig();
+    harness.state_mut().app_mut().show_shortcuts = true;
+    open(&mut harness);
+    assert!(
+        harness.state().app().palette.is_none(),
+        "the open dialog keeps the keyboard"
+    );
+}
+
+#[test]
+fn test_enter_in_the_same_frame_as_typing_runs_the_new_query() {
+    let (_rt, mut harness) = rig();
+    open(&mut harness);
+    let input = harness.input_mut();
+    input
+        .events
+        .push(egui::Event::Text("theme nord".to_string()));
+    for pressed in [true, false] {
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    harness.run();
+    harness.run();
+    assert!(!shown(&harness));
+    assert_eq!(
+        harness.state().app().theme,
+        ThemeSelection::Named("nord".to_string()),
+        "Enter ran the row of the query typed with it"
     );
 }

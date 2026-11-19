@@ -780,6 +780,14 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         }
     }
 
+    // While the prompt is out in an external editor (`/editor`) nothing may
+    // edit or submit it: the editor's result replaces it. Esc still stops a
+    // running agent; the confirmation dialogs above keep their keys.
+    if app.external_editor_open {
+        return (key.key == Key::Esc && app.session.is_processing)
+            .then_some(InputAction::CancelAgent);
+    }
+
     // If slash menu is active, intercept navigation keys
     if app.slash_menu.is_some() {
         match key.key {

@@ -500,6 +500,33 @@ pub struct KeyRouter {
     leader_bindings: std::collections::BTreeMap<char, String>,
     /// When the leader was pressed (egui input time), while it waits.
     leader_since: Option<f64>,
+    /// The terminal key presses of catalog actions whose default chord the
+    /// keymap no longer binds to them (the user moved it): app-core would
+    /// still run the action on that press, so it is not forwarded.
+    moved_keys: Vec<KeyInput>,
+}
+
+/// The terminal key presses of the catalog actions `keymap` no longer binds
+/// to their default chord.
+fn moved_action_keys(keymap: &Keymap) -> Vec<KeyInput> {
+    let scope = Scope::app();
+    action_catalog()
+        .iter()
+        .filter_map(|action| {
+            let key = action.key?;
+            let text = if keymap.platform().is_mac() {
+                action.mac_key
+            } else {
+                action.default_key
+            }?;
+            let default = Binding::parse(text).ok()?.text(&scope);
+            let still_bound = keymap
+                .bindings(&CommandRef::new(action.id))
+                .iter()
+                .any(|b| b.text(&scope) == default);
+            (!still_bound).then_some(key)
+        })
+        .collect()
 }
 
 impl KeyRouter {
@@ -515,6 +542,7 @@ impl KeyRouter {
     #[must_use]
     pub fn new(keymap: Keymap) -> Self {
         Self {
+            moved_keys: moved_action_keys(&keymap),
             keymap,
             dispatcher: Dispatcher::new(),
             label_selection: false,
@@ -768,6 +796,8 @@ impl KeyRouter {
                 None => self.actions.push(hit.command.to_string()),
             }
         }
+        // Presses after this point are forwarded raw, not run by a binding.
+        let raw_from = keys.len();
         let events = &input.events;
         let mut drop = vec![false; events.len()];
         for (i, event) in events.iter().enumerate() {
@@ -879,6 +909,10 @@ impl KeyRouter {
             index += 1;
             keep
         });
+        // A moved action's old chord must not reach app-core, which would
+        // still run the action on it.
+        let raw = keys.split_off(raw_from);
+        keys.extend(raw.into_iter().filter(|k| !self.moved_keys.contains(k)));
         keys
     }
 }

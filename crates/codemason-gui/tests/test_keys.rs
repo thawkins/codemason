@@ -1348,3 +1348,29 @@ fn test_parse_chord() {
     assert_eq!(parse_chord("Hyper+G"), None);
     assert_eq!(parse_chord("Ctrl+NoSuchKey"), None);
 }
+
+#[test]
+fn test_keys_moved_action_old_chord_no_longer_runs_it() {
+    let (mut router, warnings) = router_from("moved-yolo", r#"{ "mode.yolo": "Alt+K" }"#);
+    assert_eq!(warnings, Vec::<String>::new());
+    let yolo = KeyInput {
+        key: Key::Char('y'),
+        mods: Modifiers::ALT,
+    };
+    assert_eq!(
+        route_press(&mut router, egui::Key::K, egui::Modifiers::ALT),
+        [yolo],
+        "the new chord runs the action"
+    );
+    assert_eq!(
+        route_press(&mut router, egui::Key::Y, egui::Modifiers::ALT),
+        Vec::<KeyInput>::new(),
+        "the old chord does not reach app-core"
+    );
+    // An action left on its default chord still runs.
+    let (mut router, _) = router_from("unmoved-yolo", "{}");
+    assert_eq!(
+        route_press(&mut router, egui::Key::Y, egui::Modifiers::ALT),
+        [yolo]
+    );
+}

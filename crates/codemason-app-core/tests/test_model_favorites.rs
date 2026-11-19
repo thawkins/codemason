@@ -114,26 +114,128 @@ async fn test_model_favorites_enter_remembers_recent_models() {
     );
 }
 
+/// Choose each of `models` in the picker, as Enter does.
+async fn choose(app: &mut App, models: &[ModelPickerEntry]) {
+    for model in models {
+        app.provider_setup = Some(ProviderSetupStep::SelectModel {
+            provider_id: model.provider_id.clone(),
+            provider_name: "Anthropic".to_string(),
+            models: vec![model.clone()],
+            selected: 0,
+        });
+        // Enter picks the model; a model with thinking levels asks for one
+        // first, and a second Enter takes the default.
+        for _ in 0..2 {
+            if !matches!(
+                app.provider_setup,
+                Some(
+                    ProviderSetupStep::SelectModel { .. }
+                        | ProviderSetupStep::SelectThinkingLevel { .. }
+                )
+            ) {
+                break;
+            }
+            let _ = app
+                .handle_key(KeyInput {
+                    key: Key::Enter,
+                    mods: Modifiers::default(),
+                })
+                .await;
+        }
+    }
+}
+
+/// Three models anthropic lists (seeded as discovered models), with
+/// anthropic configured.
+fn anthropic_models(app: &App) -> Vec<ModelPickerEntry> {
+    app.storage
+        .set_provider_auth("anthropic", "sk-ant-test")
+        .expect("store key");
+    let models: Vec<codemason_agent::provider::ModelInfo> = ["m-one", "m-two", "m-three"]
+        .iter()
+        .map(|id| codemason_agent::provider::ModelInfo {
+            id: (*id).to_string(),
+            provider_id: "anthropic".to_string(),
+            name: (*id).to_string(),
+            cost: codemason_config::Cost {
+                input: 0.0,
+                output: 0.0,
+            },
+            capabilities: codemason_config::Capabilities {
+                reasoning: false,
+                streaming: true,
+                vision: false,
+                tool_use: true,
+                thinking_levels: Vec::new(),
+            },
+            context_window: 200_000,
+            max_output: Some(8_192),
+            request_multiplier: None,
+            thinking_config: None,
+        })
+        .collect();
+    app.storage
+        .set_discovered_models("anthropic", &serde_json::to_string(&models).expect("json"))
+        .expect("seed models");
+    let entries: Vec<ModelPickerEntry> = ["m-one", "m-two", "m-three"]
+        .iter()
+        .map(|id| {
+            app.models_for_provider("anthropic")
+                .into_iter()
+                .find(|m| m.id == *id)
+                .expect("listed")
+        })
+        .collect();
+    entries
+}
+
 #[tokio::test]
 async fn test_model_favorites_cycle_recent_walks_the_list() {
     let mut app = support::make_app();
-    for id in ["a", "b", "c"] {
-        open_picker(&mut app, &[id], 0);
-        let _ = app
-            .handle_key(KeyInput {
-                key: Key::Enter,
-                mods: Modifiers::default(),
-            })
-            .await;
-    }
-    assert_eq!(app.session.selected_model.as_deref(), Some("anthropic/c"));
-    // Recent order: c, b, a. F2 walks it without reordering.
+    let models = anthropic_models(&app);
+    let key = |m: &ModelPickerEntry| Some(format!("anthropic/{}", m.id));
+    choose(&mut app, &models).await;
+    assert_eq!(app.session.selected_model, key(&models[2]));
+    // Recent order: 2, 1, 0. F2 walks it without reordering.
     assert!(app.run_action("model.cycle_recent").await);
-    assert_eq!(app.session.selected_model.as_deref(), Some("anthropic/b"));
+    assert_eq!(app.session.selected_model, key(&models[1]));
     assert!(app.run_action("model.cycle_recent").await);
-    assert_eq!(app.session.selected_model.as_deref(), Some("anthropic/a"));
+    assert_eq!(app.session.selected_model, key(&models[0]));
     assert!(app.run_action("model.cycle_recent").await);
-    assert_eq!(app.session.selected_model.as_deref(), Some("anthropic/c"));
+    assert_eq!(app.session.selected_model, key(&models[2]));
+}
+
+#[tokio::test]
+async fn test_model_favorites_cycle_recent_skips_unusable_models() {
+    let mut app = support::make_app();
+    let models = anthropic_models(&app);
+    choose(&mut app, &models[..1]).await;
+    // Newest first: a model anthropic no longer lists, then one of a
+    // provider with no credentials, then the usable first model.
+    let mut recent = app.recent_models();
+    let gone = RecentModel {
+        id: "retired-model".to_string(),
+        name: "Retired".to_string(),
+        ..recent[0].clone()
+    };
+    let unconfigured = RecentModel {
+        provider_id: "no-such-provider".to_string(),
+        ..recent[0].clone()
+    };
+    recent.splice(0..0, [gone, unconfigured]);
+    app.storage
+        .set_setting(
+            codemason_app_core::app::RECENT_MODELS_KEY,
+            &serde_json::to_string(&recent).expect("json"),
+        )
+        .expect("save");
+    app.session.selected_model = None;
+    assert!(app.cycle_recent_model());
+    assert_eq!(
+        app.session.selected_model,
+        Some(format!("anthropic/{}", models[0].id)),
+        "both unusable entries are skipped"
+    );
 }
 
 #[test]

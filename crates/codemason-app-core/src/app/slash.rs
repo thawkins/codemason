@@ -4203,6 +4203,10 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
     /// method handles command-specific side effects and logging.
     pub async fn execute_slash_command_inner(&mut self, raw: &str) {
         let stripped = raw.strip_prefix('/').unwrap_or(raw).trim();
+        // `/editor` edits the draft, so it must survive the clearing below
+        // unless the draft is the command itself (typed and submitted).
+        let draft = (stripped == "editor" && self.session.input.trim() != raw.trim())
+            .then(|| self.session.input.clone());
         self.session.input.clear();
         self.session.input_cursor = 0;
         self.slash_menu = None;
@@ -4426,6 +4430,10 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             // -- /editor ----------------------------------------------------
             // The frontend runs the editor (off its UI thread).
             "editor" => {
+                if let Some(draft) = draft {
+                    self.session.input = draft;
+                    self.set_cursor_char_index_clamped(usize::MAX);
+                }
                 self.frontend_action = Some("prompt.editor".to_string());
                 return;
             }

@@ -108,25 +108,40 @@ impl App {
             return None;
         }
         self.external_editor_open = true;
+        self.external_editor_owner = self.session.session_id.clone();
         self.status = "editor: waiting for the external editor".to_string();
         self.needs_redraw = true;
         Some(self.session.input.clone())
     }
 
-    /// End an external edit: unlock the prompt and, on success, replace its
-    /// text with the edited text (cursor at the end); on failure, keep the
-    /// prompt and report the error in the status line.
+    /// End an external edit: unlock the prompt and, on success, replace the
+    /// prompt of the session the edit started in with the edited text
+    /// (cursor at the end), whether it is focused or in the background; on
+    /// failure, keep the prompt and report the error in the status line.
     ///
     /// # Arguments
     ///
     /// * `result` - what [`edit_in_external_editor`] returned.
     pub fn finish_external_edit(&mut self, result: Result<String>) {
         self.external_editor_open = false;
+        let owner = self.external_editor_owner.take();
         match result {
             Ok(text) => {
-                self.session.input = text;
-                self.set_cursor_char_index_clamped(usize::MAX);
-                self.refresh_input_menus();
+                let background = owner
+                    .as_deref()
+                    .filter(|id| self.session.session_id.as_deref() != Some(*id))
+                    .and_then(|id| self.background.position(id));
+                match background.and_then(|at| self.background.view_mut(at)) {
+                    Some(view) => {
+                        view.input_cursor = text.chars().count();
+                        view.input = text;
+                    }
+                    None => {
+                        self.session.input = text;
+                        self.set_cursor_char_index_clamped(usize::MAX);
+                        self.refresh_input_menus();
+                    }
+                }
                 self.status = "editor: prompt updated".to_string();
             }
             Err(e) => {

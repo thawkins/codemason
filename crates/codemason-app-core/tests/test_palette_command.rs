@@ -130,3 +130,30 @@ async fn test_palette_session_picker_lists_sessions_and_switches() {
     assert_eq!(app.session.session_id.as_deref(), Some(other.as_str()));
     assert_ne!(other, current);
 }
+
+#[tokio::test]
+async fn test_palette_slash_waits_for_the_turn_and_keeps_the_draft() {
+    let mut app = app();
+    app.session.input = "half-written".to_string();
+    app.session.input_cursor = 4;
+    app.session.is_processing = true;
+    app.run_palette_entry("slash:clear").await;
+    let queued: Vec<&str> = app
+        .session
+        .input_queue
+        .iter()
+        .map(|q| q.text.as_str())
+        .collect();
+    assert_eq!(queued, ["/clear"], "queued for the turn boundary, not run");
+    assert_eq!(app.session.input, "half-written");
+    assert_eq!(app.session.input_cursor, 4);
+}
+
+#[tokio::test]
+async fn test_palette_editor_keeps_the_draft_for_the_editor() {
+    let mut app = app();
+    app.session.input = "draft to edit".to_string();
+    app.run_palette_entry("slash:editor").await;
+    assert_eq!(app.take_frontend_action().as_deref(), Some("prompt.editor"));
+    assert_eq!(app.session.input, "draft to edit");
+}

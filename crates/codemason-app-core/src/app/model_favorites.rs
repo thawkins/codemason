@@ -156,44 +156,39 @@ impl App {
     }
 
     /// Switch to the recent model after the current one (wrapping), as F2
-    /// does. The recent list keeps its order, so repeated presses walk it.
+    /// does, skipping any whose provider is no longer configured or no longer
+    /// lists the model. The recent list keeps its order, so repeated presses
+    /// walk it.
     ///
     /// # Returns
     ///
     /// `true` when the model changed; `false` (with a status message) when
-    /// there is no other recent model.
+    /// there is no other usable recent model.
     pub fn cycle_recent_model(&mut self) -> bool {
         let recent = self.recent_models();
         let current = self.session.selected_model.clone().unwrap_or_default();
-        let next = match recent.iter().position(|r| r.key() == current) {
-            Some(at) => (at + 1) % recent.len(),
-            None => 0,
-        };
-        let Some(target) = recent.get(next).filter(|r| r.key() != current).cloned() else {
+        let start = recent
+            .iter()
+            .position(|r| r.key() == current)
+            .map_or(0, |at| at + 1);
+        let configured: Vec<String> = Self::get_configured_providers(&self.storage)
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        let usable = (0..recent.len())
+            .map(|step| &recent[(start + step) % recent.len()])
+            .filter(|r| r.key() != current && configured.contains(&r.provider_id))
+            .find_map(|r| {
+                self.models_for_provider(&r.provider_id)
+                    .into_iter()
+                    .find(|e| e.id == r.id)
+                    .map(|entry| (r.clone(), entry))
+            });
+        let Some((target, entry)) = usable else {
             self.status = "model: no other recent model".to_string();
             self.needs_redraw = true;
             return false;
         };
-        let entry = self
-            .models_for_provider(&target.provider_id)
-            .into_iter()
-            .find(|e| e.id == target.id)
-            .unwrap_or_else(|| ModelPickerEntry {
-                provider_id: target.provider_id.clone(),
-                id: target.id.clone(),
-                name: target.name.clone(),
-                context_window: target.context_window,
-                max_output: None,
-                cost_input: 0.0,
-                cost_output: 0.0,
-                reasoning: false,
-                vision: false,
-                tool_use: true,
-                thinking_levels: Vec::new(),
-                thinking_config: None,
-                cost_tier: String::new(),
-                cost_multiplier: String::new(),
-            });
         let level = Self::default_thinking_level_for_entry(&entry);
         let name = self.finalize_model_selection(
             target.provider_id.clone(),

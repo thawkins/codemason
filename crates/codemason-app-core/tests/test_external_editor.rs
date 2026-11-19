@@ -81,3 +81,60 @@ async fn test_external_editor_slash_editor_asks_the_frontend() {
     app.execute_slash_command("/editor").await;
     assert_eq!(app.take_frontend_action().as_deref(), Some("prompt.editor"));
 }
+
+#[tokio::test]
+async fn test_external_editor_typed_slash_editor_clears_only_the_command() {
+    let mut app = support::make_app();
+    app.session.input = "/editor".to_string();
+    app.execute_slash_command("/editor").await;
+    assert_eq!(
+        app.session.input, "",
+        "the submitted command is not the draft"
+    );
+    app.session.input = "a draft".to_string();
+    app.execute_slash_command("/editor").await;
+    assert_eq!(app.session.input, "a draft", "a draft survives /editor");
+}
+
+#[tokio::test]
+async fn test_external_editor_lock_blocks_submit_and_edits() {
+    use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
+    let mut app = support::make_app();
+    app.session.input = "draft".to_string();
+    app.session.input_cursor = 5;
+    let _ = app.begin_external_edit();
+    for key in [Key::Backspace, Key::Delete, Key::Char('x'), Key::Enter] {
+        let _ = app
+            .handle_key(KeyInput {
+                key,
+                mods: Modifiers::default(),
+            })
+            .await;
+    }
+    assert_eq!(app.session.input, "draft", "the draft is untouched");
+    assert!(!app.session.is_processing, "nothing was sent");
+    assert!(app.session.input_queue.is_empty(), "nothing was queued");
+}
+
+#[tokio::test]
+async fn test_external_editor_result_goes_to_the_session_it_started_in() {
+    let mut app = support::make_app();
+    app.execute_slash_command("/session new").await;
+    let a = app.session.session_id.clone().expect("session A");
+    app.session.input = "A's draft".to_string();
+    let _ = app.begin_external_edit();
+
+    // The user focuses another session while the editor runs.
+    app.execute_slash_command("/session new").await;
+    let b = app.session.session_id.clone().expect("session B");
+    assert_ne!(a, b);
+
+    app.finish_external_edit(Ok("A edited".to_string()));
+    assert_eq!(app.session.input, "", "B's prompt is untouched");
+    let a_view = app
+        .background
+        .iter()
+        .find(|v| v.session_id.as_deref() == Some(a.as_str()))
+        .expect("A is in the background");
+    assert_eq!(a_view.input, "A edited");
+}

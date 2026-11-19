@@ -208,6 +208,26 @@ impl App {
         self.needs_redraw = true;
     }
 
+    /// Run a slash command chosen in the palette as a typed one runs: queued
+    /// for the next turn boundary while a turn runs (refused with a status
+    /// message when the queue is full), else at once. Unlike a typed command,
+    /// the prompt holds the user's draft, not the command, so the draft is
+    /// kept when the command leaves the prompt empty.
+    async fn run_palette_slash(&mut self, command: String) {
+        let draft = self.session.input.clone();
+        let cursor = self.session.input_cursor;
+        if self.is_input_blocked() {
+            // INTENTIONAL: a full queue sets the status line; the draft is restored below.
+            let _ = self.enqueue_input(command, Vec::new());
+        } else {
+            Box::pin(self.execute_slash_command(&command)).await;
+        }
+        if self.session.input.is_empty() && !draft.is_empty() {
+            self.session.input = draft;
+            self.set_cursor_char_index_clamped(cursor);
+        }
+    }
+
     /// Run the palette entry `id` (see the module docs).
     pub async fn run_palette_entry(&mut self, id: &str) {
         let Some((kind, name)) = id.split_once(':') else {
@@ -231,7 +251,7 @@ impl App {
                     let end = self.session.input.chars().count();
                     self.input_edited(end);
                 } else {
-                    Box::pin(self.execute_slash_command(&format!("/{name}"))).await;
+                    Box::pin(self.run_palette_slash(format!("/{name}"))).await;
                 }
             }
             "theme" => {
@@ -240,7 +260,7 @@ impl App {
                     self.theme = selection;
                 }
             }
-            "agent" => Box::pin(self.execute_slash_command(&format!("/agent {name}"))).await,
+            "agent" => Box::pin(self.run_palette_slash(format!("/agent {name}"))).await,
             "session" => {
                 if let Err(err) = self.switch_to_session(name) {
                     self.status = err;

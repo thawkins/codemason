@@ -85,6 +85,12 @@ async fn read_file_content(
     range: Option<(u32, u32)>,
 ) -> Result<ResolvedRef> {
     if let Some(content) = try_read_binary(abs_path, raw).await? {
+        // A range applies to the extracted text, before the size cap, so no
+        // text outside it is sent.
+        let content = match range {
+            Some(range) => number_line_range(&content, range),
+            None => content,
+        };
         let (content, truncated) = truncate_content(content);
         return Ok(ResolvedRef {
             original: raw.to_string(),
@@ -92,7 +98,7 @@ async fn read_file_content(
             content,
             truncated,
             resolved_path: Some(abs_path.to_path_buf()),
-            range: None,
+            range,
         });
     }
 
