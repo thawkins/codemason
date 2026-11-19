@@ -836,13 +836,15 @@ Press **`Alt+L` | `Cmd+Shift+L`** to toggle the **Log pane**, docked on the righ
 
 The Log panel shows a time-stamped, color-coded stream of runtime events:
 
-| Prefix  | Meaning                  |
-| ------- | ------------------------ |
-| `INF` | General information      |
-| `TUL` | Tool call / tool result  |
-| `WRN` | Warning                  |
-| `ERR` | Error                    |
-| `CMP` | Context-compaction event |
+| Level     | Meaning                  |
+| --------- | ------------------------ |
+| `info`    | General information      |
+| `tool`    | Tool call / tool result  |
+| `warn`    | Warning                  |
+| `error`   | Error                    |
+| `compact` | Context-compaction event |
+
+The level is a fixed-width column, so every message starts in the same column.
 
 Log entries include the short session ID and step number when available, e.g.
 `[a3f7:12]`. This makes it easy to correlate log lines with message bubbles in
@@ -897,22 +899,23 @@ The TASKS panel lists tasks for the current session, fetched from the
 SQLite-backed storage on every render. Each row shows:
 
 ```text
-[<STATUS>] <subject> (owner) [blocked by #id, …]
+<status> #<id> <subject> (owner)  blocked by #id, …
 ```
 
-Status colors:
+The status is a short word in a fixed-width column, so every subject starts in
+the same column. Completed subjects are dimmed.
 
-| Status          | Color  |
-| --------------- | ------ |
-| `pending`     | Yellow |
-| `in_progress` | Cyan   |
-| `completed`   | Green  |
-| blocked (derived) | Red    |
+| Stored status     | Shown as  | Color  |
+| ----------------- | --------- | ------ |
+| `pending`         | `todo`    | Yellow |
+| `in_progress`     | `active`  | Cyan   |
+| `completed`       | `done`    | Green  |
+| blocked (derived) | `blocked` | Red    |
 
 A task is **blocked** when its `blocked_by` list is non-empty and at least one
 blocker is not yet `completed`. Blocked-ness is derived at read time — there is
 no `blocked` status value (FR-005). When a task is `in_progress` and has an
-`active_form`, it is shown as an indented sub-line beneath the subject.
+`active_form`, it is shown as a `->` sub-line aligned under the subject.
 
 ### Managing Tasks
 
@@ -955,8 +958,11 @@ It also shows a summary line when the structured-memory SQLite store contains
 entries:
 
 ```text
-Structured memories: 42
+42 memories, 5120 bytes
 ```
+
+Memories are grouped under capitalised category headings (`Fact (12)`). With
+no memories the pane says so and explains what will fill it.
 
 Memory files are plain Markdown. codemason reads them automatically on startup
 and can update them with `memory_write` / `memory_replace` during a session.
@@ -1013,7 +1019,10 @@ The Context panel shows what the next request sends to the model:
   **tool catalog**, the **tool metadata** and the **history**, with the
   history's message count;
 - the **total**, the **free** headroom, and the bytes streamed to and from
-  the model (`io: ^out vin`).
+  the model (`Streamed  1.2 KB up  3.4 KB down`).
+
+Token counts carry no unit: the first row states it once
+(`Context window  200.0k tokens`).
 
 Percentages read `unknown` when the provider advertises no context window. The
 panel is display-only: nothing in it is sent to the model.
@@ -1025,15 +1034,17 @@ panel is display-only: nothing in it is sent to the model.
 codemason can hold several sessions at once, each in its own project
 directory. A session keeps running while you work in another one.
 
-The Sessions pane (docked on the left by default) lists:
+The Sessions pane (docked on the left by default; its tab shows the session
+count, e.g. `Sessions (12)`) lists:
 
-- `+ New session`
-- `/ Search`, which filters the list
+- `New session`, with its icon and `Ctrl+N` on the right
+- `Search`, with its icon and `/` on the right, which filters the list
 - a `Pinned` section, always shown; drag a session row onto it to pin it
 - your own sections (see "Session menu" below), by name
 - one section per project, the current project first. A blank line sits
   above `Pinned` and above each project heading. The heading shows
-  the project's name, `v` (open) or `>` (collapsed), and `[github]` or
+  a solid triangle (pointing down when open, right when collapsed), the
+  project's name, and `[github]` or
   `[gitlab]` when the project has a known remote. A project with no
   sessions is listed too, so you can start one in it.
 
