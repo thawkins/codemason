@@ -131,18 +131,15 @@ impl Tool for TeamAssignTaskTool {
                 );
                 // SEC-codemason-team-003 (SECTASKS T-018): authenticated lead
                 // session id on every lead-authored assignment.
-                match mailbox
-                    .push_blocking(
-                        MailboxMessage::new(
-                            "lead".to_string(),
-                            agent_id.clone(),
-                            MessageType::Message,
-                            content,
-                        )
-                        .with_sender_session(&ctx.session_id),
+                match mailbox.push(
+                    MailboxMessage::new(
+                        "lead".to_string(),
+                        agent_id.clone(),
+                        MessageType::Message,
+                        content,
                     )
-                    .await
-                {
+                    .with_sender_session(&ctx.session_id),
+                ) {
                     Ok(()) => "delivered".to_string(),
                     Err(e) => format!("failed: {e}"),
                 }

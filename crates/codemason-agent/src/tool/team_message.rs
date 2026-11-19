@@ -114,17 +114,15 @@ impl Tool for TeamMessageTool {
         // SEC-codemason-team-003 (SECTASKS T-018): record the authenticated
         // session id alongside the derived `from`, so the recipient can tell a
         // genuine lead message from a forged one.
-        mailbox
-            .push_blocking(
-                MailboxMessage::new(
-                    from.clone(),
-                    recipient_id.clone(),
-                    MessageType::Message,
-                    content,
-                )
-                .with_sender_session(&ctx.session_id),
+        mailbox.push(
+            MailboxMessage::new(
+                from.clone(),
+                recipient_id.clone(),
+                MessageType::Message,
+                content,
             )
-            .await?;
+            .with_sender_session(&ctx.session_id),
+        )?;
 
         Ok(ToolOutput {
             content: format!("Message sent to '{to}' in team '{team_name}'."),

@@ -63,7 +63,7 @@ impl Tool for TeamTaskClaimTool {
         let store = TaskStore::open(&team_dir)?;
 
         // PERF-017: gate the debug read behind `tracing::enabled!(DEBUG)`
-        // so the per-claim `store.read_blocking().await` (a full file read + deserialise)
+        // so the per-claim `store.read()` (a full file read + deserialise)
         // only happens when debug logging is actually enabled, instead of
         // on every `team_task_claim` call.
         if tracing::enabled!(tracing::Level::DEBUG) {
@@ -176,8 +176,7 @@ impl Tool for TeamTaskClaimTool {
                     // so this summary cannot describe a cancelled task as
                     // waiting work.
                     let cancelled = store
-                        .read_blocking()
-                        .await
+                        .read()
                         .map(|list| {
                             list.tasks
                                 .iter()

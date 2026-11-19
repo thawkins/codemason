@@ -103,25 +103,20 @@ impl Tool for TeamBroadcastTool {
             let content = content.to_string();
             let sender_session = sender_session.clone();
             async move {
-                let outcome = match Mailbox::open(&team_dir, &agent_id) {
+                let outcome = Mailbox::open(&team_dir, &agent_id).and_then(|mailbox| {
                     // SEC-codemason-team-003 (SECTASKS T-018): authenticated
                     // sender session id, so a spoofed `from: "lead"` is
                     // detectable and rejected at push time.
-                    Ok(mailbox) => {
-                        mailbox
-                            .push_blocking(
-                                MailboxMessage::new(
-                                    from,
-                                    agent_id.clone(),
-                                    MessageType::Broadcast,
-                                    content,
-                                )
-                                .with_sender_session(&sender_session),
-                            )
-                            .await
-                    }
-                    Err(e) => Err(e),
-                };
+                    mailbox.push(
+                        MailboxMessage::new(
+                            from,
+                            agent_id.clone(),
+                            MessageType::Broadcast,
+                            content,
+                        )
+                        .with_sender_session(&sender_session),
+                    )
+                });
                 (agent_id, name, outcome)
             }
         });

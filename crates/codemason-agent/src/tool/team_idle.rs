@@ -138,8 +138,7 @@ impl Tool for TeamIdleTool {
         // the idle transition even when the mailbox poll loop does not deliver
         // an `IdleNotify` message. We lack the lead's session id in the tool
         // context, so derive it from the on-disk team config.
-        let lead_session_id = TeamStore::load_blocking(team_dir.clone())
-            .await
+        let lead_session_id = TeamStore::load(&team_dir)
             .ok()
             .map(|s| s.config.lead_session_id.clone())
             .unwrap_or_else(|| ctx.session_id.clone());
@@ -155,8 +154,7 @@ impl Tool for TeamIdleTool {
         // Reading the roster back is how the reply tells the teammate which
         // happened: telling it to wait for work when it has just been given some
         // would leave it parked on a task it never started.
-        let claimed = TeamStore::load_blocking(team_dir.clone())
-            .await
+        let claimed = TeamStore::load(&team_dir)
             .ok()
             .and_then(|store| {
                 store

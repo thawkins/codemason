@@ -104,8 +104,7 @@ impl Tool for TeamTaskCancelTool {
                 let (from, owner, notified) =
                     manager.cancel_task(task_id, &agent_id, reason).await?;
                 let title = TaskStore::open(&team_dir)?
-                    .read_blocking()
-                    .await?
+                    .read()?
                     .tasks
                     .iter()
                     .find(|t| t.id == task_id)

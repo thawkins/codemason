@@ -146,13 +146,17 @@ impl Tool for TeamApprovePlanTool {
         .with_sender_session(&ctx.session_id);
         // M5-T4: copy the correlation id from the member's plan_request_id so
         // the teammate can tell which plan was approved/rejected.
+        //
+        // From the status update above to the id cleanup below the I/O stays
+        // synchronous: an await in between would let a cancelled call leave a
+        // member working without the verdict ever being sent.
         {
-            let store = TeamStore::load_blocking(team_dir.clone()).await?;
+            let store = TeamStore::load(&team_dir)?;
             if let Some(m) = store.config.member_by_id(&agent_id) {
                 msg.correlation_id = m.plan_request_id.clone();
             }
         }
-        teammate_mailbox.push_blocking(msg).await?;
+        teammate_mailbox.push(msg)?;
 
         // M5-T4: clear the member's plan_request_id now that the reply is sent.
         TeamStore::update(&team_dir, |config| {
