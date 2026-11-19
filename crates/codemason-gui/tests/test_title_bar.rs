@@ -92,3 +92,39 @@ fn test_title_bar_captions_follow_the_desktop_layout() {
     assert!(close.left() < 100.0, "{close:?}");
     assert!(harness.query_by_label(MINIMIZE_LABEL).is_none());
 }
+
+#[test]
+fn test_title_bar_long_title_keeps_the_buttons_in_the_window() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let mut app = {
+        let _enter = runtime.enter();
+        support::make_app()
+    };
+    app.themes = ThemeCatalog::builtin();
+    // No session is focused, so the title is the project folder's name.
+    app.cwd_path = std::path::PathBuf::from("/projects").join("a".repeat(300));
+    let width = 600.0;
+    let shell = Shell::new(app).with_title_bar(integrated(Layout::default()));
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(width, 600.0))
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), shell);
+    harness.run();
+    // The caption buttons, and each quick access button (the ribbon has
+    // buttons of the same names, which must fit as well).
+    for label in [
+        CLOSE_LABEL,
+        MAXIMIZE_LABEL,
+        MINIMIZE_LABEL,
+        "New session",
+        "Stop",
+    ] {
+        for node in harness.query_all_by_label(label) {
+            let rect = node.rect();
+            assert!(
+                rect.right() <= width + 0.5 && rect.left() >= 0.0,
+                "{label} at {rect:?} is outside the {width} pt window"
+            );
+        }
+    }
+}

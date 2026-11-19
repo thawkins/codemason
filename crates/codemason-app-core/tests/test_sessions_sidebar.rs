@@ -311,12 +311,36 @@ async fn test_sessions_sidebar_current_title_follows_name() {
         .into_iter()
         .rev()
         .collect();
-    assert_eq!(current_title(&app), Some(format!("untitled {tail}")));
+    assert_eq!(current_title(&mut app), Some(format!("untitled {tail}")));
     // `/name` marks the cache for reload, so the new name is listed.
     app.execute_slash_command("/name Release prep").await;
     refresh_if_dirty(&mut app);
-    assert_eq!(current_title(&app).as_deref(), Some("Release prep"));
+    assert_eq!(current_title(&mut app).as_deref(), Some("Release prep"));
     app.execute_slash_command("/name").await;
     refresh_if_dirty(&mut app);
-    assert_eq!(current_title(&app), Some(format!("untitled {tail}")));
+    assert_eq!(current_title(&mut app), Some(format!("untitled {tail}")));
+}
+
+#[tokio::test]
+async fn test_sessions_sidebar_current_title_of_a_session_the_sidebar_hides() {
+    use codemason_app_core::sessions_sidebar_state::{current_title, refresh_if_dirty};
+
+    let (mut app, _a, b) = app_with_sidebar().await;
+    app.execute_slash_command("/name Archived work").await;
+    // Archived sessions are not listed, as when one is resumed at startup.
+    app.storage.archive_session(&b).expect("archive");
+    app.sidebar.dirty = true;
+    refresh_if_dirty(&mut app);
+    assert!(
+        app.sidebar
+            .groups
+            .iter()
+            .all(|group| group.sessions.iter().all(|session| session.id != b)),
+        "the sidebar hides the archived session"
+    );
+    assert_eq!(current_title(&mut app).as_deref(), Some("Archived work"));
+    // A rename is read again after the next refresh.
+    app.execute_slash_command("/name Renamed").await;
+    refresh_if_dirty(&mut app);
+    assert_eq!(current_title(&mut app).as_deref(), Some("Renamed"));
 }

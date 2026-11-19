@@ -332,11 +332,9 @@ pub fn title_strip_ui(
         // Outermost last: the leftmost button is the last of the list.
         let left: Vec<Button> = left.iter().rev().copied().collect();
         caption_buttons(ui, palette, &left);
-        ui.label(
-            egui::RichText::new(title)
-                .size(text_size::BODY)
-                .color(rgb(palette.m3.on_surface_variant)),
-        );
+        // The buttons at the right are laid out first, so a long title is
+        // shortened with an ellipsis in the room left, never pushing them
+        // out of the window.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let right: Vec<Button> = right.iter().rev().copied().collect();
             caption_buttons(ui, palette, &right);
@@ -357,6 +355,16 @@ pub fn title_strip_ui(
                         chosen = Some(item.action);
                     }
                 }
+            });
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(title)
+                            .size(text_size::BODY)
+                            .color(rgb(palette.m3.on_surface_variant)),
+                    )
+                    .truncate(),
+                );
             });
         });
     });

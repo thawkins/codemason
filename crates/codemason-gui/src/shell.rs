@@ -671,7 +671,7 @@ impl Shell {
     /// sidebar lists it), else the project folder, after the app name.
     fn window_title(&mut self) -> String {
         sessions_sidebar_state::refresh_if_dirty(&mut self.app);
-        let subject = sessions_sidebar_state::current_title(&self.app).or_else(|| {
+        let subject = sessions_sidebar_state::current_title(&mut self.app).or_else(|| {
             self.app
                 .cwd_path
                 .file_name()
