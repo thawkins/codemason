@@ -46,7 +46,11 @@ fn rig() -> (
     (runtime, scratch, harness)
 }
 
-/// Press and release `key` with `modifiers`, then run.
+/// Press and release `key` with `modifiers`, then draw a few frames.
+///
+/// A fixed number of frames, not `Harness::run`: once the editor thread is
+/// running the window keeps polling it (and the App's housekeeping timer
+/// may be due), so it need not settle within `run`'s step limit.
 fn key(harness: &mut Harness<'static, Shell>, key: egui::Key, modifiers: egui::Modifiers) {
     let input = harness.input_mut();
     for pressed in [true, false] {
@@ -58,7 +62,7 @@ fn key(harness: &mut Harness<'static, Shell>, key: egui::Key, modifiers: egui::M
             modifiers,
         });
     }
-    harness.run();
+    harness.run_steps(4);
 }
 
 #[test]
@@ -73,7 +77,7 @@ fn test_leader_e_edits_the_prompt_in_the_external_editor() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
-        harness.run();
+        harness.step();
     }
     let app = harness.state().app();
     assert!(!app.external_editor_open, "the editor finished");
