@@ -8,9 +8,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use codemason_types::guard::{
-    MAX_IDENTIFIER_LEN, MAX_RETRY_AFTER, cap_read, clamp_retry_after, contained_join,
-    is_safe_operand, reject_option_like, reject_symlink_components, reject_symlink_escape,
-    validate_identifier, validate_relative_component,
+    MAX_IDENTIFIER_LEN, MAX_RETRY_AFTER, clamp_retry_after, contained_join, is_safe_operand,
+    reject_option_like, reject_symlink_components, reject_symlink_escape, validate_identifier,
+    validate_relative_component,
 };
 
 // ---------------------------------------------------------------------------
@@ -237,29 +237,4 @@ fn test_guard_clamp_retry_after_bounds_both_ends() {
         MAX_RETRY_AFTER
     );
     assert_eq!(clamp_retry_after(Duration::ZERO), Duration::from_secs(1));
-}
-
-// ---------------------------------------------------------------------------
-// T-067: capped reads
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_guard_cap_read_keeps_the_prefix_and_respects_the_budget() {
-    assert_eq!(cap_read(b"hello world", 5), "hello");
-    assert_eq!(cap_read(b"hello", 99), "hello");
-    assert_eq!(cap_read(b"hello", 0), "");
-}
-
-/// A cut point inside a multibyte character must drop the split character and
-/// must not panic (the pre-MS-05 byte-slice form could panic).
-#[test]
-fn test_guard_cap_read_tolerates_a_split_utf8_boundary() {
-    let text = "café";
-    let bytes = text.as_bytes();
-    // Byte index 4 falls inside the two-byte 'é'.
-    assert_eq!(cap_read(bytes, 4), "caf");
-
-    let emoji = "a🦀b";
-    let out = cap_read(emoji.as_bytes(), 3);
-    assert_eq!(out, "a");
 }

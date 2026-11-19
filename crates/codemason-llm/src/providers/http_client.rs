@@ -178,15 +178,6 @@ pub fn sse_buffer_exceeded(buffer: &str) -> bool {
     buffer.len() > MAX_SSE_BUFFER_BYTES
 }
 
-/// Append a chunk to an SSE accumulation buffer, returning `false` when the
-/// buffer is now over [`MAX_SSE_BUFFER_BYTES`].
-///
-/// SEC-codemason-llm-004 (SECTASKS T-028).
-pub fn append_stream_chunk_capped(buffer: &mut String, chunk: &str) -> bool {
-    buffer.push_str(chunk);
-    !sse_buffer_exceeded(buffer)
-}
-
 /// Append a raw network chunk and enforce the accumulation cap in one step.
 ///
 /// This is the shape nine provider stream loops used to spell out by hand:

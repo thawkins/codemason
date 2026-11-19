@@ -86,7 +86,7 @@ pub mod sanitize {
 ///
 /// Re-exported from `codemason_types::guard` so the tools crates share one
 /// implementation of `reject_option_like`, `contained_join`,
-/// `validate_identifier`, and `cap_read` instead of re-deriving them.
+/// and `validate_identifier` instead of re-deriving them.
 pub mod guard {
     pub use codemason_types::guard::*;
 }
