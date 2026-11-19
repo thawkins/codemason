@@ -7,7 +7,7 @@
 //! exercise the full set/get/delete cycle, the re-wrap of a legacy value on
 //! first read, and the registry seed path.
 
-use codemason_storage::storage::{Storage, deobfuscate_key, encrypt_key};
+use codemason_storage::storage::{Storage, decrypt_key, encrypt_key};
 
 fn storage() -> Storage {
     Storage::open_in_memory().expect("storage")
@@ -90,8 +90,8 @@ fn legacy_v2_value_is_migrated_on_first_read() {
     // payload under the legacy prefix is not possible - instead assert the
     // empty/failure behaviour of the decoder and that a v2-looking value with
     // an invalid body re-wraps only on a successful decode.
-    assert_eq!(deobfuscate_key("v2:not-base64!!"), "");
-    assert_eq!(deobfuscate_key("v2:"), "");
+    assert_eq!(decrypt_key("v2:not-base64!!"), "");
+    assert_eq!(decrypt_key("v2:"), "");
 
     // A well-formed v3 value round-trips through the store unchanged.
     let storage = storage();
@@ -194,7 +194,7 @@ fn legacy_v1_row_is_decoded_and_re_wrapped() {
     let v1_blob = b64_encode(&xored);
 
     // The public decoder recovers the plaintext from a v1 blob.
-    assert_eq!(deobfuscate_key(&v1_blob), plaintext);
+    assert_eq!(decrypt_key(&v1_blob), plaintext);
 
     // A stored v1 row is decrypted and migrated to the AEAD format on read.
     let storage = storage();
