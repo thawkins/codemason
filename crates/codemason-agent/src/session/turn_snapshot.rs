@@ -25,7 +25,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 
 /// How long one git invocation may run before it is killed.
-const GIT_TIMEOUT: Duration = Duration::from_secs(120);
+const GIT_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Process-wide snapshot store root; unset means snapshots are disabled.
 static STORE_ROOT: OnceLock<PathBuf> = OnceLock::new();
