@@ -323,6 +323,8 @@ mod test_log_window_otel_export;
 mod test_loop_dialog;
 #[path = "test_markdown.rs"]
 mod test_markdown;
+#[path = "test_markdown_images.rs"]
+mod test_markdown_images;
 #[path = "test_markdown_table.rs"]
 mod test_markdown_table;
 #[path = "test_markdown_table_rows.rs"]
@@ -577,6 +579,8 @@ mod test_subagent_events;
 mod test_subagent_lifecycle_review;
 #[path = "test_subagent_step_log.rs"]
 mod test_subagent_step_log;
+#[path = "test_svg_attachments.rs"]
+mod test_svg_attachments;
 #[path = "test_swarm_more.rs"]
 mod test_swarm_more;
 #[path = "test_swarm_offload.rs"]

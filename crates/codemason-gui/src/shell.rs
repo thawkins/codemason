@@ -563,7 +563,7 @@ impl Shell {
                 .request_repaint_after(std::time::Duration::from_secs_f64(next));
         }
         dialogs::show(ui.ctx(), &mut self.app);
-        dialogs::image_view::show(ui.ctx());
+        dialogs::image_view::show(ui.ctx(), &palette);
         self.close.show(ui.ctx(), &mut self.app);
         if matches!(self.frame, craft_window::policy::Frame::Integrated(_)) {
             crate::title_bar::resize_edges(ui.ctx());

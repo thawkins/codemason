@@ -46,12 +46,13 @@
 //! [`crate::styled_text`].
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use codemason_agent::message::{Message, Role as MessageRole};
 use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
-use codemason_app_core::markdown::has_table;
+use codemason_app_core::markdown::{MarkdownPiece, has_table, split_standalone_images};
 use codemason_app_core::message_blocks::{ToolState, TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_app_core::message_text::canonical_tool_name;
@@ -61,10 +62,12 @@ use codemason_types::sanitize_terminal::sanitize_terminal;
 use egui::{FontId, Rect, Role, ScrollArea, Sense, WidgetInfo, pos2, vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
+use crate::dialogs::image_view::ImageRef;
 use crate::icons::{Icon, icon_label};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 use crate::panels::code_block::{CodeAction, code_block_ui};
+use crate::panels::mermaid::{is_mermaid, mermaid_ui};
 use crate::styled_text::{Bold, FONT_SIZE, styled_to_layout_job};
 
 /// How many times wider than egui's noninteractive stroke the border of a
@@ -89,6 +92,13 @@ const CARD_PADDING: f32 = space::SM + space::SM;
 /// The largest side of an image thumbnail, in points.
 pub const THUMBNAIL_SIZE: f32 = 160.0;
 
+/// The widest an image in a reply is drawn, in points: about a line of
+/// reading text.
+pub const INLINE_IMAGE_WIDTH: f32 = 640.0;
+
+/// The tallest an image in a reply is drawn, in points.
+pub const INLINE_IMAGE_HEIGHT: f32 = 480.0;
+
 /// Width of the caret after a reply that is still streaming, in points.
 const CARET_WIDTH: f32 = 7.0;
 
@@ -98,7 +108,7 @@ enum BlockAction {
     /// Put this code into the prompt.
     Insert(String),
     /// Show this image at full size.
-    Enlarge(std::path::PathBuf),
+    Enlarge(ImageRef),
     /// Open the Diff pane on these files, with this one selected.
     OpenDiff(Vec<codemason_app_core::diff_view::FileDiff>, usize),
 }
@@ -260,7 +270,7 @@ pub struct MessagesView {
     under_pointer: Option<usize>,
     /// An image a thumbnail click asked to show at full size, for the caller
     /// to take with [`MessagesView::take_enlarge`].
-    pending_enlarge: Option<std::path::PathBuf>,
+    pending_enlarge: Option<ImageRef>,
     /// The verbosity the entries' blocks were grouped for; a change
     /// regroups every message.
     verbosity: Option<Verbosity>,
@@ -454,6 +464,7 @@ impl MessagesView {
                         node,
                         source.processing,
                         app.transcript_prefs,
+                        &app.cwd_path,
                     );
                     if to_bottom {
                         // Scroll to the end of the content; once there, the
@@ -505,8 +516,8 @@ impl MessagesView {
             app.input_edited(end);
             ctx.memory_mut(|m| m.request_focus(crate::panels::prompt::prompt_id()));
         }
-        if let Some(path) = self.take_enlarge() {
-            crate::dialogs::image_view::open(ctx, path);
+        if let Some(image) = self.take_enlarge() {
+            crate::dialogs::image_view::open(ctx, image);
         }
         if let Some((files, selected)) = self.pending_diff.take() {
             app.diff_pane.open(files, selected);
@@ -515,7 +526,7 @@ impl MessagesView {
 
     /// The image a thumbnail click asked to show at full size since the last
     /// call, if any.
-    pub fn take_enlarge(&mut self) -> Option<std::path::PathBuf> {
+    pub fn take_enlarge(&mut self) -> Option<ImageRef> {
         self.pending_enlarge.take()
     }
 
@@ -728,6 +739,7 @@ impl MessagesView {
         node: egui::Id,
         processing: bool,
         prefs: TranscriptPrefs,
+        root: &Path,
     ) {
         let width = ui.available_width().max(1.0);
         if self.offsets_dirty {
@@ -766,12 +778,13 @@ impl MessagesView {
                 bold,
                 streaming: processing && index == last,
                 thinking: prefs.thinking,
+                root,
             };
             draw_message(&mut child, entry, style, &mut self.markdown, &mut actions);
             for action in actions {
                 match action {
                     BlockAction::Insert(code) => self.pending_insert = Some(code),
-                    BlockAction::Enlarge(path) => self.pending_enlarge = Some(path),
+                    BlockAction::Enlarge(image) => self.pending_enlarge = Some(image),
                     BlockAction::OpenDiff(files, selected) => {
                         self.pending_diff = Some((files, selected));
                     }
@@ -810,6 +823,9 @@ struct BlockStyle<'a> {
     streaming: bool,
     /// How thinking blocks are shown.
     thinking: ThinkingDisplay,
+    /// The session's folder: relative image paths in replies resolve
+    /// against it.
+    root: &'a Path,
 }
 
 /// Draw one message: its frame for the role, then its blocks.
@@ -879,6 +895,7 @@ fn draw_blocks(
         bold,
         streaming,
         thinking,
+        root,
     } = style;
     ui.spacing_mut().item_spacing.y = space::XS;
     let mut drawn = 0;
@@ -905,14 +922,31 @@ fn draw_blocks(
         match block {
             TranscriptBlock::Markdown(text) => {
                 ui.push_id(index, |ui| {
-                    if has_table(text) {
-                        // egui_commonmark frames a table in egui's
-                        // noninteractive stroke; draw it wider here only.
-                        let border = &mut ui.visuals_mut().widgets.noninteractive.bg_stroke;
-                        border.width *= TABLE_BORDER_SCALE;
+                    // An image alone in its paragraph is drawn here, at
+                    // reading width and clickable; the rest is markdown.
+                    for (piece_index, piece) in split_standalone_images(text).iter().enumerate() {
+                        match piece {
+                            MarkdownPiece::Markdown(text) => ui.push_id(piece_index, |ui| {
+                                markdown_ui(ui, markdown, text, root);
+                            }),
+                            MarkdownPiece::Image { alt, src } => ui.push_id(piece_index, |ui| {
+                                if let Some(path) = reply_image_ui(ui, alt, src, root, palette) {
+                                    actions.push(BlockAction::Enlarge(ImageRef::file(&path)));
+                                }
+                            }),
+                        };
                     }
-                    CommonMarkViewer::new().show(ui, markdown, text);
                 });
+            }
+            TranscriptBlock::Code { lang, text } if is_mermaid(lang.as_deref()) => {
+                let id = ui.scope_id().with(("mermaid", index));
+                let outcome = mermaid_ui(ui, id, text, palette, streaming);
+                if let Some(image) = outcome.enlarge {
+                    actions.push(BlockAction::Enlarge(image));
+                }
+                if let Some(CodeAction::Insert(code)) = outcome.code {
+                    actions.push(BlockAction::Insert(code));
+                }
             }
             TranscriptBlock::Code { lang, text } => {
                 let id = ui.scope_id().with(("code", index));
@@ -940,26 +974,13 @@ fn draw_blocks(
                 ..
             } => tool_ui(ui, id, name, lines, status_label, *state, style),
             TranscriptBlock::Image { name, path } => {
-                let uri = format!("file://{}", path.display());
-                let alt = format!("Image: {name}");
-                // A file that cannot be loaded (gone, or a format the
-                // window cannot decode) is named instead of drawn.
-                let loadable = ui
-                    .ctx()
-                    .try_load_image(&uri, egui::load::SizeHint::default())
-                    .is_ok();
-                let response = if loadable {
-                    let image = egui::Image::new(uri)
-                        .max_size(vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
-                        .corner_radius(radius::SM)
-                        .alt_text(alt)
-                        .sense(Sense::CLICK);
-                    ui.add(image).on_hover_text(name.as_str())
-                } else {
-                    ui.label(egui::RichText::new(block.plain_text()).color(palette.info))
-                };
-                if loadable && response.clicked() {
-                    actions.push(BlockAction::Enlarge(path.clone()));
+                let size = vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
+                if image_ui(ui, path, name, size, ImageFit::Fill) {
+                    actions.push(BlockAction::Enlarge(ImageRef::file(path)));
+                } else if !loadable(ui, path) {
+                    // A file that cannot be loaded (gone, or a format the
+                    // window cannot decode) is named instead of drawn.
+                    ui.label(egui::RichText::new(block.plain_text()).color(palette.info));
                 }
             }
         }
@@ -969,6 +990,144 @@ fn draw_blocks(
         let height = ui.text_style_height(&egui::TextStyle::Body);
         let (rect, _) = ui.allocate_exact_size(vec2(CARET_WIDTH, height), Sense::hover());
         ui.painter().rect_filled(rect, 1.0, palette.accent);
+    }
+}
+
+/// Draw `text` as markdown, with relative image paths resolved against
+/// the session's folder (`root`) rather than the process's.
+fn markdown_ui(ui: &mut egui::Ui, cache: &mut CommonMarkCache, text: &str, root: &Path) {
+    if has_table(text) {
+        // egui_commonmark frames a table in egui's noninteractive stroke;
+        // draw it wider here only.
+        let border = &mut ui.visuals_mut().widgets.noninteractive.bg_stroke;
+        border.width *= TABLE_BORDER_SCALE;
+    }
+    CommonMarkViewer::new()
+        .default_implicit_uri_scheme(format!("file://{}/", root.display()))
+        .show(ui, cache, text);
+}
+
+/// Where an image in a reply is read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplyImageSource {
+    /// A file: an absolute path, a path relative to the session's folder,
+    /// or a `file://` URL.
+    File(PathBuf),
+    /// A web (or other non-file) URL, which the window does not load: it
+    /// would tell that server the reply was read.
+    NotLoaded,
+}
+
+/// Resolve an image source written in a reply.
+///
+/// # Arguments
+///
+/// * `src` - the source as written in `![alt](src)`.
+/// * `root` - the session's folder, for relative paths.
+///
+/// # Returns
+///
+/// The file to read, or [`ReplyImageSource::NotLoaded`] for a URL of any
+/// scheme but `file`.
+#[must_use]
+pub fn reply_image_source(src: &str, root: &Path) -> ReplyImageSource {
+    if let Some(path) = src.strip_prefix("file://") {
+        return ReplyImageSource::File(PathBuf::from(path));
+    }
+    if src.contains("://") || src.starts_with("data:") {
+        return ReplyImageSource::NotLoaded;
+    }
+    let path = Path::new(src);
+    ReplyImageSource::File(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    })
+}
+
+/// Whether the window can load the image file at `path`.
+fn loadable(ui: &egui::Ui, path: &Path) -> bool {
+    let uri = format!("file://{}", path.display());
+    ui.ctx()
+        .try_load_image(&uri, egui::load::SizeHint::default())
+        .is_ok()
+}
+
+/// How an image is fitted into its box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageFit {
+    /// Fill the box, keeping the image's shape (a thumbnail).
+    Fill,
+    /// Keep the image's own size, scaling down only to fit the box.
+    Shrink,
+}
+
+/// Draw the image file at `path` within `max_size`, clickable, with `name`
+/// as its accessible text and tooltip; nothing when it cannot be loaded.
+///
+/// # Returns
+///
+/// `true` when it was clicked.
+fn image_ui(
+    ui: &mut egui::Ui,
+    path: &Path,
+    name: &str,
+    max_size: egui::Vec2,
+    fit: ImageFit,
+) -> bool {
+    if !loadable(ui, path) {
+        return false;
+    }
+    let image = egui::Image::new(format!("file://{}", path.display()));
+    let image = match fit {
+        ImageFit::Fill => image,
+        ImageFit::Shrink => image.fit_to_original_size(1.0),
+    };
+    let image = image
+        .max_size(max_size)
+        .corner_radius(radius::SM)
+        .alt_text(format!("Image: {name}"))
+        .sense(Sense::CLICK);
+    ui.add(image).on_hover_text(name).clicked()
+}
+
+/// Draw an image that stood alone in a reply's paragraph, at reading width
+/// (at most [`INLINE_IMAGE_WIDTH`] by [`INLINE_IMAGE_HEIGHT`]); one that
+/// cannot be shown is named, with why.
+///
+/// # Returns
+///
+/// The image's file when it was clicked, to show at full size.
+fn reply_image_ui(
+    ui: &mut egui::Ui,
+    alt: &str,
+    src: &str,
+    root: &Path,
+    palette: &Palette,
+) -> Option<PathBuf> {
+    let name = if alt.is_empty() { src } else { alt };
+    let note = |ui: &mut egui::Ui, why: &str| {
+        ui.label(egui::RichText::new(format!("[image: {name}] {why}")).color(palette.info));
+    };
+    match reply_image_source(src, root) {
+        ReplyImageSource::NotLoaded => {
+            note(ui, "(web images are not loaded)");
+            None
+        }
+        ReplyImageSource::File(path) => {
+            let size = vec2(
+                ui.available_width().min(INLINE_IMAGE_WIDTH),
+                INLINE_IMAGE_HEIGHT,
+            );
+            if image_ui(ui, &path, name, size, ImageFit::Shrink) {
+                Some(path)
+            } else {
+                if !loadable(ui, &path) {
+                    note(ui, "(cannot be shown)");
+                }
+                None
+            }
+        }
     }
 }
 

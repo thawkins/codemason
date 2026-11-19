@@ -2066,6 +2066,22 @@ or paste an image to attach it from the clipboard, or use **File > Attach
 Images...** for the native file dialog. Transcript text is not selectable; `/clip`
 copies the whole transcript.
 
+Images and diagrams in the transcript:
+
+- An attached image shows as a thumbnail; click it to open the full-size view
+  (**Actual size** / **Fit to window**, **Close**).
+- An image a reply writes on its own line, `![alt](path)`, shows inline at
+  reading width; a relative path is read from the session's folder. Web images
+  (`https://...`) are not loaded and are named instead.
+- A ```` ```mermaid ```` block in a reply is drawn as the diagram (once the reply
+  has finished); **Show source** swaps it for the code, and a click opens it at
+  full size. A diagram that does not parse shows its source and the error.
+- PNG, JPEG, GIF, WebP and SVG images are shown.
+- An SVG can be attached like any image (**File > Attach Images...** or a
+  pasted path): it is converted to a PNG (twice its size, at most 2048 pixels
+  on its longest side) and the PNG is sent, since models take raster images
+  only.
+
 ### Bang Commands
 
 Prefix a prompt with `!` to run a shell command directly. The command output

@@ -365,6 +365,77 @@ pub fn prune_clipboard_temp_files_in(
     Ok(removed)
 }
 
+/// The longest side, in pixels, an SVG attachment is rasterised to.
+pub const SVG_ATTACHMENT_MAX_SIDE: u32 = 2048;
+
+/// Rasterise the SVG file at `svg` to a PNG temp file, for an attachment:
+/// providers take raster images only. The image keeps its shape; it is drawn
+/// at twice its own size (sharper on a model's screen-sized input) unless
+/// that would pass [`SVG_ATTACHMENT_MAX_SIDE`], which caps it.
+///
+/// The PNG is saved where pasted images are (`target/temp/`, as
+/// `codemason_paste_*.png`), so the same pruning removes it later.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, is not valid SVG, has no
+/// size, or the PNG cannot be written.
+pub fn svg_to_png_temp(svg: &std::path::Path) -> Result<PathBuf> {
+    use resvg::{tiny_skia, usvg};
+    let data = std::fs::read(svg)?;
+    let mut options = usvg::Options {
+        resources_dir: svg.parent().map(std::path::Path::to_path_buf),
+        ..usvg::Options::default()
+    };
+    options.fontdb_mut().load_system_fonts();
+    let tree = usvg::Tree::from_data(&data, &options)
+        .map_err(|e| anyhow::anyhow!("not a valid SVG: {e}"))?;
+    let size = tree.size();
+    let longest = size.width().max(size.height());
+    if longest <= 0.0 {
+        anyhow::bail!("the SVG has no size");
+    }
+    let scale = (SVG_ATTACHMENT_MAX_SIDE as f32 / longest).min(2.0);
+    let width = (size.width() * scale).round().max(1.0) as u32;
+    let height = (size.height() * scale).round().max(1.0) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| anyhow::anyhow!("cannot draw a {width}x{height} image"))?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    // tiny-skia keeps premultiplied alpha; PNG wants it straight.
+    let rgba: Vec<u8> = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| anyhow::anyhow!("rasterised SVG has the wrong size"))?;
+    let temp_dir = PASTE_DIR_OVERRIDE
+        .with(|d| d.borrow().clone())
+        .unwrap_or_else(project_temp_dir);
+    let tmp_file = tempfile::Builder::new()
+        .prefix("codemason_paste_")
+        .suffix(".png")
+        .tempfile_in(&temp_dir)
+        .map_err(|e| anyhow::anyhow!("failed to create temp file: {e}"))?;
+    image
+        .write_to(
+            &mut std::io::BufWriter::new(tmp_file.as_file()),
+            image::ImageFormat::Png,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to write PNG: {e}"))?;
+    let (_, path) = tmp_file
+        .keep()
+        .map_err(|e| anyhow::anyhow!("failed to keep temp file: {e}"))?;
+    Ok(path)
+}
+
 /// Encode `arboard::ImageData` (raw RGBA pixels) as a PNG saved to a
 /// securely-created temp file under `target/temp/`.
 ///

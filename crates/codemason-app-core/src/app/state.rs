@@ -110,14 +110,16 @@ where
     Ok(())
 }
 
-/// Returns `true` if `path` has a recognised image file extension.
+/// Returns `true` if `path` has a recognised image file extension. An SVG
+/// counts: it is rasterised to PNG when attached
+/// ([`crate::clipboard::svg_to_png_temp`]).
 pub fn is_image_path(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .as_deref(),
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif")
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "svg")
     )
 }
 

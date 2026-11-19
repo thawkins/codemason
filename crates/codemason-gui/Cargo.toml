@@ -32,8 +32,15 @@ egui = { workspace = true }
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 # Thumbnails of attached images in the transcript (`file://` URIs, decoded
 # by `image` with the workspace's formats).
-egui_extras = { version = "0.37", default-features = false, features = ["file", "image"] }
-image = { workspace = true }
+# `svg` and `svg_text` rasterise rendered Mermaid diagrams (resvg, with
+# the system's fonts for their labels).
+egui_extras = { version = "0.37", default-features = false, features = ["file", "image", "svg", "svg_text"] }
+# Mermaid diagrams in the transcript, rendered to SVG in pure Rust (MIT);
+# no CLI and no PNG writer (`default-features = false`).
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+# JPEG, GIF and WebP too: transcript images (attachments, images in replies)
+# come in those formats; the workspace default is PNG only.
+image = { workspace = true, features = ["jpeg", "gif", "webp"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

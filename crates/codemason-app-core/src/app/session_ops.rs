@@ -5227,13 +5227,47 @@ impl App {
     /// Add an existing image file to the pending attachments, warning when
     /// it lies outside the working and home directories. `source` names
     /// where the path came from in the log line.
+    ///
+    /// An SVG is rasterised to a PNG first (providers take raster images
+    /// only) and the PNG is attached; one that cannot be read is not
+    /// attached, and that is logged.
     fn stage_image_path(&mut self, path: std::path::PathBuf, source: &str) {
         self.warn_if_path_outside_safe_scope(&path);
+        let is_svg = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
+        let attached = if is_svg {
+            match crate::clipboard::svg_to_png_temp(&path) {
+                Ok(png) => {
+                    self.push_log_no_agent(
+                        LogLevel::Info,
+                        format!(
+                            "[attach] SVG from {source} converted to PNG: {} -> {}",
+                            path.display(),
+                            png.display()
+                        ),
+                    );
+                    png
+                }
+                Err(e) => {
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!("[attach] Could not attach SVG {}: {e}", path.display()),
+                    );
+                    return;
+                }
+            }
+        } else {
+            path
+        };
         self.push_log_no_agent(
             LogLevel::Info,
-            format!("[attach] Image attached from {source}: {}", path.display()),
+            format!(
+                "[attach] Image attached from {source}: {}",
+                attached.display()
+            ),
         );
-        self.session.pending_attachments.push(path);
+        self.session.pending_attachments.push(attached);
     }
 
     /// Log a warning when a clipboard-resolved image path lies outside the
