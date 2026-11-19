@@ -77,14 +77,14 @@ fn test_panel_shows_sent_to_model_row() {
         "panel must show the 'Sent to model' row; rendered:\n{rendered}"
     );
     assert!(
-        rendered.contains("45.0ktk"),
+        rendered.contains("45.0k"),
         "panel must show the provider-reported input token count; rendered:\n{rendered}"
     );
 }
 
 #[test]
 fn test_panel_sent_to_model_zero_before_first_turn() {
-    // Before any TokenUsage event the row shows a dimmed 0tk count without
+    // Before any TokenUsage event the row shows a dimmed 0 count without
     // a percentage bar.
     let mut app = support::make_app();
     app.show_context_panel = true;

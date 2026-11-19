@@ -25,7 +25,7 @@ use codemason_gui::panels::context::CONTEXT_LABEL;
 use codemason_gui::panels::log::LOG_LABEL;
 use codemason_gui::panels::profile::PROFILE_LABEL;
 use codemason_gui::panels::prompt::PROMPT_LABEL;
-use codemason_gui::panels::sessions::SESSIONS_LABEL;
+use codemason_gui::panels::sessions::{SESSIONS_LABEL, tab_title};
 use codemason_gui::panels::status_bar::STATUS_BAR_LABEL;
 use craft_keymap::Platform;
 use craft_ui::docking::{Location, PanelState, Placement, Zone};
@@ -293,8 +293,10 @@ fn test_log_panel_shows_tracing_lines() {
     rig.harness.run();
 
     assert!(log_shown(&rig.harness));
-    rig.harness.get_by_label_contains("WRN disk nearly full");
-    rig.harness.get_by_label_contains("INF hello from tracing");
+    rig.harness
+        .get_by_label_contains("warn    disk nearly full");
+    rig.harness
+        .get_by_label_contains("info    hello from tracing");
 }
 
 #[test]
@@ -449,8 +451,9 @@ fn test_dock_closing_the_sessions_tab_hides_the_sidebar() {
     let mut rig = rig(|_, app| app.sidebar.visible = true);
     rig.harness.run();
 
+    let tab = tab_title(rig.harness.state_mut().app_mut());
     rig.harness
-        .get_by_role_and_label(Role::Tab, SESSIONS_LABEL)
+        .get_by_role_and_label(Role::Tab, &tab)
         .click_secondary();
     rig.harness.run();
     rig.harness.get_by_label("Close Panel").click();

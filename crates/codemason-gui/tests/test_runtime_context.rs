@@ -90,7 +90,7 @@ fn test_provider_key_dialog_cancel_outside_the_runtime() {
 
 #[test]
 fn test_sidebar_new_session_click_outside_the_runtime() {
-    // A click on the sidebar's "+ New session" row runs
+    // A click on the sidebar's New session row (found by its Ctrl+N key) runs
     // `sessions_sidebar_state::click_row` straight from the drawing code. It
     // opens a session, whose start announces the instruction files with
     // `spawn_blocking` (`App::announce_session_startup`): the reported
@@ -100,7 +100,7 @@ fn test_sidebar_new_session_click_outside_the_runtime() {
         |harness| {
             harness.run();
             let before = harness.state().app().session.session_id.clone();
-            harness.get_by_label_contains("+ New session").click();
+            harness.get_by_label_contains("Ctrl+N").click();
             harness.run();
             assert_ne!(
                 harness.state().app().session.session_id,
@@ -121,7 +121,7 @@ fn test_show_alone_enters_the_runtime() {
         |harness| {
             harness.run();
             let before = harness.state().app().session.session_id.clone();
-            harness.get_by_label_contains("+ New session").click();
+            harness.get_by_label_contains("Ctrl+N").click();
             harness.run();
             assert_ne!(
                 harness.state().app().session.session_id,

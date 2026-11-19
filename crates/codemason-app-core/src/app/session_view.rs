@@ -340,7 +340,7 @@ pub struct SessionView {
     /// The finalising swarm's task auto-completion while it runs off the
     /// frontend's thread (`App::poll_swarm_completion`); `Some` is the
     /// in-flight flag.
-    pub(crate) swarm_autocomplete: Option<crate::app::swarm::SwarmAutoComplete>,
+    pub(super) swarm_autocomplete: Option<crate::app::swarm::SwarmAutoComplete>,
     /// Session ID of the currently selected agent in the agents panel.
     /// When set, messages and logs are filtered to show only from this session.
     /// When `None`, shows primary session messages/logs.

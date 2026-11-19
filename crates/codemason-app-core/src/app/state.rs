@@ -3776,7 +3776,7 @@ pub struct App {
     pub code_index_watch_session: Option<codemason_codeindex::WatchSession>,
     /// Receives the background code-index startup result
     /// ([`App::start_background_services`]); `None` once applied.
-    pub(crate) code_index_startup_rx:
+    pub(super) code_index_startup_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<super::startup::CodeIndexStartupResult>>,
     /// Fallback one-shot reindex thread, when the code-index watcher could
     /// not start; detached on quit.

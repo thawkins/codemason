@@ -4,9 +4,10 @@
 //! `memory_cache_tags`, refreshed by `App::refresh_memory_cache` only when a
 //! memory change marked them dirty) and the cursor (`memory_cursor`). This
 //! panel draws what the TUI's memory panel draws: the count and total size,
-//! then the memories grouped by category, each as `#id confidence bytes
-//! preview` with its tags and source on indented lines below, and the key
-//! hint. With no memories it shows `(no memories for this project)`.
+//! then the memories grouped under a capitalised category heading, each as
+//! `#id confidence bytes preview` with its tags and source on indented lines
+//! below, and the key hint. With no memories it says what the panel will
+//! hold ([`EMPTY_TEXT`], [`EMPTY_HINT`]) instead.
 //!
 //! # Keys and clicks
 //!
@@ -38,30 +39,47 @@ use crate::palette::Palette;
 /// Accessible label of the memory list.
 pub const MEMORY_LABEL: &str = "Memory";
 
-/// Shown while the project has no memories, as in the TUI.
-pub const EMPTY_TEXT: &str = "(no memories for this project)";
+/// Shown while the project has no memories.
+pub const EMPTY_TEXT: &str = "No memories for this project yet";
 
-/// The key hint under the list, as in the TUI.
-pub const KEY_HINT: &str = "^v select  Enter open  Delete delete";
+/// The line under [`EMPTY_TEXT`]: what will fill the panel.
+pub const EMPTY_HINT: &str = "The agent saves what it learns here.";
+
+/// The key hint under the list, worded as the Agents window's legend.
+pub const KEY_HINT: &str = "Up/Down select  Enter open  Del delete";
+
+/// `category` with its first letter in upper case (`fact` -> `Fact`).
+fn heading(category: &str) -> String {
+    let mut chars = category.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
 
 /// The panel's lines, with the memory row (cursor index) each line selects.
 fn lines(app: &App, palette: &Palette) -> Vec<(Line, Option<usize>)> {
     let entries = &app.memory_cache_entries;
+    if entries.is_empty() {
+        return vec![
+            (Line::new().push(EMPTY_TEXT, palette.text), None),
+            (Line::new().push(EMPTY_HINT, palette.muted), None),
+        ];
+    }
     let bytes: usize = entries.iter().map(|r| r.content.len()).sum();
+    let noun = if app.memory_cache_count == 1 {
+        "memory"
+    } else {
+        "memories"
+    };
     let mut lines = vec![
         (
             Line::new()
-                .push("Structured memories: ", palette.muted)
                 .push(app.memory_cache_count.to_string(), palette.text)
-                .push(format!(" ({bytes} bytes)"), palette.muted),
+                .push(format!(" {noun}, {bytes} bytes"), palette.muted),
             None,
         ),
         (Line::new(), None),
     ];
-    if entries.is_empty() {
-        lines.push((Line::new().push(EMPTY_TEXT, palette.muted), None));
-        return lines;
-    }
     let magenta = palette.color(ThemeColor::Categorical(4));
     // The cache is sorted by category then id, so the cursor index of a row
     // is its position in the cache.
@@ -75,7 +93,7 @@ fn lines(app: &App, palette: &Palette) -> Vec<(Line, Option<usize>)> {
     }
     for (category, rows) in &by_category {
         lines.push((
-            Line::new().push(format!("{category} ({})", rows.len()), magenta),
+            Line::new().push(format!("{} ({})", heading(category), rows.len()), magenta),
             None,
         ));
         for (index, row) in rows {
