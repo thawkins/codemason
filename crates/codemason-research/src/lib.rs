@@ -87,7 +87,6 @@ pub mod search_budget;
 pub mod session;
 pub mod source;
 pub mod source_age;
-pub mod source_registry;
 pub mod source_vault;
 pub mod state;
 pub mod status;
@@ -205,7 +204,6 @@ pub use session::{
 };
 pub use source::{LocalSourceKind, Source};
 pub use source_age::{AgeSpan, AgeSpanError, AgeUnit};
-pub use source_registry::{BuiltinSourceRegistry, ResearchSourceKind, SourceRegistry};
 pub use source_vault::{NewVaultSource, SourceVault, SourceVaultError, VaultSource};
 pub use state::{
     EvidenceGap, ResearchPlan, ResearchState, StateCounts, SubQuestion, SubQuestionStatus,
