@@ -74,6 +74,8 @@
 
 ### Changed
 
+- Changed: the unused `codemason_llm::providers::http_client::MAX_RETRY_AFTER` alias is removed; `Retry-After` is still clamped to 30 s through `codemason_types::guard::clamp_retry_after`, the single source of truth for `MAX_RETRY_AFTER`. No test edits were needed (#10, LC-12).
+
 - Changed: the `chat_request_payload_bytes` compatibility alias in `codemason-agent`'s `session::history` (and its `session::processor` re-export) is removed; callers use `estimate_request_bytes`, which it only delegated to. Sanctioned test edits: `test_history_estimators.rs` drops the alias-equality assert, and `test_session_processor.rs` calls `estimate_request_bytes` directly (#10, AA-10).
 
 - Changed: `slash_codeindex` in `crates/codemason-app-core/src/app/slash.rs` is decomposed in place (797 to 427 lines): the `on`, `off`, `show` and `help` sub-command arms move verbatim into `codeindex_<sub>` methods in the same `impl App`. The `graph`, `godnodes`, `explain`, `path` and `communities` arms stay inline because source-text tests search a fixed window after each of their patterns. Every string literal and pattern is unchanged (#9, car 11d).
