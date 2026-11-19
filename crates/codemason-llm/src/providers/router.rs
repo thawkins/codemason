@@ -18,6 +18,7 @@ use serde_json::Value;
 use super::router_config::RouterConfig;
 use crate::llm::LlmClient;
 use crate::provider::{ModelInfo, Provider, ProviderRegistry};
+use codemason_types::provider_auth::ProviderAuthSource;
 
 /// Virtual provider that implements intelligent model routing.
 ///
@@ -33,7 +34,7 @@ pub struct RouterProvider {
     registry: std::sync::RwLock<Option<Arc<ProviderRegistry>>>,
     /// Optional storage handle for resolving database-backed provider API keys.
     /// Set by the binary/TUI after the registry and storage are created.
-    storage: std::sync::RwLock<Option<Arc<codemason_storage::Storage>>>,
+    storage: std::sync::RwLock<Option<Arc<dyn ProviderAuthSource>>>,
     /// Optional event bus for publishing router lifecycle events.
     event_bus: std::sync::RwLock<Option<Arc<codemason_types::event::EventBus>>>,
 }
@@ -112,18 +113,19 @@ impl RouterProvider {
     /// Called once after storage is initialized. When set, the router will
     /// look up stored API keys for downstream providers (e.g. `ollama_cloud`
     /// keys saved via `codemason auth`) before falling back to environment
-    /// variables.
-    pub fn set_storage(&self, storage: Arc<codemason_storage::Storage>) {
+    /// variables. Any [`ProviderAuthSource`] works; callers pass the
+    /// workspace `Storage`.
+    pub fn set_storage<S: ProviderAuthSource + 'static>(&self, storage: Arc<S>) {
         let mut guard = self
             .storage
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(storage);
+        *guard = Some(storage as Arc<dyn ProviderAuthSource>);
         tracing::info!("Router storage attached");
     }
 
     /// Returns the attached storage handle, if any.
-    pub fn storage(&self) -> Option<Arc<codemason_storage::Storage>> {
+    pub fn storage(&self) -> Option<Arc<dyn ProviderAuthSource>> {
         self.storage
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

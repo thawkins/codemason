@@ -31,6 +31,7 @@ pub mod mdtable;
 pub mod message;
 pub mod panic_guard;
 pub mod permission;
+pub mod provider_auth;
 pub mod read_capped;
 pub mod resource;
 /// Secret-redaction helpers for scrubbing sensitive patterns from text.

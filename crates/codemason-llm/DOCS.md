@@ -8,7 +8,10 @@ Ollama, HuggingFace, Azure, xAI, and a model router).
 
 - codemason-types
 - codemason-config
-- codemason-storage
+
+Stored API keys are read through `codemason_types::provider_auth::ProviderAuthSource`
+(the binary attaches `codemason_storage::Storage`), so there is no `llm -> storage`
+edge; `codemason-storage` is a dev-dependency for `tests/test_openrouter_provider.rs`.
 
 ## External Dependencies
 
