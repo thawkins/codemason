@@ -301,3 +301,11 @@ Total: about 12 to 16 working days. Phases 1 and 2 can run in parallel; 4 and
   The `File` menu bar is removed; its three items are ribbon buttons.
 - The transcript and prompt fill their panes; the 816-point page column
   and desk margins are gone.
+- The title strip shows the focused session's title, read from the
+  sessions sidebar's cached rows (`sessions_sidebar_state::current_title`);
+  `/name` now marks that cache dirty, so a rename shows at once.
+- The ribbon's collapsed state is saved in `gui-ribbon.json`
+  (`ribbon::load_ribbon` / `save_ribbon`).
+- A pane the dock shows fades in over the Material motion time
+  (`material::fade_in_opacity`); the dock has no slide animation, so the
+  panes fade rather than slide.

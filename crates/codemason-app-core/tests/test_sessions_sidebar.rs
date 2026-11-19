@@ -296,3 +296,27 @@ fn test_sessions_sidebar_branch_name_skips_taken_names() {
         assert!(!taken.contains(&name), "{name} is taken");
     }
 }
+
+#[tokio::test]
+async fn test_sessions_sidebar_current_title_follows_name() {
+    use codemason_app_core::sessions_sidebar_state::{current_title, refresh_if_dirty};
+
+    let (mut app, _a, b) = app_with_sidebar().await;
+    refresh_if_dirty(&mut app);
+    let tail: String = b
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    assert_eq!(current_title(&app), Some(format!("untitled {tail}")));
+    // `/name` marks the cache for reload, so the new name is listed.
+    app.execute_slash_command("/name Release prep").await;
+    refresh_if_dirty(&mut app);
+    assert_eq!(current_title(&app).as_deref(), Some("Release prep"));
+    app.execute_slash_command("/name").await;
+    refresh_if_dirty(&mut app);
+    assert_eq!(current_title(&app), Some(format!("untitled {tail}")));
+}

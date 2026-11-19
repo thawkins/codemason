@@ -234,3 +234,19 @@ pub fn motion_time(ctx: &egui::Context) -> f32 {
 pub fn standard_easing(t: f32) -> f32 {
     egui::emath::easing::cubic_out(t)
 }
+
+/// The opacity of something that started appearing `elapsed` seconds ago,
+/// fading in over `duration` seconds with [`standard_easing`].
+///
+/// # Returns
+///
+/// The opacity while the fade runs, or `None` once it is over (or when
+/// `duration` is zero: no motion).
+#[must_use]
+pub fn fade_in_opacity(elapsed: f64, duration: f32) -> Option<f32> {
+    if duration <= 0.0 {
+        return None;
+    }
+    let progress = (elapsed as f32 / duration).max(0.0);
+    (progress < 1.0).then(|| standard_easing(progress))
+}

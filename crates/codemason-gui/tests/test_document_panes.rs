@@ -7,6 +7,7 @@ mod support;
 
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
+use codemason_gui::dock::PaneId;
 use codemason_gui::material::sheet::{ITEM_HEIGHT, drawer_style};
 use codemason_gui::palette::{Palette, rgb};
 use codemason_gui::panels::status_bar::ZOOM_LABEL;
@@ -85,4 +86,36 @@ fn test_document_panes_zoom_slider_keeps_its_arrow_keys() {
     let zoom = harness.ctx.zoom_factor();
     assert!((zoom - 1.02).abs() < 0.011, "{zoom}");
     assert!(harness.get_by_label(ZOOM_LABEL).is_focused());
+}
+
+#[test]
+fn test_document_panes_fade_in_runs_for_the_motion_time() {
+    use codemason_gui::material::{MOTION_DURATION, fade_in_opacity};
+
+    assert_eq!(fade_in_opacity(0.0, MOTION_DURATION), Some(0.0));
+    let half =
+        fade_in_opacity(f64::from(MOTION_DURATION) / 2.0, MOTION_DURATION).expect("still fading");
+    assert!(half > 0.5 && half < 1.0, "{half}");
+    assert_eq!(
+        fade_in_opacity(f64::from(MOTION_DURATION), MOTION_DURATION),
+        None
+    );
+    // No motion: no fade.
+    assert_eq!(fade_in_opacity(0.0, 0.0), None);
+}
+
+#[test]
+fn test_document_panes_a_shown_pane_fades_in() {
+    let (_runtime, mut harness) = harness("codemason-light");
+    // The harness turns egui's animations off; the fade follows them.
+    harness
+        .ctx
+        .all_styles_mut(|style| style.animation_time = 1.0 / 12.0);
+    harness.state_mut().app_mut().show_log = true;
+    // The frame that shows the pane starts its fade: the window keeps
+    // repainting until the fade ends, then settles.
+    harness.step();
+    assert_eq!(harness.state().fading_panes(), [PaneId::Log]);
+    harness.run();
+    assert!(harness.state().fading_panes().is_empty(), "the fade ends");
 }

@@ -376,6 +376,27 @@ fn display_title(id: &str, title: &str) -> String {
     }
 }
 
+/// The display title of the focused session, as the sidebar lists it (its
+/// stored title, or `untitled <id tail>`).
+///
+/// Reads the sidebar's cached rows only, never the database, so a frontend
+/// may call it every frame; call [`refresh_if_dirty`] first for a title
+/// renamed since the last refresh.
+///
+/// # Returns
+///
+/// `None` when no session is focused or the cache does not list it yet.
+#[must_use]
+pub fn current_title(app: &App) -> Option<String> {
+    let id = app.session.session_id.as_deref()?;
+    app.sidebar
+        .groups
+        .iter()
+        .flat_map(|group| group.sessions.iter())
+        .find(|session| session.id == id)
+        .map(|session| display_title(&session.id, &session.title))
+}
+
 /// Builds the rows the sidebar shows, honouring pins, collapse and filter.
 ///
 /// # Arguments

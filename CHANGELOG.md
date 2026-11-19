@@ -4,6 +4,10 @@
 
 ### Added
 
+- Changed: the title strip shows the focused session's name (its `/name`, or `untitled` and its id) instead of the project folder.
+- Added: whether the ribbon is collapsed is remembered across restarts, in `gui-ribbon.json` in the codemason config directory.
+- Added: a side panel fades in over 200 ms when it is shown (off when egui's animation time is zero).
+- Fixed: `/name` now refreshes the sessions sidebar, which kept showing the old title until something else reloaded it.
 - Changed: the word-processor layout (title strip with quick access, ribbon, Material panes and the status-bar zoom slider) is drawn on every theme, in that theme's colours, not only in the `document-*` themes; the ribbon replaces the `File` menu bar on every theme (File > Open project / New folder, Insert > Images). The transcript and the prompt now fill their panes instead of a centred column at most 816 points wide.
 - Fixed: a click on the Diff pane's text gives the pane the keyboard (egui's text selection had cleared the focus the pane asked for), as a click on its empty space does.
 - Changed: the border of a markdown table in the transcript is drawn twice as wide as before (2 pt with the default style). Only replies that contain a table are affected; a horizontal rule or task-list checkbox in the same reply is drawn with the wider line too.

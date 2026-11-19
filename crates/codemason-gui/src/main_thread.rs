@@ -212,6 +212,9 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
             if let Some(path) = dock::layout_path() {
                 shell = shell.with_layout_file(path);
             }
+            if let Some(path) = crate::ribbon::ribbon_path() {
+                shell = shell.with_ribbon_file(path);
+            }
             let platform = craft_keymap::egui::platform(&cc.egui_ctx);
             let (keymap, mut key_warnings) = match keys::keys_path() {
                 Some(path) => keys::load_keymap(platform, &path),
