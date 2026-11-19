@@ -61,3 +61,24 @@ fn test_material_text_field_padding_click_focuses_the_editor() {
     }
     assert!(harness.get_by_label("Session name").is_focused());
 }
+
+#[test]
+fn test_material_text_field_outlined_value_shows_its_value_read_only() {
+    let palette = support_material::palette();
+    let harness = support_material::builder()
+        .with_size(egui::vec2(400.0, 120.0))
+        .build_ui(move |ui| {
+            let field = codemason_gui::material::text_field::outlined_value(
+                ui,
+                &palette,
+                "API key",
+                "sk-1****cdef",
+                true,
+                None,
+                false,
+            );
+            assert!((field.rect.height() - HEIGHT).abs() < 0.5);
+        });
+    let field = harness.get_by_label("API key");
+    assert_eq!(field.value().as_deref(), Some("sk-1****cdef"));
+}

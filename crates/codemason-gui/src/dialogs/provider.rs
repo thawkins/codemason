@@ -31,7 +31,13 @@ use codemason_app_core::text_utils::mask_secret;
 use codemason_config::OtelProtocol;
 use codemason_types::ThinkingLevel;
 
-use super::{key_buttons, modal, plain};
+use super::{material_actions, material_hint, material_modal, plain};
+use crate::material::text_field::outlined_value;
+use crate::metrics::{space, text_size};
+use crate::palette::{palette_for, rgb};
+
+/// Width of the dialog's content, in points.
+const WIDTH: f32 = 440.0;
 
 /// The button that confirms the current step (Enter).
 pub const CONTINUE: &str = "Continue";
@@ -221,7 +227,7 @@ fn view(step: &ProviderSetupStep) -> StepView {
             error,
         } => {
             let mut view = StepView::new(
-                format!("Enter API key - {provider_name}"),
+                format!("{provider_name} API key"),
                 "Enter confirm  Esc cancel",
             );
             view.fields.push(Field {
@@ -486,40 +492,70 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     };
     let view = view(step);
+    let palette = palette_for(app, ctx);
     let mut picked = None;
-    modal(ctx, "codemason_provider_setup", &view.title, |ui| {
-        for line in &view.lines {
-            ui.label(line);
-        }
-        if let Some(choice) = view.choice.as_ref() {
-            if choice.options.is_empty() {
-                ui.weak(choice.empty);
-            } else {
-                let mut selected = choice.selected.min(choice.options.len() - 1);
-                let combo = craft_ui::ComboBox::new("codemason_provider_choice", choice.label)
-                    .width(320.0)
-                    .show_index(ui, &mut selected, choice.options.len(), |i| {
-                        choice.options.get(i).cloned().unwrap_or_default()
-                    });
-                if combo.changed() {
-                    picked = Some(selected);
-                }
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_provider_setup",
+        &view.title,
+        WIDTH,
+        |ui| {
+            for line in &view.lines {
+                ui.label(
+                    egui::RichText::new(line)
+                        .size(text_size::BODY)
+                        .color(rgb(palette.m3.on_surface_variant)),
+                );
             }
-        }
-        for field in &view.fields {
-            ui.horizontal(|ui| {
-                ui.label(if field.active { ">" } else { " " });
-                let label = ui.label(format!("{}:", field.label));
-                ui.monospace(&field.value).labelled_by(label.id);
-            });
-        }
-        if let Some(error) = view.error.as_ref() {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        ui.add_space(crate::metrics::space::SM);
-        key_buttons(ui, &view.buttons);
-        ui.weak(view.hint);
-    });
+            if !view.lines.is_empty() {
+                ui.add_space(space::LG);
+            }
+            if let Some(choice) = view.choice.as_ref() {
+                if choice.options.is_empty() {
+                    ui.label(
+                        egui::RichText::new(choice.empty).color(rgb(palette.m3.on_surface_variant)),
+                    );
+                } else {
+                    let mut selected = choice.selected.min(choice.options.len() - 1);
+                    let combo = craft_ui::ComboBox::new("codemason_provider_choice", choice.label)
+                        .width(320.0)
+                        .show_index(ui, &mut selected, choice.options.len(), |i| {
+                            choice.options.get(i).cloned().unwrap_or_default()
+                        });
+                    if combo.changed() {
+                        picked = Some(selected);
+                    }
+                }
+                ui.add_space(space::LG);
+            }
+            // The step's error is the active field's supporting text, as a
+            // Material field shows it; without fields it stands alone.
+            let error_field = view.fields.iter().position(|f| f.active).unwrap_or(0);
+            for (i, field) in view.fields.iter().enumerate() {
+                let error = view.error.as_deref().filter(|_| i == error_field);
+                outlined_value(
+                    ui,
+                    &palette,
+                    field.label,
+                    &field.value,
+                    field.active,
+                    error,
+                    error.is_some(),
+                );
+                ui.add_space(space::LG);
+            }
+            if view.fields.is_empty()
+                && let Some(error) = view.error.as_ref()
+            {
+                ui.colored_label(rgb(palette.m3.error), error);
+                ui.add_space(space::LG);
+            }
+            material_hint(ui, &palette, view.hint);
+            ui.add_space(space::LG);
+            material_actions(ui, &palette, &view.buttons, true);
+        },
+    );
     if let Some(index) = picked {
         set_selected(app, index);
     }

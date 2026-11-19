@@ -25,7 +25,20 @@ use codemason_app_core::fuzzy::fuzzy_score;
 use codemason_app_core::input_event::Key;
 use egui::Id;
 
-use super::{key_buttons, modal, plain, send_key};
+use super::{material_actions, material_hint, material_modal, plain, send_key};
+use crate::material::list::list_item;
+use crate::material::text_field::{field_id, outlined_text_field};
+use crate::metrics::{space, text_size};
+use crate::palette::{Palette, palette_for, rgb};
+
+/// Width of the dialog's content, in points.
+const WIDTH: f32 = 520.0;
+
+/// Tallest the model list grows before it scrolls, in points.
+const LIST_HEIGHT: f32 = 360.0;
+
+/// The keys the picker answers to.
+const HINT: &str = "Up/Down move  Enter select  Ctrl+F favourite  Esc cancel";
 
 /// Title and accessible label of the dialog.
 pub const MODEL_PICKER_TITLE: &str = "Select model";
@@ -57,7 +70,13 @@ fn filter_id() -> Id {
 /// The id of the filter `TextEdit`, whose state holds its selection.
 #[must_use]
 pub fn filter_field_id() -> Id {
-    Id::unique("codemason_model_filter_field")
+    field_id(FILTER_LABEL)
+}
+
+/// The highlighted row last frame, to scroll a newly highlighted row into
+/// view.
+fn last_selected_id() -> Id {
+    Id::unique("codemason_model_last_selected")
 }
 
 /// The picker's step data: the provider's name, its models and the
@@ -103,7 +122,10 @@ fn filter(ctx: &egui::Context) -> String {
 ///
 /// * `ctx` - the frame's context.
 pub fn reset(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove_temp::<String>(filter_id()));
+    ctx.data_mut(|d| {
+        d.remove_temp::<String>(filter_id());
+        d.remove_temp::<usize>(last_selected_id());
+    });
 }
 
 /// The indices of the models whose name or id fuzzy-matches `filter`, best
@@ -216,77 +238,97 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let Some((provider_name, models, selected)) = step(app) else {
         return false;
     };
+    let palette = palette_for(app, ctx);
     let provider_name = provider_name.to_string();
     let favorites = app.favorite_models();
-    let rows: Vec<(String, String)> = models
+    let rows: Vec<Row> = models
         .iter()
         .map(|m| {
-            let detail = format!(
-                "{}  {}  {}",
-                m.id,
-                context_label(m.context_window),
-                m.cost_tier
-            );
             let favorite = favorites.contains(&format!("{}/{}", m.provider_id, m.id));
             let name = if favorite {
                 format!("{FAVORITE_MARK} {}", m.name)
             } else {
                 m.name.clone()
             };
-            (name, detail)
+            // The id only adds something when the name does not already
+            // carry it (local and cloud Ollama names are their ids).
+            let id = (!m.name.to_lowercase().contains(&m.id.to_lowercase())).then(|| m.id.clone());
+            let detail = format!("{}  {}", context_label(m.context_window), m.cost_tier);
+            Row { name, id, detail }
         })
         .collect();
     let mut text = filter(ctx);
     let mut clicked: Option<(usize, bool)> = None;
     let mut shown = matching(models, &text);
-    modal(ctx, "codemason_model_picker", MODEL_PICKER_TITLE, |ui| {
-        ui.label(format!("Provider: {provider_name}"));
-        let field = ui.horizontal(|ui| {
-            let label = ui.label(FILTER_LABEL);
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut text)
-                    .id(filter_field_id())
-                    .hint_text("type to filter"),
+    let moved = ctx.data_mut(|d| {
+        let last = d.get_temp::<usize>(last_selected_id());
+        d.insert_temp(last_selected_id(), selected);
+        last != Some(selected)
+    });
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_model_picker",
+        MODEL_PICKER_TITLE,
+        WIDTH,
+        |ui| {
+            ui.label(
+                egui::RichText::new(&provider_name)
+                    .size(text_size::BODY)
+                    .color(rgb(palette.m3.on_surface_variant)),
             );
-            field.clone().labelled_by(label.id);
-            field
-        });
-        // The filter takes the typing while the picker is open.
-        if ctx.memory(|m| m.focused().is_none()) {
-            field.inner.request_focus();
-        }
-        shown = matching(models, &text);
-        let list = egui::ScrollArea::vertical()
-            .max_height(320.0)
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    for &i in &shown {
-                        let (name, detail) = &rows[i];
-                        ui.horizontal(|ui| {
-                            let row = ui.selectable_label(i == selected, name);
-                            if row.double_clicked() {
+            ui.add_space(space::LG);
+            let field = outlined_text_field(ui, &palette, FILTER_LABEL, &mut text, None, false);
+            // The filter takes the typing while the picker is open.
+            if ctx.memory(|m| m.focused().is_none()) {
+                field.request_focus();
+            }
+            ui.add_space(space::SM);
+            shown = matching(models, &text);
+            let list = egui::ScrollArea::vertical()
+                .max_height(LIST_HEIGHT)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for &i in &shown {
+                            let row = &rows[i];
+                            let item = list_item(
+                                ui,
+                                &palette,
+                                &row.name,
+                                row.id.as_deref(),
+                                Some(&row.detail),
+                                i == selected,
+                            );
+                            if i == selected && moved {
+                                item.scroll_to_me(None);
+                            }
+                            if item.double_clicked() {
                                 clicked = Some((i, true));
-                            } else if row.clicked() {
+                            } else if item.clicked() {
                                 clicked = Some((i, false));
                             }
-                            ui.weak(detail);
-                        });
-                    }
-                    if shown.is_empty() {
-                        ui.weak("No matching models");
-                    }
-                })
-                .response
-            });
-        list.inner
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, MODELS_LABEL));
-        ui.add_space(crate::metrics::space::SM);
-        ui.add_enabled_ui(!shown.is_empty(), |ui| {
-            key_buttons(ui, &[(SELECT, plain(Key::Enter))]);
-        });
-        key_buttons(ui, &[(CANCEL, plain(Key::Esc))]);
-        ui.weak("Up/Down move  Enter select  Ctrl+F favourite  Esc cancel");
-    });
+                        }
+                        if shown.is_empty() {
+                            empty_state(ui, &palette, &provider_name, &text, models.is_empty());
+                        }
+                    })
+                    .response
+                });
+            list.inner
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, MODELS_LABEL));
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, HINT);
+            ui.add_space(space::LG);
+            material_actions(
+                ui,
+                &palette,
+                &[(SELECT, plain(Key::Enter)), (CANCEL, plain(Key::Esc))],
+                !shown.is_empty(),
+            );
+        },
+    );
     ctx.data_mut(|d| d.insert_temp(filter_id(), text));
     if let Some((i, choose)) = clicked {
         set_selected(app, i);
@@ -301,4 +343,40 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         set_selected(app, first);
     }
     true
+}
+
+/// One model's row: its name (starred when a favourite), its id when the
+/// name does not show it, and its context window and cost tier.
+struct Row {
+    name: String,
+    id: Option<String>,
+    detail: String,
+}
+
+/// What an empty list says: that the provider listed no models (with what
+/// to try), or that nothing matches the filter.
+fn empty_state(ui: &mut egui::Ui, palette: &Palette, provider: &str, filter: &str, none: bool) {
+    let (headline, next) = if none {
+        (
+            format!("No models from {provider}"),
+            "Check its API key and connection with /provider, then try again.".to_string(),
+        )
+    } else {
+        (
+            format!("No models match \"{}\"", filter.trim()),
+            "Change or clear the filter.".to_string(),
+        )
+    };
+    ui.add_space(space::LG);
+    ui.label(
+        egui::RichText::new(headline)
+            .size(text_size::BODY)
+            .color(rgb(palette.m3.on_surface)),
+    );
+    ui.label(
+        egui::RichText::new(next)
+            .size(text_size::SMALL)
+            .color(rgb(palette.m3.on_surface_variant)),
+    );
+    ui.add_space(space::LG);
 }

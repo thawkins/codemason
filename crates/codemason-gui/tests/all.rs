@@ -138,6 +138,8 @@ mod test_material_dialog;
 mod test_material_feedback;
 #[path = "test_material_icon_button.rs"]
 mod test_material_icon_button;
+#[path = "test_material_list.rs"]
+mod test_material_list;
 #[path = "test_material_menu.rs"]
 mod test_material_menu;
 #[path = "test_material_segmented.rs"]

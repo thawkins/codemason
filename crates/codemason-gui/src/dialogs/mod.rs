@@ -475,6 +475,85 @@ pub(crate) fn modal<R>(
         .inner
 }
 
+/// Draw a Material dialog titled `title`, `width` points wide: the
+/// `surface_container_high` surface with its headline, the title as its
+/// accessible label (`Role::Dialog`), and the backdrop.
+///
+/// Inside, `panel_fill` is the surface's colour, so a Material text field's
+/// floating label cuts its border gap in the right colour. As with
+/// [`modal`], the App's key handling decides when the dialog closes.
+pub(crate) fn material_modal<R>(
+    ctx: &egui::Context,
+    palette: &crate::palette::Palette,
+    id: &str,
+    title: &str,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    use crate::material::dialog::{dialog_frame, dialog_headline};
+    egui::Modal::new(Id::unique(id))
+        .frame(dialog_frame(palette))
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            ui.visuals_mut().panel_fill = crate::palette::rgb(palette.m3.surface_container_high);
+            let inner = ui.vertical(|ui| {
+                dialog_headline(ui, palette, title);
+                add_contents(ui)
+            });
+            inner
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
+            inner.inner
+        })
+        .inner
+}
+
+/// A Material dialog's action row, right-aligned: the first button is the
+/// confirming one (filled, rightmost) unless it cancels (Esc), and the rest
+/// are text buttons to its left. Each sends its key press when clicked.
+///
+/// # Arguments
+///
+/// * `ui` - the dialog's ui.
+/// * `palette` - the colours.
+/// * `buttons` - the buttons, confirming first, with their keys.
+/// * `confirm_enabled` - whether the confirming button can be pressed.
+pub(crate) fn material_actions(
+    ui: &mut egui::Ui,
+    palette: &crate::palette::Palette,
+    buttons: &[(&str, KeyInput)],
+    confirm_enabled: bool,
+) {
+    use crate::material::button::{ButtonKind, button};
+    crate::material::dialog::dialog_actions(ui, |ui| {
+        for (i, (label, key)) in buttons.iter().enumerate() {
+            // Cancelling (Esc) is never the emphasised action.
+            let (kind, enabled) = if i == 0 && key.key != Key::Esc {
+                (ButtonKind::Filled, confirm_enabled)
+            } else {
+                (ButtonKind::Text, true)
+            };
+            let pressed = ui
+                .add_enabled_ui(enabled, |ui| button(ui, palette, kind, None, label))
+                .inner
+                .clicked();
+            if pressed {
+                send_key(ui.ctx(), *key);
+            }
+        }
+    });
+}
+
+/// A dialog's keyboard hint in the Material small type and
+/// `on_surface_variant`.
+pub(crate) fn material_hint(ui: &mut egui::Ui, palette: &crate::palette::Palette, hint: &str) {
+    ui.label(
+        egui::RichText::new(hint)
+            .size(crate::metrics::text_size::SMALL)
+            .color(crate::palette::rgb(palette.m3.on_surface_variant)),
+    );
+}
+
 /// A row of dialog buttons, each sending its key press when clicked.
 pub(crate) fn key_buttons(ui: &mut egui::Ui, buttons: &[(&str, KeyInput)]) {
     ui.horizontal(|ui| {

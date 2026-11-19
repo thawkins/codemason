@@ -13,6 +13,7 @@ mod support;
 use codemason_app_core::app::{App, ProviderSetupStep};
 use codemason_app_core::input_field::InputField;
 use codemason_app_core::text_utils::mask_secret;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
@@ -43,9 +44,19 @@ fn harness_for(step: ProviderSetupStep) -> Harness<'static, App> {
 fn assert_masked(harness: &Harness<'static, App>, secret: &str, body: &str) {
     let masked = mask_secret(secret);
     assert_ne!(masked, secret, "the rule must mask the secret");
+    // The field holds the masked text as its value; no field's value is
+    // the secret.
+    let values: Vec<String> = harness
+        .query_all_by_role(Role::TextInput)
+        .filter_map(|node| node.value())
+        .collect();
     assert!(
-        harness.query_by_label(&masked).is_some(),
-        "the dialog shows the masked value {masked}"
+        values.contains(&masked),
+        "the dialog shows the masked value {masked}, fields: {values:?}"
+    );
+    assert!(
+        values.iter().all(|v| !v.contains(body)),
+        "the secret's middle must never be a field's value"
     );
     assert!(
         harness.query_by_label_contains(secret).is_none(),
