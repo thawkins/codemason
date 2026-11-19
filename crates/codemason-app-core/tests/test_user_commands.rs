@@ -99,7 +99,7 @@ async fn test_user_command_reports_a_failed_turn_exactly_once() {
     // Wait for the first report however long the turn takes to fail, then
     // give a duplicate a moment to arrive.
     let mut errors = 0;
-    let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_mins(2);
     while let Ok(event) = tokio::time::timeout_at(deadline, events.recv()).await {
         if let Ok(codemason_agent::event::Event::AgentError { session_id, .. }) = event
             && session_id == "s-once"

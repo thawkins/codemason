@@ -106,6 +106,8 @@ mod test_dialogs_more;
 mod test_diff_pane;
 #[path = "test_dock.rs"]
 mod test_dock;
+#[path = "test_document_panes.rs"]
+mod test_document_panes;
 #[path = "test_external_edit.rs"]
 mod test_external_edit;
 #[path = "test_files.rs"]
@@ -122,6 +124,30 @@ mod test_launch;
 mod test_main_thread;
 #[path = "test_markdown.rs"]
 mod test_markdown;
+#[path = "test_markdown_table_border.rs"]
+mod test_markdown_table_border;
+#[path = "test_material_button.rs"]
+mod test_material_button;
+#[path = "test_material_card.rs"]
+mod test_material_card;
+#[path = "test_material_chip.rs"]
+mod test_material_chip;
+#[path = "test_material_dialog.rs"]
+mod test_material_dialog;
+#[path = "test_material_feedback.rs"]
+mod test_material_feedback;
+#[path = "test_material_icon_button.rs"]
+mod test_material_icon_button;
+#[path = "test_material_menu.rs"]
+mod test_material_menu;
+#[path = "test_material_segmented.rs"]
+mod test_material_segmented;
+#[path = "test_material_sheet.rs"]
+mod test_material_sheet;
+#[path = "test_material_tabs.rs"]
+mod test_material_tabs;
+#[path = "test_material_text_field.rs"]
+mod test_material_text_field;
 #[path = "test_menu.rs"]
 mod test_menu;
 #[path = "test_messages.rs"]
@@ -223,6 +249,8 @@ mod test_plugins_list_panel_gui;
 mod test_project_menu_gui;
 #[path = "test_render_cost_scaling_gui.rs"]
 mod test_render_cost_scaling_gui;
+#[path = "test_ribbon.rs"]
+mod test_ribbon;
 #[path = "test_router_setup_gui.rs"]
 mod test_router_setup_gui;
 #[path = "test_row_action_confirm_gui.rs"]
@@ -249,6 +277,8 @@ mod test_teams_tui_gui;
 mod test_teams_window_frame_gui;
 #[path = "test_text_selection_gui.rs"]
 mod test_text_selection_gui;
+#[path = "test_title_bar.rs"]
+mod test_title_bar;
 #[path = "test_window_lifecycle_gui.rs"]
 mod test_window_lifecycle_gui;
 #[path = "test_window_routing_gui.rs"]

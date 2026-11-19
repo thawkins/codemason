@@ -386,3 +386,39 @@ pub fn status_bar_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     let bar = ui.interact(rect, ui.scope_id().with("status_bar"), egui::Sense::hover());
     bar.widget_info(|| WidgetInfo::labeled(Role::Status, true, STATUS_BAR_LABEL));
 }
+
+/// Accessible name of the status bar's zoom slider.
+pub const ZOOM_LABEL: &str = "Zoom";
+
+/// The zoom the status bar's slider covers, as egui zoom factors.
+pub const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+
+/// The status bar's zoom control (the word-processor layout): the zoom as a
+/// percentage and a compact Material slider over [`ZOOM_RANGE`] that sets
+/// the window's zoom factor (when the pointer is released, or at once from
+/// the arrow keys), which Ctrl+Plus and Ctrl+Minus also change.
+///
+/// # Arguments
+///
+/// * `ui` - the status bar's ui, laid out right to left.
+/// * `palette` - the colours.
+pub fn zoom_ui(ui: &mut egui::Ui, palette: &Palette) {
+    let ctx = ui.ctx().clone();
+    // While the pointer is down the new zoom is only held: applying it would
+    // rescale the slider under the pointer, which would move the value again.
+    let pending = ui.scope_id().with("zoom_pending");
+    let held = ui.data(|d| d.get_temp::<f32>(pending));
+    let mut zoom = held.unwrap_or_else(|| ctx.zoom_factor());
+    let size = egui::vec2(140.0, ui.spacing().interact_size.y);
+    let slider = crate::material::feedback::slider_sized(
+        ui, palette, &mut zoom, ZOOM_RANGE, ZOOM_LABEL, size,
+    );
+    if slider.is_pointer_button_down_on() {
+        ui.data_mut(|d| d.insert_temp(pending, zoom));
+    } else if slider.changed() || held.is_some() {
+        ui.data_mut(|d| d.remove::<f32>(pending));
+        // Whole percent steps, so the label and the zoom agree.
+        ctx.set_zoom_factor((zoom * 100.0).round() / 100.0);
+    }
+    ui.label(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).color(palette.muted));
+}

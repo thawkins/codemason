@@ -144,8 +144,12 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
     let geometry = window::window_path().map_or_else(WindowGeometry::in_memory, |path| {
         WindowGeometry::open(&path)
     });
+    // Who draws the window frame, decided once: the app's title strip is
+    // the title bar where the desktop allows it ([`crate::title_bar`]).
+    let frame = crate::title_bar::decide_frame().frame;
+    let viewport = geometry.viewport(egui::ViewportBuilder::default().with_title(APP_NAME));
     let native_options = eframe::NativeOptions {
-        viewport: geometry.viewport(egui::ViewportBuilder::default().with_title(APP_NAME)),
+        viewport: craft_window::policy::apply(viewport, &frame),
         ..Default::default()
     };
     // The whole window runs inside the runtime context: the creator, every
@@ -200,6 +204,7 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
                 }
             }
             let mut shell = Shell::new(app)
+                .with_title_bar(frame.clone())
                 .with_sources(event_rx, logs, runtime.clone())
                 .with_window_geometry(geometry)
                 .with_force_exit()

@@ -1,12 +1,14 @@
-//! Icons from the bundled Lucide font, with ASCII stand-ins.
+//! Icons from the bundled Material Symbols Rounded font, with ASCII stand-ins.
 //!
 //! [`Icon`] names the icons the window draws; [`Icon::glyph`] is its code
-//! point in the bundled Lucide font (`assets/fonts/lucide.ttf`,
-//! `lucide-static` 1.66.0, ISC licence, the Feather-derived icons MIT, see
-//! `assets/fonts/Lucide-LICENSE.txt`) and [`Icon::ascii`] what is drawn when
-//! the font stack cannot draw it ([`icon_text`]).
+//! point in the bundled Material Symbols Rounded font
+//! (`assets/fonts/MaterialSymbolsRounded.ttf`, a static FILL 0 / wght 400 /
+//! opsz 24 instance subset to these icons, Apache License 2.0, see
+//! `assets/fonts/MaterialSymbols-LICENSE.txt`, which also gives the command
+//! that rebuilds the subset) and [`Icon::ascii`] what is drawn when the font
+//! stack cannot draw it ([`icon_label`]).
 //!
-//! The Lucide face is alone in its own family, [`ICON_FAMILY`] (see
+//! The icon face is alone in its own family, [`ICON_FAMILY`] (see
 //! [`crate::fonts::font_stack`]): its glyphs sit at private-use code points
 //! that other faces, and model output, use for other things, so text never
 //! falls back to it. [`icon_label`] draws an icon in that family.
@@ -15,47 +17,98 @@
 
 use egui::{FontFamily, FontId, RichText};
 
-/// Name of the Lucide face in the font stack.
-pub const ICON_FACE: &str = "Lucide";
+/// Name of the Material Symbols face in the font stack.
+pub const ICON_FACE: &str = "MaterialSymbolsRounded";
 
-/// The font family that holds only the Lucide face.
+/// The font family that holds only the Material Symbols face.
 pub const ICON_FAMILY: &str = "codemason-icons";
 
-/// The Lucide icon font (`lucide-static` 1.66.0).
-pub(crate) const LUCIDE: &[u8] = include_bytes!("../assets/fonts/lucide.ttf");
+/// The Material Symbols Rounded icon font, subset to the [`Icon`] glyphs.
+pub(crate) const MATERIAL_SYMBOLS: &[u8] =
+    include_bytes!("../assets/fonts/MaterialSymbolsRounded.ttf");
 
 /// An icon the window draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
-    /// Reading files (`file`).
+    /// Reading files (`description`).
     Read,
-    /// Editing files (`file-pen`).
+    /// Editing files (`edit_document`).
     Edit,
-    /// Running a command (`square-terminal`).
+    /// Running a command (`terminal`).
     Command,
     /// Searching (`search`).
     Search,
-    /// An agent or another tool (`bot`).
+    /// An agent or another tool (`smart_toy`).
     Agent,
     /// Done (`check`).
     Check,
-    /// Failed (`x`).
+    /// Failed (`close`).
     Cross,
-    /// A warning (`triangle-alert`).
+    /// A warning (`warning`).
     Warning,
     /// Information (`info`).
     Info,
-    /// Closed (`chevron-right`).
+    /// Closed (`chevron_right`).
     ChevronRight,
-    /// Open (`chevron-down`).
+    /// Open (`expand_more`).
     ChevronDown,
-    /// Copy (`copy`).
+    /// Copy (`content_copy`).
     Copy,
+    /// A new session (`add_comment`).
+    Add,
+    /// The session list (`forum`).
+    Sessions,
+    /// Undo (`undo`).
+    Undo,
+    /// Redo (`redo`).
+    Redo,
+    /// Stop the running turn (`stop_circle`).
+    Stop,
+    /// Compact the conversation (`compress`).
+    Compact,
+    /// An image (`image`).
+    Image,
+    /// A prompt template (`article`).
+    Template,
+    /// Open a folder (`folder_open`).
+    FolderOpen,
+    /// A new folder (`create_new_folder`).
+    NewFolder,
+    /// The model (`psychology`).
+    Model,
+    /// An agent loop (`repeat`).
+    Loop,
+    /// The log (`receipt_long`).
+    Log,
+    /// The profiler (`speed`).
+    Profile,
+    /// The task list (`checklist`).
+    Tasks,
+    /// Memory (`memory`).
+    Memory,
+    /// The colour theme (`palette`).
+    Theme,
+    /// Cost (`payments`).
+    Cost,
+    /// Usage statistics (`bar_chart`).
+    Stats,
+    /// Diagnostics (`health_and_safety`).
+    Doctor,
+    /// Quit (`logout`).
+    Quit,
+    /// Collapse (`expand_less`).
+    ChevronUp,
+    /// Minimise the window (`minimize`).
+    Minimize,
+    /// Maximise the window (`crop_square`).
+    Maximize,
+    /// Restore the window (`filter_none`).
+    Restore,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 37] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -68,28 +121,78 @@ impl Icon {
         Self::ChevronRight,
         Self::ChevronDown,
         Self::Copy,
+        Self::Add,
+        Self::Sessions,
+        Self::Undo,
+        Self::Redo,
+        Self::Stop,
+        Self::Compact,
+        Self::Image,
+        Self::Template,
+        Self::FolderOpen,
+        Self::NewFolder,
+        Self::Model,
+        Self::Loop,
+        Self::Log,
+        Self::Profile,
+        Self::Tasks,
+        Self::Memory,
+        Self::Theme,
+        Self::Cost,
+        Self::Stats,
+        Self::Doctor,
+        Self::Quit,
+        Self::ChevronUp,
+        Self::Minimize,
+        Self::Maximize,
+        Self::Restore,
     ];
 
-    /// The icon's character in the Lucide font.
+    /// The icon's character in the Material Symbols font.
     #[must_use]
     pub const fn glyph(self) -> &'static str {
         match self {
-            Self::Read => "\u{e0c0}",
-            Self::Edit => "\u{e31f}",
-            Self::Command => "\u{e20a}",
-            Self::Search => "\u{e151}",
-            Self::Agent => "\u{e1bb}",
-            Self::Check => "\u{e06c}",
-            Self::Cross => "\u{e1b2}",
-            Self::Warning => "\u{e193}",
-            Self::Info => "\u{e0f9}",
-            Self::ChevronRight => "\u{e06f}",
-            Self::ChevronDown => "\u{e06d}",
-            Self::Copy => "\u{e09e}",
+            Self::Read => "\u{e873}",
+            Self::Edit => "\u{f88c}",
+            Self::Command => "\u{eb8e}",
+            Self::Search => "\u{ef7a}",
+            Self::Agent => "\u{f06c}",
+            Self::Check => "\u{e668}",
+            Self::Cross => "\u{e5cd}",
+            Self::Warning => "\u{f083}",
+            Self::Info => "\u{e88e}",
+            Self::ChevronRight => "\u{e5cc}",
+            Self::ChevronDown => "\u{e5cf}",
+            Self::Copy => "\u{e14d}",
+            Self::Add => "\u{e266}",
+            Self::Sessions => "\u{e8af}",
+            Self::Undo => "\u{e166}",
+            Self::Redo => "\u{e15a}",
+            Self::Stop => "\u{ef71}",
+            Self::Compact => "\u{e94d}",
+            Self::Image => "\u{e3f4}",
+            Self::Template => "\u{ef42}",
+            Self::FolderOpen => "\u{e2c8}",
+            Self::NewFolder => "\u{e2cc}",
+            Self::Model => "\u{ea4a}",
+            Self::Loop => "\u{e040}",
+            Self::Log => "\u{ef6e}",
+            Self::Profile => "\u{e9e4}",
+            Self::Tasks => "\u{e6b1}",
+            Self::Memory => "\u{e322}",
+            Self::Theme => "\u{e40a}",
+            Self::Cost => "\u{ef63}",
+            Self::Stats => "\u{e26b}",
+            Self::Doctor => "\u{e1d5}",
+            Self::Quit => "\u{e9ba}",
+            Self::ChevronUp => "\u{e5ce}",
+            Self::Minimize => "\u{e931}",
+            Self::Maximize => "\u{e3c6}",
+            Self::Restore => "\u{e3e0}",
         }
     }
 
-    /// What is drawn when the font stack has no Lucide.
+    /// What is drawn when the font stack has no icon face.
     #[must_use]
     pub const fn ascii(self) -> &'static str {
         match self {
@@ -105,6 +208,31 @@ impl Icon {
             Self::ChevronRight => ">",
             Self::ChevronDown => "v",
             Self::Copy => "cp",
+            Self::Add => "+",
+            Self::Sessions => "=",
+            Self::Undo => "<-",
+            Self::Redo => "->",
+            Self::Stop => "[]",
+            Self::Compact => "><",
+            Self::Image => "img",
+            Self::Template => "tpl",
+            Self::FolderOpen => "dir",
+            Self::NewFolder => "+dir",
+            Self::Model => "llm",
+            Self::Loop => "oo",
+            Self::Log => "log",
+            Self::Profile => "prf",
+            Self::Tasks => "tsk",
+            Self::Memory => "mem",
+            Self::Theme => "thm",
+            Self::Cost => "$$",
+            Self::Stats => "#",
+            Self::Doctor => "dr",
+            Self::Quit => "q",
+            Self::ChevronUp => "^",
+            Self::Minimize => "_",
+            Self::Maximize => "[ ]",
+            Self::Restore => "[=]",
         }
     }
 }
@@ -123,7 +251,7 @@ pub fn has_icon(ctx: &egui::Context, icon: Icon) -> bool {
     })
 }
 
-/// `icon` as text of `size` in `color`: its Lucide glyph in [`ICON_FAMILY`]
+/// `icon` as text of `size` in `color`: its icon glyph in [`ICON_FAMILY`]
 /// when the installed fonts have it, else its ASCII stand-in.
 #[must_use]
 pub fn icon_label(ctx: &egui::Context, icon: Icon, size: f32, color: egui::Color32) -> RichText {

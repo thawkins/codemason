@@ -1073,12 +1073,15 @@ MIT
 
 The GUI embeds font software: the Hack Bold font
 (`crates/codemason-gui/assets/fonts/Hack-Bold.ttf`, Hack v3.003, Source Foundry;
-MIT and Bitstream Vera licences), the Inter Regular and Inter SemiBold fonts
-(`crates/codemason-gui/assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf`,
-Inter 4.1, The Inter Project Authors; SIL Open Font License 1.1), the Lucide
-icon font (`crates/codemason-gui/assets/fonts/lucide.ttf`, lucide-static
-1.66.0, Lucide Icons and Contributors; ISC licence, the Feather-derived icons
-MIT) and egui's
+MIT and Bitstream Vera licences), the Roboto Flex Regular and Medium fonts
+(`crates/codemason-gui/assets/fonts/RobotoFlex-Regular.ttf`,
+`RobotoFlex-Medium.ttf`, static instances of Roboto Flex, The Roboto Flex
+Project Authors; SIL Open Font License 1.1), the Inter Regular and Inter
+SemiBold fonts (`crates/codemason-gui/assets/fonts/Inter-Regular.ttf`,
+`Inter-SemiBold.ttf`, Inter 4.1, The Inter Project Authors; SIL Open Font
+License 1.1), the Material Symbols Rounded icon font
+(`crates/codemason-gui/assets/fonts/MaterialSymbolsRounded.ttf`, a static
+subset, Google; Apache License 2.0) and egui's
 default fonts (Hack Regular, Noto
 Emoji under the SIL Open Font License 1.1, Ubuntu Light under the Ubuntu Font
 Licence 1.0, and the MIT-licensed emoji-icon-font). The full notices are in

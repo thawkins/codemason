@@ -1,4 +1,5 @@
-//! Frontend-neutral markdown rendering into [`StyledLine`]s.
+//! Frontend-neutral markdown rendering into [`StyledLine`]s, and
+//! [`has_table`], which tells a frontend whether a document holds a table.
 //!
 //! [`markdown_to_styled`] turns a markdown document (a `RESEARCH.md` body,
 //! for the `/research open` viewer) into styled lines: headings, lists,
@@ -24,6 +25,21 @@ const RULE_GLYPH: &str = "\u{2500}";
 enum Emphasis {
     Bold,
     Italic,
+}
+
+/// Whether `markdown` contains a table (GitHub table syntax).
+///
+/// A document without a `|` is answered without parsing, so the check is
+/// cheap enough to make every frame for the visible transcript.
+///
+/// # Returns
+///
+/// `true` when the document parses to at least one table.
+#[must_use]
+pub fn has_table(markdown: &str) -> bool {
+    markdown.contains('|')
+        && Parser::new_ext(markdown, Options::ENABLE_TABLES)
+            .any(|event| matches!(event, MdEvent::Start(Tag::Table(_))))
 }
 
 /// Convert a markdown body into styled lines.

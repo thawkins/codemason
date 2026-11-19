@@ -63,6 +63,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::dialogs;
 use crate::dock::{self, HiddenPanes, PaneId};
 use crate::keys::{Focus, KeyRouter, default_keymap};
+use crate::page::{PageStyle, page_ui};
 use crate::palette::Palette;
 use crate::panels::agents::agents_ui;
 use crate::panels::context::context_ui;
@@ -81,6 +82,7 @@ use crate::platform::clipboard;
 use crate::platform::files::{self, FileDialogs, file_menu};
 use crate::platform::menu::{self, MenuAction};
 use crate::platform::window::{CloseGuard, WindowGeometry};
+use crate::ribbon::{RibbonAction, RibbonState, ribbon_ui, title_strip_ui};
 use crate::theme::ThemeApplier;
 
 /// Most log records moved into the app per frame, so a burst cannot stall
@@ -137,6 +139,15 @@ pub struct Shell {
     geometry: Option<WindowGeometry>,
     /// Set by the Ctrl+C / SIGTERM task ([`crate::signal`]): quit.
     shutdown_signal: Option<Arc<AtomicBool>>,
+    /// The ribbon's open tab and collapsed state (the word-processor
+    /// layout of the `document-*` themes).
+    ribbon: RibbonState,
+    /// Who draws the window frame ([`crate::title_bar`]); the system unless
+    /// [`Shell::with_title_bar`] says otherwise.
+    frame: craft_window::policy::Frame,
+    /// The `movable` flag last given to the macOS window.
+    #[cfg(target_os = "macos")]
+    movable_applied: Option<bool>,
     /// `/editor`: the prompt out in an external editor.
     external_edit: crate::external_edit::ExternalEdit,
 }
@@ -189,8 +200,30 @@ impl Shell {
             native_menu: None,
             geometry: None,
             shutdown_signal: None,
+            ribbon: RibbonState::default(),
+            frame: craft_window::policy::Frame::Native,
+            #[cfg(target_os = "macos")]
+            movable_applied: None,
             external_edit: crate::external_edit::ExternalEdit::default(),
         }
+    }
+
+    /// Draw the window frame as `frame` says: with an app-drawn frame the
+    /// title strip is the window's title bar on every theme, with caption
+    /// buttons where the desktop puts them, and the window edges resize it.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - the frame the window was opened with
+    ///   ([`crate::title_bar::decide_frame`]).
+    ///
+    /// # Returns
+    ///
+    /// The shell drawing that frame.
+    #[must_use]
+    pub fn with_title_bar(mut self, frame: craft_window::policy::Frame) -> Self {
+        self.frame = frame;
+        self
     }
 
     /// Load the dock layout from `path` and save it back there when it
@@ -441,17 +474,50 @@ impl Shell {
         self.sync_dock(ui.ctx());
         let palette = Palette::from_tokens(&tokens);
         let menus_enabled = !dialogs::locks_prompt(&self.app);
-        egui::Panel::top("menu_bar").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                file_menu(ui, &mut self.files, &self.app.cwd_path, menus_enabled);
+        // The word-processor layout belongs to the themes with their own
+        // Material roles; every other theme keeps the plain menu bar.
+        let document = tokens.m3.is_some();
+        let app_bar = crate::title_bar::app_drawn(&self.frame);
+        let mut chosen = None;
+        if document || app_bar {
+            let title = self.window_title();
+            let frame = &self.frame;
+            egui::Panel::top("title_strip").show(ui, |ui| {
+                // The caption buttons stay usable while a modal asks.
+                chosen = title_strip_ui(ui, &palette, &title, document, menus_enabled, frame);
             });
-        });
+        }
+        if document {
+            egui::Panel::top("ribbon").show(ui, |ui| {
+                ui.add_enabled_ui(menus_enabled, |ui| {
+                    chosen = ribbon_ui(ui, &palette, &mut self.ribbon).or(chosen);
+                });
+            });
+            if let Some(action) = chosen {
+                self.run_ribbon_action(ui.ctx(), action);
+            }
+        } else {
+            egui::Panel::top("menu_bar").show(ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    file_menu(ui, &mut self.files, &self.app.cwd_path, menus_enabled);
+                });
+            });
+        }
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            status_bar_ui(ui, &mut self.app, &palette);
+            if document {
+                ui.horizontal(|ui| {
+                    status_bar_ui(ui, &mut self.app, &palette);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        crate::panels::status_bar::zoom_ui(ui, &palette);
+                    });
+                });
+            } else {
+                status_bar_ui(ui, &mut self.app, &palette);
+            }
         });
         let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
-            sessions_rect = self.show_dock(ui, &palette);
+            sessions_rect = self.show_dock(ui, &palette, document);
         });
         if self.app.palette.is_some() {
             dialogs::palette::set_action_keys(ui.ctx(), self.keys.action_keys());
@@ -474,6 +540,13 @@ impl Shell {
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx());
         self.close.show(ui.ctx(), &mut self.app);
+        if matches!(self.frame, craft_window::policy::Frame::Integrated(_)) {
+            crate::title_bar::resize_edges(ui.ctx());
+        }
+        #[cfg(target_os = "macos")]
+        if matches!(self.frame, craft_window::policy::Frame::Inset(_)) {
+            craft_window::title_bar::sync_movable(ui.ctx(), &mut self.movable_applied);
+        }
         self.unfocus_sidebar_on_press_outside(ui.ctx(), sessions_rect);
         self.run_close_keys(ui.ctx());
         self.save_layout_when_due(ui.ctx());
@@ -557,8 +630,61 @@ impl Shell {
 
     /// Draw the dock and apply what the user did to it; returns the
     /// sessions sidebar's rectangle when it was drawn.
-    fn show_dock(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<egui::Rect> {
-        let style = DockStyle::from_ui(ui);
+    /// The title strip's text: the app name and the project folder.
+    fn window_title(&self) -> String {
+        match self.app.cwd_path.file_name() {
+            Some(name) => format!("codemason - {}", name.to_string_lossy()),
+            None => "codemason".to_string(),
+        }
+    }
+
+    /// Run a ribbon or quick access command, as the native menu runs its
+    /// commands: a key press through `App::handle_key`, a slash command
+    /// through `App::execute_slash_command`, a panel toggle as its keymap
+    /// command's key press, and a file dialog through the File menu's
+    /// dialogs. Without attached sources there is no runtime, so key presses
+    /// and slash commands are dropped.
+    fn run_ribbon_action(&mut self, ctx: &egui::Context, action: RibbonAction) {
+        let key = match action {
+            RibbonAction::Files(intent) => {
+                let start = &self.app.cwd_path;
+                let start = (!start.as_os_str().is_empty()).then_some(start.as_path());
+                self.files.ask(intent, start);
+                return;
+            }
+            RibbonAction::Panel(command) => {
+                crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
+                    .map(MenuAction::Key)
+            }
+            RibbonAction::Menu(menu_action) => Some(menu_action),
+        };
+        let (Some(menu_action), Some(sources)) = (key, self.sources.as_ref()) else {
+            tracing::debug!(?action, "ribbon command not run");
+            return;
+        };
+        match menu_action {
+            MenuAction::Key(key) => {
+                sources.runtime.block_on(self.app.handle_key(key));
+            }
+            MenuAction::Slash(line) => {
+                sources
+                    .runtime
+                    .block_on(self.app.execute_slash_command(line));
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn show_dock(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &Palette,
+        document: bool,
+    ) -> Option<egui::Rect> {
+        let mut style = DockStyle::from_ui(ui);
+        if document {
+            m3_dock_style(&mut style, palette);
+        }
         let mut sessions_rect = None;
         let Self {
             app,
@@ -574,12 +700,26 @@ impl Shell {
             |pane: &PaneId| pane.label().to_string(),
             |pane: &PaneId| pane.permissions(),
             |ui, pane| match pane {
+                PaneId::Messages if document => {
+                    page_ui(ui, palette, PageStyle::Page, |ui| {
+                        messages_body(ui, app, messages, palette);
+                    });
+                }
                 PaneId::Messages => messages_body(ui, app, messages, palette),
+                PaneId::Prompt if document => {
+                    page_ui(ui, palette, PageStyle::Field, |ui| {
+                        queue_ui(ui, app);
+                        prompt_ui(ui, app);
+                    });
+                }
                 PaneId::Prompt => {
                     queue_ui(ui, app);
                     prompt_ui(ui, app);
                 }
                 PaneId::Sessions => {
+                    if document {
+                        crate::material::sheet::drawer_style(ui.style_mut(), palette);
+                    }
                     sessions.show(ui, app, palette);
                     sessions_rect = Some(ui.max_rect());
                 }
@@ -1041,6 +1181,26 @@ fn is_focus_move(event: &egui::Event) -> bool {
             ..
         }
     )
+}
+
+/// Restyle the dock as Material side sheets (the word-processor layout):
+/// panes on `surface_container_low` (the desk), tab strips on
+/// `surface_container`, the open tab as a tonal (`secondary_container`)
+/// tab, the accent in `primary` and dividers in `outline_variant`.
+fn m3_dock_style(style: &mut DockStyle, palette: &Palette) {
+    use crate::palette::rgb;
+
+    let m3 = &palette.m3;
+    style.background = rgb(m3.surface_container_low);
+    style.tab_background = rgb(m3.surface_container);
+    style.active_background = rgb(m3.secondary_container);
+    style.text = rgb(m3.on_secondary_container);
+    style.inactive_text = rgb(m3.on_surface_variant);
+    style.accent = rgb(m3.primary);
+    style.border = egui::Stroke::new(1.0, rgb(m3.outline_variant));
+    style.tab_height = 32.0;
+    style.floating_background = rgb(m3.surface_container_high);
+    style.floating_stroke = egui::Stroke::new(1.0, rgb(m3.outline_variant));
 }
 
 /// The Messages pane: the transcript, whose right-click opens the context

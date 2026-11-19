@@ -71,7 +71,7 @@ use craft_ui::ime::Composer;
 use egui::text::{CCursor, CCursorRange};
 use egui::{Event, Id};
 
-use codemason_app_core::input_event::KeyInput;
+use codemason_app_core::input_event::{Key, KeyInput};
 
 use crate::keys::{Focus, is_key_text, is_prompt_app_key, is_prompt_edit_key, to_key_input};
 
@@ -233,7 +233,13 @@ impl PromptInput {
         let modal_open = ctx.memory(|m| m.top_modal_layer().is_some());
         // Typing takes the focus only from nobody: never from another widget
         // or from under a modal.
-        if !focused && !other_focused && !modal_open && ctx.input(|i| types_into_prompt(&i.events))
+        // A focused button or slider keeps its own navigation keys (a slider
+        // steps with the arrows); typing still moves to the prompt.
+        let navigation = focused_id.is_none();
+        if !focused
+            && !other_focused
+            && !modal_open
+            && ctx.input(|i| types_into_prompt(&i.events, navigation))
         {
             ctx.memory_mut(|m| m.request_focus(id));
             focused = true;
@@ -362,11 +368,14 @@ fn focused_has_selection(ctx: &egui::Context) -> bool {
 /// it once and edits by grapheme; nothing reaches the App's char-based
 /// editing, and a character with no key (a dead key, a layout character, an
 /// IME commit) is not lost.
-fn types_into_prompt(events: &[Event]) -> bool {
+///
+/// `navigation` says whether the cursor keys (arrows, Home, End) count:
+/// not while another widget has the keyboard focus, which keeps them.
+fn types_into_prompt(events: &[Event], navigation: bool) -> bool {
     let mut previous: Option<KeyInput> = None;
     for event in events {
         if let Some(key) = to_key_input(event) {
-            if is_prompt_edit_key(key) {
+            if is_prompt_edit_key(key) && (navigation || !is_navigation_key(key)) {
                 return true;
             }
             previous = Some(key);
@@ -387,6 +396,14 @@ fn types_into_prompt(events: &[Event]) -> bool {
         previous = None;
     }
     false
+}
+
+/// Whether `key` only moves the cursor: an arrow, Home or End.
+const fn is_navigation_key(key: KeyInput) -> bool {
+    matches!(
+        key.key,
+        Key::Left | Key::Right | Key::Up | Key::Down | Key::Home | Key::End
+    )
 }
 
 /// Whether Up and Down go to the App, as `(up, down)`: the TUI's

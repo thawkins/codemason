@@ -72,3 +72,17 @@ fn test_markdown_ends_with_viewer_footer() {
         [] as [codemason_app_core::styled::StyledSpan; 0]
     );
 }
+
+#[test]
+fn test_has_table_finds_only_real_tables() {
+    use codemason_app_core::markdown::has_table;
+
+    assert!(has_table("| a | b |\n|---|---|\n| 1 | 2 |\n"));
+    assert!(has_table("Intro\n\n| a |\n|---|\n| 1 |\n\nOutro"));
+    // A pipe in prose, or a pipe row with no delimiter row, is no table.
+    assert!(!has_table("Use `a | b` to pipe."));
+    assert!(!has_table("| a | b |\n| 1 | 2 |\n"));
+    // A table inside a fenced code block is code.
+    assert!(!has_table("```\n| a |\n|---|\n| 1 |\n```\n"));
+    assert!(!has_table("no pipes here"));
+}

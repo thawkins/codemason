@@ -310,7 +310,7 @@ graph TB
 | `codemason-codeindex` | Tree-sitter parsing, SQLite/Tantivy index, file watcher | ~14,200 |
 | `codemason-server` | Axum HTTP routes and SSE streaming | ~6,100 |
 | `codemason-app-core` | Frontend-neutral application core: `App` state, key handling, slash commands, event handlers | ~67,300 |
-| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts | ~12,500 |
+| `codemason-gui` | egui desktop frontend: dockable panes, native dialogs, craft-keymap shortcuts, Material Design 3 components (`material`), the word-processor ribbon and page layout of the `document-*` themes (`ribbon`, `page`), the app-drawn window title bar (`title_bar`, craft-window's frame policy) | ~12,500 |
 | `codemason-bench` | Criterion benchmarks shared between GUI and CLI | ~6,800 |
 | `codemason-specs` | Spec lifecycle management, SDD artifact generation, consistency validation, constitution parsing | ~9,100 |
 | `codemason-research` | Research types, gatherers, and plan-dep parser | ~39,000 |
@@ -2126,14 +2126,19 @@ modes (`cdmn run`, `serve`, ACP) are unchanged, and `--no-tui` keeps the plain
 stdin/stdout mode. The window opens maximized the first time and then restores
 its size, position and maximized state (`gui-window.json`); the dock layout is
 persisted in `gui-layout.json` and shortcut overrides in `gui-keys.json`, all in
-the codemason config directory. The font stack bundles Inter Regular and Inter
-SemiBold for proportional text and its bold weight (SIL Open Font License 1.1,
+the codemason config directory. The font stack bundles Roboto Flex Regular and
+Medium (static wght 400 and 500 instances, the Material Design 3 typeface) for
+proportional text and its bold weight (SIL Open Font License 1.1,
+`crates/codemason-gui/assets/fonts/RobotoFlex-LICENSE.txt`), Inter Regular and
+SemiBold right after them for the Greek, Cyrillic and symbol glyphs Roboto Flex
+lacks (SIL Open Font License 1.1,
 `crates/codemason-gui/assets/fonts/Inter-LICENSE.txt`) and Hack Bold for bold
 code (MIT and Bitstream Vera licences,
-`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`). The Lucide icon font
-(`crates/codemason-gui/assets/fonts/lucide.ttf`, lucide-static 1.66.0, ISC
-licence with the Feather-derived icons under MIT,
-`crates/codemason-gui/assets/fonts/Lucide-LICENSE.txt`) sits alone in the
+`crates/codemason-gui/assets/fonts/Hack-LICENSE.txt`). The Material Symbols
+Rounded icon font (`crates/codemason-gui/assets/fonts/MaterialSymbolsRounded.ttf`,
+a static FILL 0 / wght 400 / opsz 24 instance subset to the icons below, Apache
+License 2.0, `crates/codemason-gui/assets/fonts/MaterialSymbols-LICENSE.txt`,
+which also records the command that rebuilds the subset) sits alone in the
 `codemason-icons` family, so its private-use code points never stand in for
 text. `icons::Icon` names the icons the window draws (read, edit, command,
 search, agent, check, cross, warning, info, the two chevrons and copy), each

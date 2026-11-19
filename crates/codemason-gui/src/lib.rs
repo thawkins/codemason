@@ -44,14 +44,18 @@ pub mod fonts;
 pub mod icons;
 pub mod keys;
 pub mod main_thread;
+pub mod material;
 pub mod metrics;
+pub mod page;
 pub mod palette;
 pub mod panels;
 pub mod platform;
+pub mod ribbon;
 pub mod shell;
 pub mod signal;
 pub mod styled_text;
 pub mod theme;
+pub mod title_bar;
 
 use std::path::PathBuf;
 use std::sync::Arc;

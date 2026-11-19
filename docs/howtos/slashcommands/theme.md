@@ -13,6 +13,7 @@
 | `codemason-light` | The standard light theme (alias `light`) |
 | `high-contrast` | White text and white outlines on black |
 | `catppuccin-mocha`, `gruvbox-dark`, `nord`, `tokyo-night` | Ports of those palettes |
+| `document-light`, `document-dark` | Material Design 3 colour schemes from one blue seed, for the word-processor layout planned in `docs/NEWUI.md` |
 
 The switch lasts until codemason exits. To start in a theme, set the `theme`
 key in `codemason.json`:
@@ -26,6 +27,15 @@ The handler is `App::slash_theme` in
 (`crates/codemason-app-core/src/theme_tokens.rs`); the built-in ones are the
 JSON files in `crates/codemason-app-core/themes/`, and the window maps them to
 colours in `crates/codemason-gui/src/palette.rs` and `theme.rs`.
+
+Every theme also has Material Design 3 colour roles (`ThemeTokens::roles`). A
+theme file may give them in an optional `m3` block (the `document-*` themes
+do); otherwise they are derived from the other tokens. An `m3` block is
+checked for contrast when the file is loaded: every `on_x` role against its
+`x` role at 4.5:1 (including `inverse_on_surface` on `inverse_surface`), and
+`outline` against `surface` and `inverse_primary` against `inverse_surface` at
+3:1. A theme with its own `m3` block also restyles egui's built-in widgets
+from those roles.
 
 ## Syntax
 

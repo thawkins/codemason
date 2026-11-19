@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use codemason_app_core::theme_tokens::{
     AA_CONTRAST, DARK_THEME, HIGH_CONTRAST_THEME, LIGHT_THEME, Rgb, ThemeCatalog, ThemeSelection,
-    ThemeTokens, contrast_ratio,
+    ThemeTokens, UI_CONTRAST, contrast_ratio,
 };
 
 /// A fresh, empty scratch directory under the git-ignored `target/temp`.
@@ -57,13 +57,16 @@ fn test_builtin_themes_parse_and_pass_the_contrast_check() {
             "catppuccin-mocha",
             "gruvbox-dark",
             "nord",
-            "tokyo-night"
+            "tokyo-night",
+            "document-light",
+            "document-dark"
         ]
     );
     for name in names {
         let theme = themes.get(name).expect("listed theme");
         assert_eq!(theme.contrast_failures(), Vec::<String>::new(), "{name}");
-        assert_eq!(theme.dark, name != "codemason-light", "{name}");
+        let light = matches!(name, "codemason-light" | "document-light");
+        assert_eq!(theme.dark, !light, "{name}");
     }
     let credited = |name: &str| themes.get(name).and_then(|t| t.credit.clone());
     for port in ["catppuccin-mocha", "gruvbox-dark", "nord", "tokyo-night"] {
@@ -233,4 +236,143 @@ fn test_load_dir_skips_fifos_and_devices_without_reading_them() {
             "{file}: {warnings:?}"
         );
     }
+}
+
+#[test]
+fn test_document_themes_carry_their_own_m3_roles() {
+    let themes = ThemeCatalog::builtin();
+    for name in ["document-light", "document-dark"] {
+        let theme = themes.get(name).expect("built-in");
+        let roles = theme.m3.expect("an m3 block");
+        assert_eq!(theme.roles(), roles, "{name}");
+        assert_eq!(theme.accent, roles.primary, "{name}");
+        assert_eq!(theme.bg.base, roles.surface, "{name}");
+        assert_eq!(theme.text.base, roles.on_surface, "{name}");
+    }
+}
+
+#[test]
+fn test_roles_are_derived_for_themes_without_an_m3_block() {
+    let theme = ThemeCatalog::builtin().get(LIGHT_THEME).expect("built-in");
+    assert_eq!(theme.m3, None);
+    let roles = theme.roles();
+    assert_eq!(roles.primary, theme.accent);
+    assert_eq!(roles.surface, theme.bg.base);
+    assert_eq!(roles.on_surface, theme.text.base);
+    assert_eq!(roles.error, theme.state.error);
+    assert_eq!(roles.outline_variant, theme.border.base);
+    assert!(contrast_ratio(roles.on_primary, roles.primary) >= AA_CONTRAST);
+    assert!(contrast_ratio(roles.outline, roles.surface) >= UI_CONTRAST);
+}
+
+#[test]
+fn test_derived_roles_of_builtin_themes_pass_the_m3_contrast_check() {
+    let themes = ThemeCatalog::builtin();
+    for name in themes.names() {
+        let theme = themes.get(name).expect("listed theme");
+        assert_eq!(theme.roles().contrast_failures(name), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn test_m3_contrast_failures_name_the_role_pair() {
+    let json = include_str!("../themes/document-light.json")
+        .replace("\"document-light\"", "\"pale\"")
+        .replace("\"on_primary\": \"#ffffff\"", "\"on_primary\": \"#3060c0\"");
+    let theme = ThemeTokens::from_json(&json).expect("parse");
+    let failures = theme.contrast_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("theme `pale`: m3.on_primary") && failures[0].contains("m3.primary"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn test_m3_block_rejects_unknown_roles() {
+    let json = include_str!("../themes/document-light.json")
+        .replace("\"scrim\":", "\"glow\": \"#000000\", \"scrim\":");
+    assert!(ThemeTokens::from_json(&json).is_err());
+}
+
+#[test]
+fn test_high_contrast_m3_roles_reach_aaa() {
+    let theme = ThemeCatalog::builtin()
+        .get(HIGH_CONTRAST_THEME)
+        .expect("built-in");
+    let m3 = theme.roles();
+    let pairs = [
+        ("on_primary", m3.on_primary, m3.primary),
+        (
+            "on_primary_container",
+            m3.on_primary_container,
+            m3.primary_container,
+        ),
+        ("on_secondary", m3.on_secondary, m3.secondary),
+        (
+            "on_secondary_container",
+            m3.on_secondary_container,
+            m3.secondary_container,
+        ),
+        ("on_tertiary", m3.on_tertiary, m3.tertiary),
+        (
+            "on_tertiary_container",
+            m3.on_tertiary_container,
+            m3.tertiary_container,
+        ),
+        ("on_error", m3.on_error, m3.error),
+        (
+            "on_error_container",
+            m3.on_error_container,
+            m3.error_container,
+        ),
+        ("on_surface", m3.on_surface, m3.surface),
+        ("on_surface_variant", m3.on_surface_variant, m3.surface),
+        (
+            "on_surface/highest",
+            m3.on_surface,
+            m3.surface_container_highest,
+        ),
+        (
+            "inverse_on_surface",
+            m3.inverse_on_surface,
+            m3.inverse_surface,
+        ),
+    ];
+    let failures: Vec<String> = pairs
+        .iter()
+        .filter_map(|(name, fg, bg)| {
+            let ratio = contrast_ratio(*fg, *bg);
+            (ratio < 7.0).then(|| format!("{name} {ratio:.2}"))
+        })
+        .collect();
+    assert_eq!(failures, Vec::<String>::new());
+}
+
+#[test]
+fn test_m3_check_covers_primary_text_and_the_snackbar_action() {
+    let base = include_str!("../themes/document-light.json");
+    // `primary` as text on `surface` (text buttons, the open tab, links).
+    let invisible = base.replace("\"primary\": \"#155bbb\"", "\"primary\": \"#f8f9ff\"");
+    let failures = ThemeTokens::from_json(&invisible)
+        .expect("parse")
+        .contrast_failures();
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.contains("m3.primary has contrast") && f.contains("m3.surface")),
+        "{failures:?}"
+    );
+    // The snackbar's action text on `inverse_surface` needs 4.5:1, not 3:1.
+    let dim_action = base.replace(
+        "\"inverse_primary\": \"#b8c4ff\"",
+        "\"inverse_primary\": \"#888888\"",
+    );
+    let failures = ThemeTokens::from_json(&dim_action)
+        .expect("parse")
+        .contrast_failures();
+    assert!(
+        failures.iter().any(|f| f.contains("m3.inverse_primary")),
+        "{failures:?}"
+    );
 }

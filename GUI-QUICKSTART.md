@@ -72,6 +72,48 @@ You can also open the provider setup directly from the prompt:
 /provider
 ```
 
+### Word-processor layout
+
+The `document-light` and `document-dark` themes switch the window to a
+word-processor layout:
+
+```text
+/theme document-light
+```
+
+- A title strip shows the project and four quick buttons: New session,
+  Undo, Copy transcript and Stop.
+- A ribbon replaces the `File` menu. Its tabs are File (open a project, a
+  new project folder, About, Quit), Home (sessions, undo and redo, copy,
+  stop, compact), Insert (attach images, templates), Agent (model, agent,
+  loop), View (the Log, Profile, Tasks and Memory panels, theme) and Review
+  (cost, stats, doctor). Every button runs a command codemason already has;
+  hover it to see its name.
+- The chevron at the right of the tabs collapses the ribbon to its tabs;
+  clicking any tab opens it again.
+- The transcript is a page on a grey desk, at most 816 points wide, and the
+  prompt is an outlined field under it.
+- The side panels use the same Material surfaces, the sessions list has
+  roomier rows, and the status bar ends with a zoom slider (50% to 200%;
+  Ctrl+Plus and Ctrl+Minus still work).
+
+Every other theme keeps the plain `File` menu bar.
+
+### Title bar
+
+On Windows, GNOME, KDE and most other desktops codemason draws its own title
+bar: the strip at the top shows the project and the minimise, maximise and
+close buttons (where your desktop puts them), drag it to move the window,
+double-click it to maximise, and drag a window edge to resize. On macOS the
+traffic lights sit at the left of the same strip. Tiling window managers keep
+their own frame.
+
+To use the system's title bar instead, start codemason with:
+
+```bash
+CODEMASON_TITLEBAR=system cdmn
+```
+
 ---
 
 ## 2. Creating an `AGENTS.md` file for your project
