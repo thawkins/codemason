@@ -9031,6 +9031,8 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
             let storage = self.session_processor.session_manager.storage();
             match storage.update_session(&session_id, "") {
                 Ok(()) => {
+                    // The sidebar (and the window title) show the new name.
+                    self.sidebar.dirty = true;
                     self.status = "Session name cleared".to_string();
                     self.push_log_no_agent(LogLevel::Info, "Session name cleared".to_string());
                 }
@@ -9047,6 +9049,8 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
             let storage = self.session_processor.session_manager.storage();
             match storage.update_session(&session_id, name) {
                 Ok(()) => {
+                    // The sidebar (and the window title) show the new name.
+                    self.sidebar.dirty = true;
                     self.status = format!("Session name set to '{}'", name);
                     self.push_log_no_agent(
                         LogLevel::Info,
