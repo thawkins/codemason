@@ -1214,13 +1214,18 @@ impl App {
         self.open_url(&request.web_url)
     }
 
-    /// Opens web URL `url` in the default browser (the `PR/MRs` list).
+    /// Opens web URL `url` in the default browser (the `PR/MRs` list, the
+    /// GUI sidebar's PR popup).
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - the `http(s)` URL to open.
     ///
     /// # Errors
     ///
     /// Returns a message when `url` is not an `http(s)` URL or the browser
     /// cannot start.
-    pub(crate) fn open_url(&mut self, url: &str) -> Result<(), String> {
+    pub fn open_url(&mut self, url: &str) -> Result<(), String> {
         let env = crate::open_in::LaunchEnv::current();
         let spec = crate::open_in::url_spec(url, &env)
             .ok_or_else(|| format!("`{url}` is not a web URL"))?;

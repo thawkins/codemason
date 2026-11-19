@@ -174,6 +174,8 @@ mod test_provider_dialog_masking_gui;
 mod test_research;
 #[path = "test_runtime_context.rs"]
 mod test_runtime_context;
+#[path = "test_sessions_request_popup.rs"]
+mod test_sessions_request_popup;
 #[path = "test_side_panels.rs"]
 mod test_side_panels;
 #[path = "test_startup.rs"]

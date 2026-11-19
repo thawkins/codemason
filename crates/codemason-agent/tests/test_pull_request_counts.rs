@@ -579,3 +579,67 @@ async fn test_pull_request_counts_refreshes_open_history_rows() {
         0
     );
 }
+
+#[tokio::test]
+async fn test_pull_request_counts_reads_missing_diff_stats_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/8"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "number": 8, "state": "closed", "merged_at": "2026-11-01T00:00:00Z",
+            "title": "Add stats", "html_url": "https://github.com/acme/app/pull/8",
+            "head": { "ref": "stats" }, "additions": 30, "deletions": 4
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let m = managers();
+    let project = project_with_sessions(&m, "stats", RemoteKind::GitHub, &["stats"]);
+    let session = m
+        .storage
+        .list_sessions_grouped()
+        .expect("sessions")
+        .into_iter()
+        .find(|g| g.project_id == project.id)
+        .and_then(|g| g.sessions.first().map(|s| s.id.clone()))
+        .expect("session");
+    // Already merged, so the open-request refresh would never read it.
+    m.storage
+        .set_session_request(&codemason_storage::SessionRequest {
+            session_id: session.clone(),
+            forge: "github".to_string(),
+            host: "github.com".to_string(),
+            repo: "acme/app".to_string(),
+            number: 8,
+            title: "Add stats".to_string(),
+            web_url: "https://github.com/acme/app/pull/8".to_string(),
+            head_branch: "stats".to_string(),
+            state: "merged".to_string(),
+        })
+        .expect("bind");
+    let service = PullRequestCounts::new(m.storage.clone(), m.events.clone());
+    let mut rx = m.events.subscribe();
+
+    let changed = service
+        .refresh_request_history_with(|_| Some(github(&server)))
+        .await;
+
+    assert_eq!(changed, 1, "the stats were stored");
+    let mut updated = false;
+    while let Ok(event) = rx.try_recv() {
+        updated |= matches!(&event, Event::SessionUpdated { session_id } if *session_id == session);
+    }
+    assert!(updated, "a change is announced so the sidebar reloads");
+    let key = ("github.com".to_string(), "acme/app".to_string(), 8);
+    assert_eq!(
+        m.storage.request_diff_stats().expect("stats").get(&key),
+        Some(&codemason_storage::DiffStats {
+            additions: 30,
+            deletions: 4
+        })
+    );
+    assert_eq!(
+        m.storage.request_history_missing_stats().expect("missing"),
+        Vec::new()
+    );
+}

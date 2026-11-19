@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: resting the pointer on a session row with requests opens a list beside it: each request's title, state, `owner/repo #N` and, for GitHub, `+added -removed`, newest first; click one to open it in the browser. An eye marks the request Auto-fix is watching.
+- Added: the PR/MR history stores each GitHub request's diff size (schema 14, `additions`/`deletions` on `session_request_history`). The history refresh reads it with the state of open requests, and once for any other request without one; GitLab reports no line counts. A refresh that changes a row now reloads the sidebar.
+
 ### Fixed
 
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.

@@ -38,7 +38,10 @@ use std::path::Path;
 use crate::geometry::Area;
 use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
 use codemason_config::ExecutionBackendKind;
-use codemason_storage::{ProjectSessions, SessionCheckout, SidebarSection, Storage, project_root};
+use codemason_storage::{
+    DiffStats, ProjectSessions, RequestKey, SessionCheckout, SessionRequest, SidebarSection,
+    Storage, project_root,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::app::{App, Attention};
@@ -95,6 +98,15 @@ pub struct SidebarState {
     /// Cached execution backend of sessions without their own: the global
     /// one, from the config.
     pub default_backend: ExecutionBackendKind,
+    /// Cached pull/merge requests each session has had, newest first (the
+    /// GUI row's PR chip and its popup); sessions with none are absent.
+    pub request_history: HashMap<String, Vec<SessionRequest>>,
+    /// Cached diff size of each request whose size has been read, keyed by
+    /// `(host, repo, number)`.
+    pub request_stats: HashMap<RequestKey, DiffStats>,
+    /// Cached requests the Auto-fix watcher polls (on, not paused, open,
+    /// session not archived), keyed by `(host, repo, number)`.
+    pub watched_requests: HashSet<RequestKey>,
     /// Cached user-defined sections, in display order (SESSIONMENU FR-11).
     pub sections: Vec<SidebarSection>,
     /// Cached section id of each session placed in a section.
@@ -152,6 +164,9 @@ impl Default for SidebarState {
             request_totals: HashMap::new(),
             backends: HashMap::new(),
             default_backend: ExecutionBackendKind::Local,
+            request_history: HashMap::new(),
+            request_stats: HashMap::new(),
+            watched_requests: HashSet::new(),
             sections: Vec::new(),
             session_section: HashMap::new(),
             hidden: HashSet::new(),
@@ -303,9 +318,28 @@ pub fn refresh_if_dirty(app: &mut App) {
         Ok(bound) => app.sidebar.bound = bound,
         Err(e) => tracing::warn!(error = %e, "session sidebar: bound sessions not read"),
     }
-    match app.storage.session_request_totals() {
-        Ok(totals) => app.sidebar.request_totals = totals,
-        Err(e) => tracing::warn!(error = %e, "session sidebar: request totals not read"),
+    match app.storage.session_request_histories() {
+        Ok(history) => {
+            app.sidebar.request_totals = history
+                .iter()
+                .map(|(id, requests)| (id.clone(), requests.len()))
+                .collect();
+            app.sidebar.request_history = history;
+        }
+        Err(e) => tracing::warn!(error = %e, "session sidebar: request history not read"),
+    }
+    match app.storage.request_diff_stats() {
+        Ok(stats) => app.sidebar.request_stats = stats,
+        Err(e) => tracing::warn!(error = %e, "session sidebar: request diff sizes not read"),
+    }
+    match app.storage.autofix_watch_list() {
+        Ok(watched) => {
+            app.sidebar.watched_requests = watched
+                .into_iter()
+                .map(|r| (r.host, r.repo, r.number))
+                .collect();
+        }
+        Err(e) => tracing::warn!(error = %e, "session sidebar: Auto-fix watch list not read"),
     }
     match app.storage.session_backends() {
         Ok(backends) => {

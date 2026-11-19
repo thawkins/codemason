@@ -1454,7 +1454,8 @@ A PR or MR the agent opens with `github_create_pr` or `gitlab_create_mr` is
 bound automatically. To do it all in one step, ask the agent to use
 `autofix_add`: it pushes the current branch, opens a PR/MR into the branch it
 was created from (or reuses the branch's open one), binds it and turns
-Auto-fix on. The sidebar row's pull-request count turns green when bound and amber
+Auto-fix on. The sidebar row's pull-request count turns green when bound (its
+request list marks the watched request with an eye) and amber
 when Auto-fix has paused after 3 tries on one commit (`/autofix on` resumes). It
 stops when the request is merged or closed, and never merges, force-pushes
 or resolves review threads. GitHub Enterprise Server hosts and the Auto-fix

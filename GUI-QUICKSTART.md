@@ -1076,23 +1076,31 @@ count, e.g. `Sessions (12)`) lists:
   `[gitlab]` when the project has a known remote. A project with no
   sessions is listed too, so you can start one in it.
 
-Each session row shows its title, how long ago it was active, and at the
-right edge:
+Each session row shows its title, a coloured dot while it needs a look, and
+two columns at the right edge:
 
-- `#` when the session is bound to a pull request (GitHub) or merge
-  request (GitLab); `#!` when Auto-fix has paused and is waiting on you.
-- `Y` when the session has its own branch, followed by the number of
-  pull/merge requests for that branch (no number when there are none or the
-  count is not known yet). It is magenta when the session owns its git
-  worktree.
-- a state marker:
+- a pull-request icon with the number of pull requests (GitHub) or merge
+  requests (GitLab) the session has had, `0` when none: grey with none,
+  blue for past ones, green while one is bound, amber when Auto-fix has
+  paused and is waiting on you.
+- the icon of the backend the session runs on: a monitor for this computer,
+  a container for Docker, three boxes for Podman, a cloud for a remote
+  system.
 
-| Marker | Meaning |
-| ------ | ------- |
-| `!`    | Waiting on you (permission or question) |
-| `*`    | Running |
-| `x`    | Its run failed while you were elsewhere |
-| `o`    | Its run finished while you were elsewhere, or you marked it unread |
+| Dot | Meaning |
+| --- | ------- |
+| amber | Waiting on you (permission or question) |
+| accent | Running |
+| red | Its run failed while you were elsewhere |
+| blue | Its run finished while you were elsewhere, or you marked it unread |
+
+Hover a row to see how long ago it was active, its backend and its branch.
+
+Rest the pointer on a row with requests to open its request list beside
+it, newest first. Each entry shows the title, then the state, repository
+and number (`thawkins/codemason #58`) and, for GitHub, the lines added and
+removed (`+1797 -1579`). An eye marks the request Auto-fix is watching.
+Move onto the list to scroll it; click an entry to open it in your browser.
 
 Keys:
 
@@ -1178,7 +1186,7 @@ GitLab (gitlab.com or your own instance):
 The row shows `#`, and the status bar shows lines like
 `PR #67 auto-fix: CI failed (attempt 1/3)`. If the session is busy, the
 message is queued; if you are in another session, its row turns `o`. After
-3 tries on the same commit Auto-fix pauses (`#!`) until you run
+3 tries on the same commit Auto-fix pauses (the row's pull-request icon turns amber) until you run
 `/autofix on` again. It stops when the request is merged or closed. It never
 merges, force-pushes or resolves review threads, and a `git push` still asks
 for permission unless your permission mode allows it. `/autofix status`

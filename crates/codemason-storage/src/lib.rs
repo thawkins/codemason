@@ -21,10 +21,11 @@ pub use project::{
 pub use snapshot::{IncrementalSnapshot, Snapshot};
 pub use storage::{
     AutofixBinding, AutofixState, BackgroundTaskRow, ConversationStats, CronEventRow, CycleError,
-    InitiativeMilestone, InitiativeRow, KgEntityRow, KgRelationshipRow, MemoryRow,
-    MessageSearchResult, ProjectSessions, RunCostSummaryRow, SCHEMA_VERSION, SessionKind,
-    SessionRequest, SessionRow, SessionSearchParams, SidebarSection, Storage, TaskDerived, TaskRow,
-    TaskUpdateParams, TaskView, compute_task_dag, decrypt_key, detect_cycle, encrypt_key,
+    DiffStats, InitiativeMilestone, InitiativeRow, KgEntityRow, KgRelationshipRow, MemoryRow,
+    MessageSearchResult, ProjectSessions, RequestKey, RunCostSummaryRow, SCHEMA_VERSION,
+    SessionKind, SessionRequest, SessionRow, SessionSearchParams, SidebarSection, Storage,
+    TaskDerived, TaskRow, TaskUpdateParams, TaskView, compute_task_dag, decrypt_key, detect_cycle,
+    encrypt_key,
 };
 
 // Automation run-history types (spec `openhands` T-016; FR-018). Re-exported
