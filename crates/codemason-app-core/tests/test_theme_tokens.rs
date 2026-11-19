@@ -348,3 +348,31 @@ fn test_high_contrast_m3_roles_reach_aaa() {
         .collect();
     assert_eq!(failures, Vec::<String>::new());
 }
+
+#[test]
+fn test_m3_check_covers_primary_text_and_the_snackbar_action() {
+    let base = include_str!("../themes/document-light.json");
+    // `primary` as text on `surface` (text buttons, the open tab, links).
+    let invisible = base.replace("\"primary\": \"#155bbb\"", "\"primary\": \"#f8f9ff\"");
+    let failures = ThemeTokens::from_json(&invisible)
+        .expect("parse")
+        .contrast_failures();
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.contains("m3.primary has contrast") && f.contains("m3.surface")),
+        "{failures:?}"
+    );
+    // The snackbar's action text on `inverse_surface` needs 4.5:1, not 3:1.
+    let dim_action = base.replace(
+        "\"inverse_primary\": \"#b8c4ff\"",
+        "\"inverse_primary\": \"#888888\"",
+    );
+    let failures = ThemeTokens::from_json(&dim_action)
+        .expect("parse")
+        .contrast_failures();
+    assert!(
+        failures.iter().any(|f| f.contains("m3.inverse_primary")),
+        "{failures:?}"
+    );
+}

@@ -343,9 +343,11 @@ pub struct M3Roles {
 }
 
 impl M3Roles {
-    /// Checks every `on_x` role against its `x` role at [`AA_CONTRAST`], and
-    /// `outline` against `surface` and `inverse_primary` against
-    /// `inverse_surface` at [`UI_CONTRAST`].
+    /// Checks every `on_x` role against its `x` role, `primary` (text
+    /// buttons, the open tab, links) against `surface`, and
+    /// `inverse_primary` (the snackbar's action) against `inverse_surface`
+    /// at [`AA_CONTRAST`], and `outline` against `surface` at
+    /// [`UI_CONTRAST`].
     ///
     /// # Arguments
     ///
@@ -442,12 +444,21 @@ impl M3Roles {
                 self.inverse_surface,
                 AA_CONTRAST,
             ),
+            // The snackbar's action is text on `inverse_surface`.
             (
                 "inverse_primary",
                 self.inverse_primary,
                 "inverse_surface",
                 self.inverse_surface,
-                UI_CONTRAST,
+                AA_CONTRAST,
+            ),
+            // Text buttons, the open tab and links are `primary` text.
+            (
+                "primary",
+                self.primary,
+                "surface",
+                self.surface,
+                AA_CONTRAST,
             ),
         ];
         pairs
@@ -476,6 +487,18 @@ fn mix(a: Rgb, b: Rgb, amount: f32) -> Rgb {
     Rgb(channel(a.0, b.0), channel(a.1, b.1), channel(a.2, b.2))
 }
 
+/// The action colour on an inverse surface: `accent` mixed into `base`, at
+/// the largest of a few amounts that reads at [`AA_CONTRAST`] on `inverse`,
+/// else `base` itself (which reads on `inverse`, the body text colour, as
+/// body text reads on `base`).
+fn inverse_action(base: Rgb, accent: Rgb, inverse: Rgb) -> Rgb {
+    [0.5, 0.35, 0.2]
+        .into_iter()
+        .map(|amount| mix(base, accent, amount))
+        .find(|colour| contrast_ratio(*colour, inverse) >= AA_CONTRAST)
+        .unwrap_or(base)
+}
+
 /// White or black, whichever contrasts more with `fill`.
 fn on_colour(fill: Rgb) -> Rgb {
     let (white, black) = (Rgb(255, 255, 255), Rgb(0, 0, 0));
@@ -498,7 +521,8 @@ impl ThemeTokens {
     /// outlines. Containers are their colour mixed 20% into `bg.base`, and
     /// content on a solid fill is white or black, whichever contrasts more.
     /// The inverse surface is `text.base` with `bg.base` on it, and its
-    /// action colour is the accent mixed half into `bg.base`.
+    /// action colour is the accent mixed into `bg.base`, as much of it as
+    /// still reads at [`AA_CONTRAST`] on the inverse surface.
     #[must_use]
     pub fn roles(&self) -> M3Roles {
         if let Some(roles) = self.m3 {
@@ -535,7 +559,7 @@ impl ThemeTokens {
             outline_variant: self.border.base,
             inverse_surface: self.text.base,
             inverse_on_surface: base,
-            inverse_primary: mix(base, self.accent, 0.5),
+            inverse_primary: inverse_action(base, self.accent, self.text.base),
             scrim: Rgb(0, 0, 0),
             shadow: Rgb(0, 0, 0),
         }

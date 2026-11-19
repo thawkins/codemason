@@ -64,7 +64,9 @@ pub fn outlined_text_field(
 ) -> Response {
     let m3 = &palette.m3;
     let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, HEIGHT), Sense::hover());
+    // The whole field takes clicks (not keyboard focus: Tab goes straight to
+    // the editor), so a click on its padding edits it too.
+    let (rect, field) = ui.allocate_exact_size(Vec2::new(width, HEIGHT), Sense::CLICK);
     // The border is drawn once the edit's focus is known; reserve its place
     // under the edit now.
     let border_slot = ui.painter().add(Shape::Noop);
@@ -80,6 +82,10 @@ pub fn outlined_text_field(
         .text_color(on_surface)
         .desired_width(input.width());
     let response = ui.place(input, edit);
+    if field.clicked() {
+        ui.memory_mut(|m| m.request_focus(response.id));
+    }
+    field.on_hover_cursor(egui::CursorIcon::Text);
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_label(label));
     let focused = response.has_focus();

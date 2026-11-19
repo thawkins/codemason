@@ -131,7 +131,8 @@ pub fn sheet_header(ui: &mut egui::Ui, palette: &Palette, title: &str) -> bool {
 
 /// Restyle egui's own selectable rows as navigation drawer items, for a
 /// pane that draws its rows with egui widgets (the sessions sidebar): pill
-/// corners, roomier padding, and the selected row on `secondary_container`.
+/// corners, wider horizontal padding, and the selected row on
+/// `secondary_container`.
 ///
 /// # Arguments
 ///
@@ -151,5 +152,7 @@ pub fn drawer_style(style: &mut egui::Style, palette: &Palette) {
     }
     style.visuals.selection.bg_fill = rgb(m3.secondary_container);
     style.visuals.selection.stroke = egui::Stroke::new(1.0, rgb(m3.on_secondary_container));
-    style.spacing.button_padding = Vec2::new(ITEM_PADDING, space::SM);
+    // Only the horizontal padding grows: the sessions list pages and
+    // scrolls by a fixed row height that assumes egui's vertical padding.
+    style.spacing.button_padding.x = ITEM_PADDING;
 }

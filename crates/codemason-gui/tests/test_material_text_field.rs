@@ -35,3 +35,29 @@ fn test_material_text_field_takes_typed_text_and_keeps_its_height() {
     harness.run();
     assert_eq!(harness.state(), "notes");
 }
+
+#[test]
+fn test_material_text_field_padding_click_focuses_the_editor() {
+    let palette = support_material::palette();
+    let mut harness = support_material::builder()
+        .with_size(egui::vec2(400.0, 160.0))
+        .build_ui_state(
+            move |ui, text: &mut String| {
+                outlined_text_field(ui, &palette, "Session name", text, None, false);
+            },
+            String::new(),
+        );
+    let editor = harness.get_by_label("Session name").rect();
+    // Inside the outline, left of and above the editor itself.
+    let pos = editor.min - egui::vec2(8.0, 8.0);
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.run();
+    }
+    assert!(harness.get_by_label("Session name").is_focused());
+}

@@ -74,3 +74,16 @@ fn test_document_panes_motion_follows_the_animation_setting() {
     // Decelerating: more than half way at half the time.
     assert!(standard_easing(0.5) > 0.5);
 }
+
+#[test]
+fn test_document_panes_zoom_slider_keeps_its_arrow_keys() {
+    let (_runtime, mut harness) = harness("document-light");
+    harness.get_by_label(ZOOM_LABEL).focus();
+    harness.run();
+    harness.key_press(egui::Key::ArrowRight);
+    harness.run();
+    // One step of 1.5 / 100 from 100%, rounded to whole percent.
+    let zoom = harness.ctx.zoom_factor();
+    assert!((zoom - 1.02).abs() < 0.011, "{zoom}");
+    assert!(harness.get_by_label(ZOOM_LABEL).is_focused());
+}
