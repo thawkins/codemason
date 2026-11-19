@@ -10,12 +10,13 @@ use codemason_app_core::app::SLASH_COMMANDS;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
+use codemason_gui::dock::panel_command;
 use codemason_gui::keys::{command_key_input, default_keymap};
 use codemason_gui::platform::menu::MenuAction;
 use codemason_gui::ribbon::{HOME_TAB, QUICK_ACCESS, RibbonAction, RibbonItem, TABS};
 use craft_keymap::{CommandRef, Platform};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A running window in theme `theme`: its runtime and harness.
 struct Rig {
@@ -72,11 +73,14 @@ fn test_ribbon_commands_are_ones_the_window_has() {
                     item.label
                 );
             }
-            RibbonAction::Panel(command) => assert!(
-                command_key_input(&CommandRef::new(command)).is_some(),
-                "{}: {command} is not a keymap command",
-                item.label
-            ),
+            RibbonAction::Panel(pane) => {
+                let command = panel_command(pane);
+                assert!(
+                    command.is_some_and(|c| command_key_input(&CommandRef::new(c)).is_some()),
+                    "{}: {pane:?} has no keymap command",
+                    item.label
+                );
+            }
             RibbonAction::Menu(MenuAction::Key(_)) | RibbonAction::Files(_) => {}
         }
     }
@@ -133,5 +137,19 @@ fn test_ribbon_panel_button_toggles_the_panel() {
     rig.harness.run();
     rig.harness.get_by_label("Log").click();
     rig.harness.run();
-    assert_ne!(rig.harness.state().app().show_log, before);
+    let after = rig.harness.state().app().show_log;
+    assert_ne!(after, before);
+    // The button shows the panel's state (the open panel's dock tab is
+    // also labelled "Log", but is no toggle).
+    let toggled: Vec<_> = rig
+        .harness
+        .query_all_by_label("Log")
+        .filter_map(|node| node.accesskit_node().toggled())
+        .collect();
+    let want = if after {
+        egui::accesskit::Toggled::True
+    } else {
+        egui::accesskit::Toggled::False
+    };
+    assert_eq!(toggled, vec![want]);
 }

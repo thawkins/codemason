@@ -200,3 +200,24 @@ fn test_status_bar_keeps_a_non_default_backend_in_view() {
     let rig = rig(|_, app| app.session.active_backend = "docker".to_string());
     rig.harness.get_by_label("Backend:docker");
 }
+
+#[test]
+fn test_status_bar_summary_never_overlaps_the_zoom_control() {
+    let mut rig = rig(|_, _| {});
+    for width in [1600.0, 900.0, 700.0, 520.0] {
+        rig.harness.set_size(egui::vec2(width, 800.0));
+        rig.harness.run();
+        let details = rig.harness.get_by_label("Details").rect();
+        let zoom = rig
+            .harness
+            .get_by_label(codemason_gui::panels::status_bar::ZOOM_LABEL)
+            .rect();
+        let percent = rig.harness.get_by_label("100%").rect();
+        for (name, rect) in [("slider", zoom), ("percentage", percent)] {
+            assert!(
+                !details.intersects(rect),
+                "at {width} pt, Details {details:?} overlaps the zoom {name} {rect:?}"
+            );
+        }
+    }
+}

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Changed: the ribbon is tighter. Its band is 16 points shorter (80 instead of 96), spans the window on every tab so switching tabs no longer changes its width, and each button is as wide as its label (at least 56 points) instead of a fixed 72. The View tab's Log, Profile, Tasks and Memory buttons are filled while their panel is open, and report it to screen readers as a toggled state.
+- Fixed: in a narrow window the status bar's `Details` button and the rest of its row no longer run under the zoom slider; the row wraps in the width left of the slider, and the bar is only as tall as its rows.
 - Changed: the side panels are tidier. Context drops its two blank top rows and indent, states the token unit once (`200.0k tokens` instead of `200.0ktk`), aligns `Free`, and shows `Streamed  1.2 KB up  3.4 KB down`; at sidebar width its percentages now fit. Tasks show `todo`/`active`/`done`/`blocked` in a fixed-width column with `#id`, so subjects align. Log levels are `info`/`tool`/`warn`/`error`/`compact` in a fixed-width column. Memory's header reads `N memories, N bytes` with capitalised category headings. Tasks, Memory and Log have two-line empty states saying what fills them.
 - Changed: the Sessions pane's tab shows the session count (`Sessions (12)`) and the panel's own count line is gone; rows are left-aligned; `New session` and `Search` have icons with their keys right-aligned; section headers show a painted solid triangle (right collapsed, down open) instead of `>`/`v`.
 - Fixed: four clippy `redundant_pub_crate` warnings in `codemason-app-core`.

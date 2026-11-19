@@ -84,15 +84,18 @@ for it):
   new project folder, About, Quit), Home (sessions, undo and redo, copy,
   stop, compact), Insert (attach images, templates), Agent (model, agent,
   loop), View (the Log, Profile, Tasks and Memory panels, theme) and Review
-  (cost, stats, doctor). Every button runs a command codemason already has;
-  hover it to see its name.
+  (cost, stats, doctor). Every button runs a command codemason already has
+  and is labelled with its name. The Log, Profile, Tasks and Memory buttons
+  stay highlighted while their panel is open. The band of buttons spans the
+  window, so it keeps its size when you switch tabs.
 - The chevron at the right of the tabs collapses the ribbon to its tabs;
   clicking any tab opens it again.
 - The transcript fills its pane as a page, and the prompt is an outlined
   field under it, as wide as its pane.
 - The side panels use the theme's Material surfaces, the sessions list has
   wider rows, and the status bar ends with a zoom slider (50% to 200%;
-  Ctrl+Plus and Ctrl+Minus still work).
+  Ctrl+Plus and Ctrl+Minus still work). In a narrow window the rest of the
+  status bar wraps beside the slider instead of running under it.
 
 ### Title bar
 

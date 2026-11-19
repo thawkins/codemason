@@ -482,17 +482,23 @@ impl Shell {
         });
         egui::Panel::top("ribbon").show(ui, |ui| {
             ui.add_enabled_ui(menus_enabled, |ui| {
-                chosen = ribbon_ui(ui, &palette, &mut self.ribbon).or(chosen);
+                let app = &self.app;
+                let shown = |pane| crate::dock::pane_wanted(app, pane);
+                chosen = ribbon_ui(ui, &palette, &mut self.ribbon, &shown).or(chosen);
             });
         });
         if let Some(action) = chosen {
             self.run_ribbon_action(ui.ctx(), action);
         }
         egui::Panel::bottom("status_bar").show(ui, |ui| {
+            // The zoom control takes its place at the right first, so the
+            // summary wraps in the width left over instead of running under it.
             ui.horizontal(|ui| {
-                status_bar_ui(ui, &mut self.app, &palette);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     crate::panels::status_bar::zoom_ui(ui, &palette);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        status_bar_ui(ui, &mut self.app, &palette);
+                    });
                 });
             });
         });
@@ -633,10 +639,11 @@ impl Shell {
                 self.files.ask(intent, start);
                 return;
             }
-            RibbonAction::Panel(command) => {
-                crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
-                    .map(MenuAction::Key)
-            }
+            RibbonAction::Panel(pane) => crate::dock::panel_command(pane)
+                .and_then(|command| {
+                    crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
+                })
+                .map(MenuAction::Key),
             RibbonAction::Menu(menu_action) => Some(menu_action),
         };
         let (Some(menu_action), Some(sources)) = (key, self.sources.as_ref()) else {
