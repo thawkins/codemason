@@ -2,9 +2,11 @@
 //! `sessions_sidebar_state`.
 //!
 //! [`SessionsView`] lists the rows app-core builds
-//! ([`build_rows`]): `+ New session`, `/ Search`, the `Pinned` section and
-//! one section per project, each session with its relative age, request
-//! count, branch marker and attention marker, as the TUI paints them. The
+//! ([`build_rows`]): `New session` and `Search` (each with its icon and its
+//! key on the right), the `Pinned` section and one section per project
+//! (each header led by a painted solid triangle, pointing right when
+//! collapsed and down when open), each session with its relative age,
+//! request count, branch marker and attention marker. The
 //! open session is highlighted, and while the sidebar has the keyboard the
 //! cursor row is too.
 //!
@@ -18,6 +20,9 @@
 //! `Enter`, `m`, `Shift+F10` and the other sidebar keys act on the cursor
 //! row, exactly as in the TUI.
 //!
+//! The session count is in the dock tab's title ([`tab_title`]), not in the
+//! panel.
+//!
 //! The list is virtualised with `ScrollArea::show_rows` (one text row per
 //! sidebar row), so a long session list costs only the visible rows.
 //!
@@ -30,8 +35,9 @@ use codemason_app_core::sessions_sidebar_state::{
     BRANCH_MARK, PINNED_KEY, SidebarRow, attention_of, build_rows, click_row, open_row_menu,
     refresh_if_dirty, relative_age, selectable,
 };
-use egui::{RichText, Role, ScrollArea, WidgetInfo};
+use egui::{Atom, Atoms, Color32, IdSalt, IntoAtoms, Rect, RichText, Role, ScrollArea, WidgetInfo};
 
+use crate::icons::{Icon, icon_label};
 use crate::palette::Palette;
 use crate::styled_text::drawable;
 
@@ -56,24 +62,89 @@ fn attention_marker(attention: Attention) -> char {
     }
 }
 
-/// The text and colour of one row.
-fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> RichText {
+/// The id of a section header's disclosure-triangle slot.
+fn disclosure_id() -> IdSalt {
+    IdSalt::new("sessions_disclosure")
+}
+
+/// The colour of the section header keyed `key`: the Pinned section stands
+/// out, project sections are muted.
+fn header_colour(key: &str, palette: &Palette) -> Color32 {
+    if key == PINNED_KEY {
+        palette.warning
+    } else {
+        palette.muted
+    }
+}
+
+/// Paint a solid disclosure triangle in `slot`: pointing right while the
+/// section is `collapsed`, down while it is open.
+fn paint_disclosure(ui: &egui::Ui, slot: Rect, collapsed: bool, colour: Color32) {
+    let r = Rect::from_center_size(slot.center(), slot.size() * 0.5);
+    let points = if collapsed {
+        vec![r.left_top(), r.right_center(), r.left_bottom()]
+    } else {
+        vec![r.left_top(), r.right_top(), r.center_bottom()]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(
+        points,
+        colour,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// An action row: `icon`, `label`, then `shortcut` pushed to the right edge,
+/// as a menu item draws its accelerator.
+fn action_row(
+    ui: &egui::Ui,
+    icon: Icon,
+    label: String,
+    shortcut: &str,
+    colour: egui::Color32,
+    palette: &Palette,
+) -> Atoms<'static> {
+    let size = egui::TextStyle::Button.resolve(ui.style()).size;
+    (
+        icon_label(ui.ctx(), icon, size, colour),
+        RichText::new(label).color(colour),
+        Atom::grow(),
+        RichText::new(shortcut.to_string()).color(palette.muted),
+    )
+        .into_atoms()
+}
+
+/// The content of one row.
+fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> Atoms<'static> {
     let font = egui::TextStyle::Button.resolve(ui.style());
     // Titles, names and descriptions are user text: draw what the font
     // cannot as ASCII stand-ins.
     let shown = |text: &str| drawable(ui.ctx(), &font, text);
     match row {
-        SidebarRow::NewSession => RichText::new("+ New session    Ctrl+N").color(palette.success),
-        SidebarRow::Spacer => RichText::new(" "),
+        SidebarRow::NewSession => action_row(
+            ui,
+            Icon::Add,
+            "New session".to_string(),
+            "Ctrl+N",
+            palette.success,
+            palette,
+        ),
+        SidebarRow::Spacer => RichText::new(" ").into_atoms(),
         SidebarRow::Search => {
             let state = &app.sidebar;
-            let text = if state.filter_editing || !state.filter.is_empty() {
+            if state.filter_editing || !state.filter.is_empty() {
                 let caret = if state.filter_editing { "_" } else { "" };
-                format!("/ {}{caret}", state.filter)
+                let filter = format!("{}{caret}", shown(&state.filter));
+                action_row(ui, Icon::Search, filter, "", palette.text, palette)
             } else {
-                "/ Search    /".to_string()
-            };
-            RichText::new(text).color(palette.muted)
+                action_row(
+                    ui,
+                    Icon::Search,
+                    "Search".to_string(),
+                    "/",
+                    palette.muted,
+                    palette,
+                )
+            }
         }
         SidebarRow::Header {
             key,
@@ -83,7 +154,9 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> Ri
             remote,
             description,
         } => {
-            let mut text = format!("{} {}", shown(label), if *collapsed { '>' } else { 'v' });
+            // The disclosure triangle is painted into the leading slot
+            // (`paint_disclosure`), not drawn as a character.
+            let mut text = shown(label);
             if let Some(description) = description {
                 text.push_str(&format!(" ({})", shown(description)));
             }
@@ -93,12 +166,12 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> Ri
             if let Some(kind) = remote {
                 text.push_str(&format!(" [{kind}]"));
             }
-            let colour = if key == PINNED_KEY {
-                palette.warning
-            } else {
-                palette.muted
-            };
-            RichText::new(text).color(colour)
+            let size = egui::TextStyle::Button.resolve(ui.style()).size;
+            (
+                Atom::custom(disclosure_id(), egui::Vec2::splat(size)),
+                RichText::new(text).color(header_colour(key, palette)),
+            )
+                .into_atoms()
         }
         SidebarRow::Session {
             id,
@@ -115,7 +188,8 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> Ri
             branch.as_deref(),
             *requests,
             palette,
-        ),
+        )
+        .into_atoms(),
     }
 }
 
@@ -168,15 +242,20 @@ fn session_text(
     }
 }
 
-/// The sidebar's title: the session count, or the filter while one is set.
-fn title(app: &App) -> String {
-    if app.sidebar.filter_editing || !app.sidebar.filter.is_empty() {
-        let caret = if app.sidebar.filter_editing { "_" } else { "" };
-        format!("SESSIONS /{}{caret}", app.sidebar.filter)
-    } else {
-        let total: usize = app.sidebar.groups.iter().map(|g| g.sessions.len()).sum();
-        format!("SESSIONS ({total})")
-    }
+/// The Sessions pane's dock tab title: the pane name and the session count,
+/// e.g. `Sessions (12)`. The panel itself draws no heading.
+///
+/// # Arguments
+///
+/// * `app` - the App whose sidebar groups are counted.
+///
+/// # Returns
+///
+/// The tab title.
+#[must_use]
+pub fn tab_title(app: &App) -> String {
+    let total: usize = app.sidebar.groups.iter().map(|g| g.sessions.len()).sum();
+    format!("{SESSIONS_LABEL} ({total})")
 }
 
 impl SessionsView {
@@ -198,8 +277,6 @@ impl SessionsView {
             app.sidebar.cursor.min(rows.len().saturating_sub(1)),
             true,
         );
-        let heading = RichText::new(title(app)).color(palette.warning).strong();
-        ui.label(heading);
         let row_height = ui.text_style_height(&egui::TextStyle::Button) + 4.0;
         // app-core pages PageUp/PageDown by the painted height in rows, with
         // the border rows of the terminal's box.
@@ -238,11 +315,18 @@ impl SessionsView {
                     SidebarRow::Session { id, .. } if app.session.session_id.as_deref() == Some(id)
                 );
                 let highlighted = (focused && index == cursor) || open;
-                let response = ui.add_sized(
-                    [ui.available_width(), row_height],
+                // Left-aligned like every other list: `add_sized` would
+                // centre the label in the full-width row.
+                let response =
                     egui::Button::selectable(highlighted, row_text(ui, app, row, palette))
-                        .frame_when_inactive(false),
-                );
+                        .frame_when_inactive(false)
+                        .min_size(egui::vec2(ui.available_width(), row_height))
+                        .atom_ui(ui);
+                if let SidebarRow::Header { key, collapsed, .. } = row
+                    && let Some(slot) = response.rect(disclosure_id())
+                {
+                    paint_disclosure(ui, slot, *collapsed, header_colour(key, palette));
+                }
                 if response.clicked() {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);
                     clicked = Some((index, ctrl));

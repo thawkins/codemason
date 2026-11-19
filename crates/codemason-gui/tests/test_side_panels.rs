@@ -208,9 +208,9 @@ fn test_tasks_panel_lists_tasks() {
     assert_eq!(rig.harness.state().app().status, "tasks panel visible");
     assert!(shown(&rig, Role::List, TASKS_LABEL));
     rig.harness
-        .get_by_label_contains("[PENDING] t-1 Write the parser");
+        .get_by_label_contains("todo    #t-1 Write the parser");
     rig.harness
-        .get_by_label_contains("[COMPLETED] t-2 Ship the release");
+        .get_by_label_contains("done    #t-2 Ship the release");
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn test_memory_panel_clear_requires_confirm() {
     assert!(!shown(&rig, Role::Dialog, MEMORY_CLEAR_TITLE));
     assert_eq!(memory_count(&rig), 0);
     rig.harness
-        .get_by_label_contains("(no memories for this project)");
+        .get_by_label_contains("No memories for this project yet");
 }
 
 #[test]

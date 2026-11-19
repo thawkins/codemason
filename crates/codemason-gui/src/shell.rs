@@ -667,11 +667,15 @@ impl Shell {
             layout,
             ..
         } = self;
+        let sessions_tab = crate::panels::sessions::tab_title(app);
         let output = DockArea::new(egui::Id::unique("codemason_dock")).show(
             ui,
             layout,
             &style,
-            |pane: &PaneId| pane.label().to_string(),
+            |pane: &PaneId| match pane {
+                PaneId::Sessions => sessions_tab.clone(),
+                other => other.label().to_string(),
+            },
             |pane: &PaneId| pane.permissions(),
             |ui, pane| match pane {
                 PaneId::Messages => {

@@ -140,7 +140,8 @@ async fn tc002_system_prompt_row_and_model_capacity() {
     let text = draw_effects(&mut app, 100, 40);
     assert!(text.contains("unknown"), "FR-011: unknown percentages");
     assert!(
-        text.contains("tk"),
+        text.lines()
+            .any(|l| l.contains("System prompt") && l.chars().any(|c| c.is_ascii_digit())),
         "FR-011: absolute token counts still shown"
     );
 }

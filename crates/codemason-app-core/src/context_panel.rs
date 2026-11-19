@@ -20,8 +20,8 @@
 use crate::app::ContextPartitionSnapshot;
 use crate::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
 
-/// Left margin of every row, as in the TUI.
-const MARGIN: &str = "    ";
+/// Width of the label column every row's value lines up after.
+const LABEL_W: usize = 14;
 
 /// Compact a token estimate into a short form (`123`, `12.3k`, `1.2M`).
 ///
@@ -87,7 +87,7 @@ impl Styles {
     }
 }
 
-/// A `label  NNNtk [bar] PP%` row, or `label  NNNtk unknown` when the
+/// A `label  NNN [bar] PP%` row, or `label  NNN unknown` when the
 /// window is unknown.
 fn partition_row(
     snapshot: &ContextPartitionSnapshot,
@@ -98,8 +98,8 @@ fn partition_row(
     styles: &Styles,
 ) -> StyledLine {
     let mut spans = vec![
-        StyledSpan::styled(format!("{MARGIN}{label:<14}"), label_style),
-        StyledSpan::styled(format!("{:>8}tk ", format_tokens(tokens)), styles.value),
+        StyledSpan::styled(format!("{label:<LABEL_W$}"), label_style),
+        StyledSpan::styled(format!("{:>8} ", format_tokens(tokens)), styles.value),
     ];
     match snapshot.percent_of_window(tokens) {
         Some(pct) => {
@@ -126,8 +126,8 @@ fn partition_row(
 ///
 /// # Returns
 ///
-/// The panel's rows, top to bottom, starting with two blank lines as in the
-/// TUI.
+/// The panel's rows, top to bottom. Token counts carry no unit: the first
+/// row states it once (`400.0k tokens`).
 #[must_use]
 pub fn context_panel_lines(
     snapshot: &ContextPartitionSnapshot,
@@ -136,18 +136,18 @@ pub fn context_panel_lines(
     bar_width: usize,
 ) -> Vec<StyledLine> {
     let styles = Styles::new();
-    let mut lines = vec![StyledLine::default(), StyledLine::default()];
+    let mut lines = Vec::new();
 
     // FR-010/FR-011: the window every percentage below is measured against.
     let window_label = "Context window";
     lines.push(StyledLine::from(vec![
-        StyledSpan::styled(format!("{MARGIN}{window_label:<14}"), styles.label),
+        StyledSpan::styled(format!("{window_label:<LABEL_W$}"), styles.label),
         match snapshot.context_window_tokens {
             Some(window) => StyledSpan::styled(
-                format!("{:>8}tk", format_tokens(window as u64)),
+                format!("{:>8} tokens", format_tokens(window as u64)),
                 styles.value,
             ),
-            None => StyledSpan::styled("unknown", styles.sub),
+            None => StyledSpan::styled(format!("{:>8}", "unknown"), styles.sub),
         },
     ]));
 
@@ -160,12 +160,12 @@ pub fn context_panel_lines(
             partition_row(snapshot, sent_label, sent, styles.label, bar_width, &styles)
         }
         Some(_) => StyledLine::from(vec![
-            StyledSpan::styled(format!("{MARGIN}{sent_label:<14}"), styles.sub),
-            StyledSpan::styled(format!("{:>8}tk", format_tokens(sent)), styles.sub),
+            StyledSpan::styled(format!("{sent_label:<LABEL_W$}"), styles.sub),
+            StyledSpan::styled(format!("{:>8}", format_tokens(sent)), styles.sub),
         ]),
         None => StyledLine::from(vec![
-            StyledSpan::styled(format!("{MARGIN}{sent_label:<14}"), styles.label),
-            StyledSpan::styled(format!("{:>8}tk", format_tokens(sent)), styles.value),
+            StyledSpan::styled(format!("{sent_label:<LABEL_W$}"), styles.label),
+            StyledSpan::styled(format!("{:>8}", format_tokens(sent)), styles.value),
         ]),
     });
 
@@ -182,7 +182,7 @@ pub fn context_panel_lines(
     ];
     for (label, tokens, sub) in rows {
         let (label, style) = if sub {
-            (format!("   {label}"), styles.sub)
+            (format!("  {label}"), styles.sub)
         } else {
             (label.to_string(), styles.label)
         };
@@ -193,7 +193,7 @@ pub fn context_panel_lines(
 
     // FR-008: the message count beside the history partition.
     lines.push(StyledLine::from(StyledSpan::styled(
-        format!("{MARGIN}   {} messages", snapshot.history_message_count),
+        format!("  {} messages", snapshot.history_message_count),
         styles.sub,
     )));
     lines.push(StyledLine::default());
@@ -209,9 +209,9 @@ pub fn context_panel_lines(
     ));
     lines.push(match snapshot.remaining_tokens() {
         Some(remaining) => StyledLine::from(vec![
-            StyledSpan::styled(format!("{MARGIN}{:<14}", "Free"), styles.label),
+            StyledSpan::styled(format!("{:<LABEL_W$}", "Free"), styles.label),
             StyledSpan::styled(
-                format_tokens(remaining),
+                format!("{:>8}", format_tokens(remaining)),
                 if remaining == 0 {
                     styles.warn
                 } else {
@@ -220,22 +220,20 @@ pub fn context_panel_lines(
             ),
         ]),
         None => StyledLine::from(StyledSpan::styled(
-            format!("{MARGIN}Free: unknown"),
+            format!("{:<LABEL_W$}{:>8}", "Free", "unknown"),
             styles.sub,
         )),
     });
 
-    // The stream I/O counters, two lines below.
+    // The stream I/O counters, one line below.
     lines.push(StyledLine::default());
-    lines.push(StyledLine::default());
-    let kb = |bytes: u64| format!("{:.1}KB", bytes as f64 / 1024.0);
-    lines.push(StyledLine::from(StyledSpan::styled(
-        format!(
-            "{MARGIN}io: ^{} v{}",
-            kb(stream_out_bytes),
-            kb(stream_in_bytes)
+    let kb = |bytes: u64| format!("{:.1} KB", bytes as f64 / 1024.0);
+    lines.push(StyledLine::from(vec![
+        StyledSpan::styled(format!("{:<LABEL_W$}", "Streamed"), styles.sub),
+        StyledSpan::styled(
+            format!("{} up  {} down", kb(stream_out_bytes), kb(stream_in_bytes)),
+            styles.value,
         ),
-        styles.value,
-    )));
+    ]));
     lines
 }

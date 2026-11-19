@@ -61,7 +61,7 @@ fn test_lines_list_every_partition_with_percentages() {
         "3 messages",
         "Total",
         "Free",
-        "io: ^0.0KB v0.0KB",
+        "0.0 KB up  0.0 KB down",
     ] {
         assert!(all.contains(expected), "missing {expected:?} in:\n{all}");
     }
@@ -74,7 +74,15 @@ fn test_lines_read_unknown_without_a_window() {
     let all = texts(&snapshot(None), 2048, 1024).join("\n");
     assert!(all.contains("Context window"), "{all}");
     assert!(all.contains("unknown"), "FR-011 unknown ratios: {all}");
-    assert!(all.contains("Free: unknown"), "{all}");
-    assert!(all.contains("tk"), "absolute counts remain: {all}");
-    assert!(all.contains("io: ^2.0KB v1.0KB"), "{all}");
+    assert!(
+        all.lines()
+            .any(|l| l.starts_with("Free") && l.trim_end().ends_with("unknown")),
+        "{all}"
+    );
+    assert!(
+        all.lines()
+            .any(|l| l.starts_with("System prompt") && l.chars().any(|c| c.is_ascii_digit())),
+        "absolute counts remain: {all}"
+    );
+    assert!(all.contains("2.0 KB up  1.0 KB down"), "{all}");
 }
