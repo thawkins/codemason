@@ -31,7 +31,7 @@ use codemason_gui::panels::prompt::PROMPT_LABEL;
 use craft_keymap::Platform;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// The session the tests' permission requests belong to.
@@ -437,15 +437,18 @@ fn test_provider_dialog_saves_selection() {
             .is_some()
     );
 
-    // Choose Ollama in the provider combo box, then continue.
-    let combo = harness.get_by_role_and_label(Role::ComboBox, PROVIDER_CHOICE_LABEL);
+    // Choose Ollama in the provider list, then continue.
+    let highlighted = harness.get_by_role_and_label(Role::ListItem, "OpenAI (GPT)");
     assert_eq!(
-        combo.value().as_deref(),
-        Some("OpenAI (GPT)"),
+        highlighted.accesskit_node().is_selected(),
+        Some(true),
         "the App's highlight"
     );
-    combo.click();
-    harness.run();
+    assert!(
+        harness
+            .query_by_role_and_label(Role::List, PROVIDER_CHOICE_LABEL)
+            .is_some()
+    );
     harness.get_by_label("Ollama (Local)").click();
     harness.run();
     harness.get_by_label(CONTINUE).click();
@@ -466,6 +469,44 @@ fn test_provider_dialog_saves_selection() {
             .iter()
             .any(|p| p.id == "ollama"),
         "the chosen provider is saved as configured"
+    );
+}
+
+#[test]
+fn test_provider_dialog_double_click_chooses_a_list_entry() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.provider_setup = Some(ProviderSetupStep::SelectProvider {
+            selected: 3,
+            force_key_entry: false,
+        });
+    });
+    harness.run();
+
+    // A double click highlights the entry and continues, as Enter does.
+    let pos = harness.get_by_label("Ollama (Local)").rect().center();
+    // Each click is one frame (press and release), so the two clicks are
+    // one frame apart, inside egui's double-click delay.
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        harness.step();
+    }
+    harness.run();
+
+    assert!(
+        matches!(
+            harness.state().app().provider_setup,
+            Some(ProviderSetupStep::LoadingModels { ref provider_id, .. })
+                if provider_id == "ollama"
+        ),
+        "the double-clicked provider is chosen: {:?}",
+        harness.state().app().provider_setup
     );
 }
 

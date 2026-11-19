@@ -7,9 +7,9 @@
 //! provider), Esc cancels and typed characters fill the step's text fields.
 //! This dialog draws the current step and drives the same machine:
 //!
-//! - a step that picks from a list draws a `craft_ui::ComboBox`; choosing an
-//!   entry moves the step's highlight (what Up and Down move), and Continue
-//!   sends Enter;
+//! - a step that picks from a list draws it as Material list items; clicking an
+//!   entry moves the step's highlight (what Up and Down move), a double click
+//!   or Continue sends Enter, and a newly highlighted entry scrolls into view;
 //! - a step with text fields shows them as the App holds them (secrets
 //!   masked by `codemason_app_core::text_utils::mask_secret`), with the
 //!   active field marked; typing
@@ -22,8 +22,7 @@
 //! The model lists of the flow are drawn by [`super::model_picker`].
 //!
 //! Dependencies: `codemason-app-core`, `codemason-config` (telemetry
-//! protocol), `codemason-types` (thinking levels), `craft-ui`
-//! (`ComboBox`) and `egui`.
+//! protocol), `codemason-types` (thinking levels) and `egui`.
 
 use codemason_app_core::app::{App, DeviceFlowKind, PROVIDER_LIST, ProviderSetupStep};
 use codemason_app_core::input_event::{Key, KeyInput};
@@ -31,13 +30,74 @@ use codemason_app_core::text_utils::mask_secret;
 use codemason_config::OtelProtocol;
 use codemason_types::ThinkingLevel;
 
-use super::{material_actions, material_hint, material_modal, plain};
+use egui::Id;
+
+use super::{material_actions, material_hint, material_modal, plain, send_key};
+use crate::material::list::list_item;
 use crate::material::text_field::outlined_value;
 use crate::metrics::{space, text_size};
 use crate::palette::{palette_for, rgb};
 
 /// Width of the dialog's content, in points.
 const WIDTH: f32 = 440.0;
+
+/// Tallest a step's list grows before it scrolls, in points.
+const LIST_HEIGHT: f32 = 320.0;
+
+/// The list's highlight last frame, to scroll a newly highlighted row into
+/// view.
+fn last_highlight_id() -> Id {
+    Id::unique("codemason_provider_last_highlight")
+}
+
+/// Draw a step's list as Material list items, labelled with the list's
+/// label (`Role::List`), with the App's highlight selected.
+///
+/// # Arguments
+///
+/// * `ui` - the dialog's ui.
+/// * `palette` - the colours.
+/// * `choice` - the step's list.
+/// * `selected` - the highlighted entry.
+/// * `moved` - whether the highlight moved since last frame; the row is then
+///   scrolled into view.
+///
+/// # Returns
+///
+/// The clicked entry, if any, and whether it was double-clicked (chosen).
+fn choice_list(
+    ui: &mut egui::Ui,
+    palette: &crate::palette::Palette,
+    choice: &Choice,
+    selected: usize,
+    moved: bool,
+) -> (Option<usize>, bool) {
+    let mut clicked = (None, false);
+    let list = egui::ScrollArea::vertical()
+        .id_salt("codemason_provider_choice")
+        .max_height(LIST_HEIGHT)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (i, option) in choice.options.iter().enumerate() {
+                    let item = list_item(ui, palette, option, None, None, i == selected);
+                    if i == selected && moved {
+                        item.scroll_to_me(None);
+                    }
+                    if item.double_clicked() {
+                        clicked = (Some(i), true);
+                    } else if item.clicked() {
+                        clicked = (Some(i), false);
+                    }
+                }
+            })
+            .response
+        });
+    list.inner
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, choice.label));
+    clicked
+}
 
 /// The button that confirms the current step (Enter).
 pub const CONTINUE: &str = "Continue";
@@ -494,6 +554,12 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let view = view(step);
     let palette = palette_for(app, ctx);
     let mut picked = None;
+    let highlight = view.choice.as_ref().map(|c| c.selected);
+    let moved = ctx.data_mut(|d| {
+        let last = d.get_temp::<Option<usize>>(last_highlight_id()).flatten();
+        d.insert_temp(last_highlight_id(), highlight);
+        last != highlight
+    });
     material_modal(
         ctx,
         &palette,
@@ -517,14 +583,13 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                         egui::RichText::new(choice.empty).color(rgb(palette.m3.on_surface_variant)),
                     );
                 } else {
-                    let mut selected = choice.selected.min(choice.options.len() - 1);
-                    let combo = craft_ui::ComboBox::new("codemason_provider_choice", choice.label)
-                        .width(320.0)
-                        .show_index(ui, &mut selected, choice.options.len(), |i| {
-                            choice.options.get(i).cloned().unwrap_or_default()
-                        });
-                    if combo.changed() {
-                        picked = Some(selected);
+                    let selected = choice.selected.min(choice.options.len() - 1);
+                    let (clicked, choose) = choice_list(ui, &palette, choice, selected, moved);
+                    if let Some(i) = clicked {
+                        picked = Some(i);
+                        if choose {
+                            send_key(ui.ctx(), plain(Key::Enter));
+                        }
                     }
                 }
                 ui.add_space(space::LG);
