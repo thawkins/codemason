@@ -157,8 +157,14 @@ fn test_written_paths_reads_each_metadata_shape() {
         [PathBuf::from("/work/new.rs")]
     );
     // A tool that is not a file writer is never formatted.
-    assert!(written_paths("read", &json!({ "path": "/work/a.rs" }), wd).is_empty());
-    assert!(written_paths("rm", &json!({ "path": "/work/a.rs" }), wd).is_empty());
+    assert_eq!(
+        written_paths("read", &json!({ "path": "/work/a.rs" }), wd),
+        [] as [std::path::PathBuf; 0]
+    );
+    assert_eq!(
+        written_paths("rm", &json!({ "path": "/work/a.rs" }), wd),
+        [] as [std::path::PathBuf; 0]
+    );
 }
 
 #[cfg(unix)]

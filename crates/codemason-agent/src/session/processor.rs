@@ -49,9 +49,9 @@ use crate::tool::{ToolContext, ToolRegistry};
 // Re-export the public helpers that external callers (tests, benches) import
 // from `session::processor::...` so the extraction does not break those paths.
 pub use crate::session::history::{
-    chat_request_payload_bytes, estimate_request_bytes, estimate_tool_definition_bytes,
-    history_to_chat_messages, is_permanent_llm_api_error, is_token_overflow_error_message,
-    should_retry_stream_error, stream_has_meaningful_partial_output, tool_result_content_for_llm,
+    estimate_request_bytes, estimate_tool_definition_bytes, history_to_chat_messages,
+    is_permanent_llm_api_error, is_token_overflow_error_message, should_retry_stream_error,
+    stream_has_meaningful_partial_output, tool_result_content_for_llm,
 };
 pub use crate::session::permissions::check_permission_with_prompt;
 pub use crate::session::prompt_builders::build_detailed_tool_reference_section;
