@@ -53,8 +53,9 @@ fn render_app_to_string_effects(app: &mut App) {
 const TAIL_MARKER: &str = "TAILMARKER-7f3a";
 
 /// Test 2: render cost must NOT scale with transcript length. Render the
-/// same viewport twice - short transcript vs 500-message transcript - after
-/// warming caches, and assert steady-state per-frame cost stays bounded.
+/// same viewport - short transcript vs 500-message transcript - after
+/// warming caches, and assert the steady-state per-frame cost (the fastest
+/// of ten frames each) stays bounded.
 /// Regression for the whole-transcript Paragraph wrap that dominated perf
 /// profiles after long agent turns.
 #[test]
@@ -79,14 +80,21 @@ fn test_render_cost_bounded_by_viewport_not_transcript() {
     render_app_to_string_effects(&mut app_short);
     render_app_to_string_effects(&mut app_long);
 
-    let _frames = 10;
-    let start = std::time::Instant::now();
-    render_app_to_string_effects(&mut app_short);
-    let short_elapsed = start.elapsed();
-
-    let start = std::time::Instant::now();
-    render_app_to_string_effects(&mut app_long);
-    let long_elapsed = start.elapsed();
+    // The fastest of several frames: a frame costs microseconds, so one
+    // sample is at the mercy of a single scheduler or allocator stall.
+    let frames = 10;
+    let fastest = |app: &mut App| {
+        (0..frames)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                render_app_to_string_effects(app);
+                start.elapsed()
+            })
+            .min()
+            .unwrap_or_default()
+    };
+    let short_elapsed = fastest(&mut app_short);
+    let long_elapsed = fastest(&mut app_long);
 
     // A 100x larger transcript must not cost dramatically more per frame.
     // Allow generous headroom for allocator noise; the un-sliced
