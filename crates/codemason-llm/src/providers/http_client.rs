@@ -263,14 +263,6 @@ pub fn redact_frame(frame: &str) -> String {
     codemason_types::strutil::truncate_bytes_no_ellipsis(&redacted, MAX_FRAME_LOG_BYTES)
 }
 
-/// Maximum `Retry-After` delay honoured from a response header.
-///
-/// SEC-codemason-llm-003 (SECTASKS T-028): an endpoint answering `429` with
-/// `Retry-After: 315360000` previously parked the request for the lifetime of
-/// the process. The single source of truth is
-/// [`codemason_types::guard::MAX_RETRY_AFTER`]; this name is kept for callers.
-pub const MAX_RETRY_AFTER: Duration = codemason_types::guard::MAX_RETRY_AFTER;
-
 /// Read a response body into a string, capped at `limit` bytes.
 ///
 /// Returns the (possibly truncated) body. A read error is formatted into the
@@ -531,7 +523,8 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 
     // Try parsing as integer seconds first.
     //
-    // SEC-codemason-llm-003 (SECTASKS T-028): clamp to `MAX_RETRY_AFTER`. A remote
+    // SEC-codemason-llm-003 (SECTASKS T-028): clamp to
+    // `codemason_types::guard::MAX_RETRY_AFTER`. A remote
     // endpoint that answers `429` with a huge `Retry-After` must not be able to
     // park this process's LLM call for years. The shared guard also floors the
     // delay at one second, so `Retry-After: 0` cannot burn every retry at once.

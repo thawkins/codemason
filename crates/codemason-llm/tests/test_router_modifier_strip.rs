@@ -48,11 +48,11 @@ struct RecordingProvider {
 
 #[async_trait::async_trait]
 impl Provider for RecordingProvider {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "fake"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Fake Provider"
     }
 

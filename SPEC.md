@@ -1300,7 +1300,7 @@ delay**, and **origin-scoped credential attachment**.
 |-------|----------------|------------------|
 | `read_body_capped` / MCP body cap | `codemason-agent::mcp::http` | MCP HTTP responses are read under a fixed byte cap |
 | Benchmark download caps | `codemason-bench::data` | client timeout, streamed byte cap, pagination page/record budget, and `contained_join` for manifest `case_file`/`relative_path` |
-| `MAX_RETRY_AFTER` / `MAX_SSE_BUFFER_BYTES` / `MAX_ERROR_BODY_BYTES` | `codemason-llm::providers::http_client` | `Retry-After` is clamped to 30 s, the SSE accumulation buffer aborts the stream past 1 MiB, and error bodies are read under 64 KiB |
+| `MAX_SSE_BUFFER_BYTES` / `MAX_ERROR_BODY_BYTES` | `codemason-llm::providers::http_client` | `Retry-After` is clamped to 30 s by `codemason_types::guard::clamp_retry_after`, the SSE accumulation buffer aborts the stream past 1 MiB, and error bodies are read under 64 KiB |
 | `MAX_TREE_REQUESTS` / `MAX_TREE_ENTRIES` / `MAX_JOB_PAGES` | `codemason-tools-vcs` | the GitHub tree walk and the GitLab jobs pagination are bounded |
 | `read_body_capped` / `MAX_FETCH_BODY_BYTES` / `MAX_CRAWL_PAGE_BYTES` | `codemason-tools-extended::masterfetch` | responses are streamed under a byte budget; `crawl_urls` is SSRF-validated at the tool boundary |
 | Credential env seeding | binary startup | every credential env var is registered with the secret registry before any log can be written |
