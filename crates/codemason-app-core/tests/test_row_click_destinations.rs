@@ -55,7 +55,6 @@ fn app_with_team() -> App {
     app.session.active_team = Some(TeamConfig::new("alpha", LEAD_SESSION));
     app.session.team_members = vec![member("tm-001", "reviewer"), member("tm-002", "tester")];
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 

@@ -107,6 +107,8 @@
 
 ### Changed
 
+- Changed: `App::needs_redraw` and `App::current_screen` / `ScreenMode` are removed from `codemason-app-core`. The flag was written at 233 production sites and never read (the GUI repaints through egui), and the screen field could only ever hold `ScreenMode::Chat`; the input-transition log and spool drop the constant `screen=Chat` field. Comments that only explained a removed write are gone, and doc comments that promised a redraw flag now describe what the function does. Sanctioned test edits across 62 files: 202 flag/screen writes and one-line asserts plus 30 multi-line asserts are removed, 18 tests whose only subject was the flag or the chat screen are deleted, and 17 no-op/smoke tests that were left with no assertion now assert the state they must leave alone or the effect the handler has (#10, AG-05).
+
 - Changed: the unused `codemason_research::source_registry` module is removed: the `SourceRegistry` trait had one implementation (`BuiltinSourceRegistry`) and no production caller, and no spec requires it. Its crate-root re-exports and DOCS.md entry go with it. Sanctioned test edit: the module's one inline test, `tests/inline/source_registry_tests.rs`, is deleted (#10, B-04).
 
 - Changed: the `write_xlsx` helper moves from `codemason-tools-core` (`src/xlsx.rs`) to its only caller, `codemason-bench` (`codemason_bench::xlsx`). tools-core no longer depends on `rust_xlsxwriter`, and bench no longer depends on tools-core. Sanctioned test edits: `test_xlsx.rs` moves to the bench crate's `tests/` with its import updated, and the `test_xlsx_writer_edge_shapes` case moves out of tools-core's `test_file_ops_happy_paths.rs` into it (#10, TL-07).

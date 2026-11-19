@@ -385,17 +385,3 @@ async fn test_next_row_leaves_input_buffer_and_attachments_untouched() {
         "the staged attachments are untouched"
     );
 }
-
-#[tokio::test]
-async fn test_next_row_sets_the_redraw_flag() {
-    let mut app = app_with_session();
-    app.session.input_queue.push_back(entry("run me"));
-    app.needs_redraw = false;
-
-    app.queue_menu_select_next().await;
-
-    assert!(
-        app.needs_redraw,
-        "the decremented counter must repaint on the next frame"
-    );
-}

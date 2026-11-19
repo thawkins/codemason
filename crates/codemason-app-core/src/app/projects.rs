@@ -349,7 +349,6 @@ impl App {
                 }
             }
             self.sidebar.dirty = true;
-            self.needs_redraw = true;
         }
     }
 

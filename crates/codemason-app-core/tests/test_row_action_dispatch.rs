@@ -62,7 +62,6 @@ fn app_with_teams_window(status: MemberStatus) -> App {
         .team_members
         .push(member("tm-001", "reviewer", status));
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 

@@ -17,7 +17,7 @@ use codemason_agent::{
     tool,
 };
 use codemason_app_core::app::App;
-use codemason_app_core::app::{LogLevel, ScreenMode};
+use codemason_app_core::app::LogLevel;
 
 /// Build an [`App`] and its shared [`SessionManager`] backed by in-memory storage.
 fn make_app_with_manager() -> (App, Arc<SessionManager>) {
@@ -123,18 +123,6 @@ fn test_load_session_sets_session_id() {
     app.load_session(&session.id).unwrap();
 
     assert_eq!(app.session.session_id.as_deref(), Some(session.id.as_str()));
-}
-
-#[test]
-fn test_load_session_switches_to_chat_screen() {
-    let (mut app, mgr) = make_app_with_manager();
-    let dir = std::env::current_dir().unwrap_or_default();
-    let session = mgr.create_session(dir).expect("create session");
-
-    assert_eq!(app.current_screen, ScreenMode::Chat);
-    app.load_session(&session.id).unwrap();
-
-    assert_eq!(app.current_screen, ScreenMode::Chat);
 }
 
 #[test]

@@ -30,9 +30,9 @@ use crate::app::state::{
     ConnectorEnrichResult, ContextAction, ContextMenuState, ContextPartitionSnapshot,
     FileMenuEntry, FileMenuState, LlmRequestStat, LlmStatsSummary, LogEntry, LogLevel,
     OutputViewState, OutputViewTarget, PluginStoreBrowser, PluginStoreFetchResult,
-    PluginStoreInstallResult, ProviderSetupStep, QueuedInput, ScreenMode, ScrollbarDragPane,
-    SelectionPane, StoreEnrichResult, StorePane, TextSelection, atomic_config_update,
-    is_image_path, percent_decode_path, save_clipboard_image_to_temp,
+    PluginStoreInstallResult, ProviderSetupStep, QueuedInput, ScrollbarDragPane, SelectionPane,
+    StoreEnrichResult, StorePane, TextSelection, atomic_config_update, is_image_path,
+    percent_decode_path, save_clipboard_image_to_temp,
 };
 
 // Helpers
@@ -713,7 +713,7 @@ impl App {
     ///
     /// T-013/FR-015: called from the TUI main loop every frame. Drains
     /// [`crate::app::SessionView::context_snapshot_result`], stores the snapshot in the render
-    /// cache, clears the in-flight latch and flags a redraw.
+    /// cache and clears the in-flight latch.
     ///
     /// Stale-snapshot guard: when the conversation history size has changed
     /// since the snapshot was scheduled (e.g. `/compact` replaced `messages`
@@ -745,7 +745,6 @@ impl App {
         }
         self.session.context_snapshot_cache = Some(snapshot);
         self.session.context_refresh_inflight = false;
-        self.needs_redraw = true;
     }
 
     /// Snapshot for the Context panel render: the cached background result
@@ -1039,7 +1038,6 @@ impl App {
         let msg = message.into();
         self.status = StatusCategory::Working.format(&msg);
         self.status_history.push(StatusMessage::working(msg));
-        self.needs_redraw = true;
     }
 
     /// Return whether user input is currently blocked (agent is processing,
@@ -1313,7 +1311,6 @@ impl App {
             row -= 1;
             if self.queue_menu_row_selectable(row) {
                 self.queue_menu_selected = row;
-                self.needs_redraw = true;
                 return;
             }
         }
@@ -1327,7 +1324,6 @@ impl App {
             row += 1;
             if self.queue_menu_row_selectable(row) {
                 self.queue_menu_selected = row;
-                self.needs_redraw = true;
                 return;
             }
         }
@@ -1374,7 +1370,6 @@ impl App {
         self.close_queue_menu();
         self.queue_show_open = true;
         self.queue_show_selected = 0;
-        self.needs_redraw = true;
     }
 
     /// Dismiss the queue-entry panel (spec `inputqueue` `Show` row).
@@ -1384,7 +1379,6 @@ impl App {
     pub fn queue_show_close(&mut self) {
         self.queue_show_open = false;
         self.queue_show_selected = 0;
-        self.needs_redraw = true;
     }
 
     /// Move the queue-entry panel highlight up one entry. A no-op at the first
@@ -1393,7 +1387,6 @@ impl App {
     pub fn queue_show_move_up(&mut self) {
         if self.queue_show_selected > 0 {
             self.queue_show_selected -= 1;
-            self.needs_redraw = true;
         }
     }
 
@@ -1402,7 +1395,6 @@ impl App {
     pub fn queue_show_move_down(&mut self) {
         if self.queue_show_selected + 1 < self.session.input_queue.len() {
             self.queue_show_selected += 1;
-            self.needs_redraw = true;
         }
     }
 
@@ -1420,7 +1412,6 @@ impl App {
         }
         self.session.input_queue.swap(index, index - 1);
         self.queue_show_selected = index - 1;
-        self.needs_redraw = true;
     }
 
     /// Remove the highlighted queue entry (spec `inputqueue` `Show` row, `Del`).
@@ -1448,7 +1439,6 @@ impl App {
             self.queue_show_open = false;
             self.queue_show_selected = 0;
         }
-        self.needs_redraw = true;
     }
 
     /// The label for the queue-control menu's second row: `Stop` while a turn is
@@ -1479,9 +1469,6 @@ impl App {
             return;
         }
         self.session.input_queue.clear();
-        // The prompt's queue counter disappears once the queue is empty, so the
-        // change must be painted on the next frame (NFR-003).
-        self.needs_redraw = true;
     }
 
     /// Open the plugin-store browse panel for `kind`, pre-filling the search
@@ -1529,7 +1516,6 @@ impl App {
         browser.set_installed(installed);
         browser.set_pending_category(category);
         self.plugin_store = Some(browser);
-        self.needs_redraw = true;
         self.spawn_plugin_store_fetch(kind);
     }
 
@@ -1718,7 +1704,6 @@ impl App {
             }
             Err(err) => self.plugin_store_failed(result.kind, err.panel_detail(result.kind)),
         }
-        self.needs_redraw = true;
     }
 
     /// Start the off-loop manifest-metadata enrichment of the index now loaded in
@@ -1754,7 +1739,6 @@ impl App {
         {
             browser.enriching = true;
         }
-        self.needs_redraw = true;
 
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             // Without an async reactor the enrichment cannot run off-loop; running
@@ -1769,7 +1753,6 @@ impl App {
             {
                 browser.finish_enrichment();
             }
-            self.needs_redraw = true;
             return;
         };
 
@@ -1821,7 +1804,6 @@ impl App {
             .store_enrich_generation
             .load(std::sync::atomic::Ordering::SeqCst);
         let open_kind = self.plugin_store.as_ref().map(|b| b.kind);
-        let mut changed = false;
         for message in drained {
             match message {
                 StoreEnrichResult::Update {
@@ -1833,7 +1815,6 @@ impl App {
                         if let Some(browser) = self.plugin_store.as_mut() {
                             browser.apply_manifest_update(update);
                         }
-                        changed = true;
                     }
                 }
                 StoreEnrichResult::Finished { generation, kind } => {
@@ -1841,13 +1822,9 @@ impl App {
                         if let Some(browser) = self.plugin_store.as_mut() {
                             browser.finish_enrichment();
                         }
-                        changed = true;
                     }
                 }
             }
-        }
-        if changed {
-            self.needs_redraw = true;
         }
     }
 
@@ -1860,7 +1837,6 @@ impl App {
             && browser.kind == kind
         {
             browser.set_failed(detail);
-            self.needs_redraw = true;
         }
     }
 
@@ -1877,7 +1853,6 @@ impl App {
         let installed = self.derive_installed_set();
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.set_installed(installed);
-            self.needs_redraw = true;
         }
     }
 
@@ -1910,20 +1885,17 @@ impl App {
         };
         let Some(entry) = browser.selected() else {
             browser.last_install = Some("no result highlighted".to_string());
-            self.needs_redraw = true;
             return;
         };
         let id = entry.id.clone();
         if browser.is_installed(&id) {
             // FR-014: a re-install is refused; nothing is written.
             browser.last_install = Some(format!("plugin {id} is already installed"));
-            self.needs_redraw = true;
             return;
         }
         let source = entry.source.clone();
         let kind = browser.kind;
         browser.last_install = Some(format!("installing {id}..."));
-        self.needs_redraw = true;
         self.spawn_plugin_store_install(kind, id, source);
     }
 
@@ -2027,7 +1999,6 @@ impl App {
             browser.last_install = Some(result.notice);
         }
         self.append_assistant_text(&result.report);
-        self.needs_redraw = true;
     }
 
     /// Start the off-loop `/plugins stores --check` availability probe (spec
@@ -2093,7 +2064,6 @@ impl App {
         };
         self.append_assistant_text(&report);
         self.status = "plugins: store check complete".to_string();
-        self.needs_redraw = true;
     }
 
     /// Close the plugin-store browse panel and drop its state (FR-012).
@@ -2102,9 +2072,7 @@ impl App {
     /// leaves the input field, the staged attachments, the queue, and the
     /// running turn exactly as they were (FR-012).
     pub fn close_plugin_store(&mut self) {
-        if self.plugin_store.take().is_some() {
-            self.needs_redraw = true;
-        }
+        self.plugin_store = None;
     }
 
     /// Handle the shared `Backspace` / `Esc` query-editing key while the panel
@@ -2118,7 +2086,6 @@ impl App {
             return false;
         };
         if browser.backspace() {
-            self.needs_redraw = true;
             true
         } else {
             self.close_plugin_store();
@@ -2130,7 +2097,6 @@ impl App {
     pub fn plugin_store_push_char(&mut self, c: char) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.push_char(c);
-            self.needs_redraw = true;
         }
     }
 
@@ -2138,7 +2104,6 @@ impl App {
     pub fn plugin_store_move_up(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -2146,7 +2111,6 @@ impl App {
     pub fn plugin_store_move_down(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.move_down();
-            self.needs_redraw = true;
         }
     }
 
@@ -2182,7 +2146,6 @@ impl App {
     pub fn plugin_store_focus_next(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.focus = browser.focus.next();
-            self.needs_redraw = true;
         }
     }
 
@@ -2191,7 +2154,6 @@ impl App {
     pub fn plugin_store_focus_prev(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.focus = browser.focus.previous();
-            self.needs_redraw = true;
         }
     }
 
@@ -2200,7 +2162,6 @@ impl App {
     pub fn plugin_store_category_move_up(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.category_move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -2209,7 +2170,6 @@ impl App {
     pub fn plugin_store_category_move_down(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.category_move_down();
-            self.needs_redraw = true;
         }
     }
 
@@ -2222,7 +2182,6 @@ impl App {
     pub fn plugin_store_category_confirm(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.category_confirm();
-            self.needs_redraw = true;
         }
     }
 
@@ -2234,7 +2193,6 @@ impl App {
     pub fn plugin_store_clear_category(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.category_clear();
-            self.needs_redraw = true;
         }
     }
 
@@ -2243,7 +2201,6 @@ impl App {
     pub fn plugin_store_marketplace_move_up(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.marketplace_move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -2252,7 +2209,6 @@ impl App {
     pub fn plugin_store_marketplace_move_down(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.marketplace_move_down();
-            self.needs_redraw = true;
         }
     }
 
@@ -2264,7 +2220,6 @@ impl App {
     pub fn plugin_store_marketplace_confirm(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.marketplace_confirm();
-            self.needs_redraw = true;
         }
     }
 
@@ -2276,7 +2231,6 @@ impl App {
     pub fn plugin_store_clear_marketplace(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut() {
             browser.marketplace_clear();
-            self.needs_redraw = true;
         }
     }
 
@@ -2284,15 +2238,13 @@ impl App {
     /// `pluginstores` FR-004).
     ///
     /// Wired to the search box's `[x] clear` button and to the panel's own query
-    /// editor. An already-empty query is a no-op (so a stray click on the button
-    /// does not repaint); clearing a non-empty query re-applies the filter and
-    /// requests a redraw so the full result set returns immediately.
+    /// editor. An already-empty query is a no-op; clearing a non-empty query
+    /// re-applies the filter so the full result set returns immediately.
     pub fn plugin_store_clear_search(&mut self) {
         if let Some(browser) = self.plugin_store.as_mut()
             && !browser.query.is_empty()
         {
             browser.set_query(String::new());
-            self.needs_redraw = true;
         }
     }
 
@@ -2324,7 +2276,6 @@ impl App {
         browser.set_installed(installed);
         browser.set_pending_category(category);
         self.connector_store = Some(browser);
-        self.needs_redraw = true;
         self.spawn_connector_catalogue_fetch();
     }
 
@@ -2410,7 +2361,6 @@ impl App {
             }
             Err(cause) => self.connector_catalogue_failed(cause),
         }
-        self.needs_redraw = true;
     }
 
     /// Start the off-loop manifest-description enrichment of the catalogue now
@@ -2440,7 +2390,6 @@ impl App {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.enriching = true;
         }
-        self.needs_redraw = true;
 
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             // Without an async reactor the enrichment cannot run off-loop; running
@@ -2450,7 +2399,6 @@ impl App {
             if let Some(browser) = self.connector_store.as_mut() {
                 browser.finish_enrichment();
             }
-            self.needs_redraw = true;
             return;
         };
 
@@ -2507,7 +2455,6 @@ impl App {
         let current = self
             .connector_enrich_generation
             .load(std::sync::atomic::Ordering::SeqCst);
-        let mut changed = false;
         for message in drained {
             match message {
                 ConnectorEnrichResult::Update { generation, update } => {
@@ -2515,7 +2462,6 @@ impl App {
                         if let Some(browser) = self.connector_store.as_mut() {
                             browser.apply_manifest_update(update);
                         }
-                        changed = true;
                     }
                 }
                 ConnectorEnrichResult::Finished { generation } => {
@@ -2523,13 +2469,9 @@ impl App {
                         if let Some(browser) = self.connector_store.as_mut() {
                             browser.finish_enrichment();
                         }
-                        changed = true;
                     }
                 }
             }
-        }
-        if changed {
-            self.needs_redraw = true;
         }
     }
 
@@ -2541,7 +2483,6 @@ impl App {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.set_failed(detail);
             browser.finish_enrichment();
-            self.needs_redraw = true;
         }
     }
 
@@ -2568,7 +2509,6 @@ impl App {
         let installed = self.derive_installed_connector_set();
         if let Some(browser) = self.connector_store.as_mut() {
             browser.set_installed(installed);
-            self.needs_redraw = true;
         }
     }
 
@@ -2590,17 +2530,14 @@ impl App {
         };
         let Some(entry) = browser.selected() else {
             browser.last_install = Some("no result highlighted".to_string());
-            self.needs_redraw = true;
             return;
         };
         let id = entry.id.as_str().to_string();
         if browser.is_installed(&id) {
             browser.last_install = Some(format!("connector {id} is already installed"));
-            self.needs_redraw = true;
             return;
         }
         browser.last_install = Some(format!("installing {id}..."));
-        self.needs_redraw = true;
         self.spawn_connector_catalogue_install(id);
     }
 
@@ -2679,7 +2616,6 @@ impl App {
             browser.last_install = Some(result.notice);
         }
         self.append_assistant_text(&result.report);
-        self.needs_redraw = true;
     }
 
     /// Handle the shared `Backspace` / `Esc` query-editing key while the
@@ -2693,7 +2629,6 @@ impl App {
             return false;
         };
         if browser.backspace() {
-            self.needs_redraw = true;
             true
         } else {
             self.close_connector_catalogue();
@@ -2705,7 +2640,6 @@ impl App {
     pub fn connector_catalogue_push_char(&mut self, c: char) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.push_char(c);
-            self.needs_redraw = true;
         }
     }
 
@@ -2713,7 +2647,6 @@ impl App {
     pub fn connector_catalogue_move_up(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -2721,7 +2654,6 @@ impl App {
     pub fn connector_catalogue_move_down(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.move_down();
-            self.needs_redraw = true;
         }
     }
 
@@ -2755,7 +2687,6 @@ impl App {
     pub fn connector_catalogue_focus_next(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.focus_next();
-            self.needs_redraw = true;
         }
     }
 
@@ -2764,7 +2695,6 @@ impl App {
     pub fn connector_catalogue_focus_prev(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.focus_prev();
-            self.needs_redraw = true;
         }
     }
 
@@ -2773,7 +2703,6 @@ impl App {
     pub fn connector_catalogue_marketplace_move_up(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.marketplace_move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -2782,7 +2711,6 @@ impl App {
     pub fn connector_catalogue_marketplace_move_down(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.marketplace_move_down();
-            self.needs_redraw = true;
         }
     }
 
@@ -2791,7 +2719,6 @@ impl App {
     pub fn connector_catalogue_marketplace_confirm(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.marketplace_confirm();
-            self.needs_redraw = true;
         }
     }
 
@@ -2803,7 +2730,6 @@ impl App {
     pub fn connector_catalogue_clear_marketplace(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.marketplace_clear();
-            self.needs_redraw = true;
         }
     }
 
@@ -2811,15 +2737,13 @@ impl App {
     /// visible result set.
     ///
     /// Wired to the bottom search box's `[x] clear` button. An already-empty query
-    /// is a no-op (so a stray click on the button does not repaint); clearing a
-    /// non-empty query re-applies the filter and requests a redraw so the full
+    /// is a no-op; clearing a non-empty query re-applies the filter so the full
     /// result set returns immediately.
     pub fn connector_catalogue_clear_search(&mut self) {
         if let Some(browser) = self.connector_store.as_mut()
             && !browser.query.is_empty()
         {
             browser.set_query(String::new());
-            self.needs_redraw = true;
         }
     }
 
@@ -2828,7 +2752,6 @@ impl App {
     pub fn connector_catalogue_category_move_up(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.category_move_up();
-            self.needs_redraw = true;
         }
     }
 
@@ -2838,7 +2761,6 @@ impl App {
     pub fn connector_catalogue_category_move_down(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.category_move_down();
-            self.needs_redraw = true;
         }
     }
 
@@ -2851,7 +2773,6 @@ impl App {
     pub fn connector_catalogue_category_confirm(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.category_confirm();
-            self.needs_redraw = true;
         }
     }
 
@@ -2863,7 +2784,6 @@ impl App {
     pub fn connector_catalogue_clear_category(&mut self) {
         if let Some(browser) = self.connector_store.as_mut() {
             browser.category_clear();
-            self.needs_redraw = true;
         }
     }
 
@@ -2903,14 +2823,11 @@ impl App {
         browser.categories_mut().select(order[next].clone());
         browser.sync_category_cursor_from_filter();
         browser.reapply_filter();
-        self.needs_redraw = true;
     }
 
     /// Close the connector-catalogue browse panel.
     pub fn close_connector_catalogue(&mut self) {
-        if self.connector_store.take().is_some() {
-            self.needs_redraw = true;
-        }
+        self.connector_store = None;
     }
 
     /// Append a message to the input queue (spec `inputqueue` FR-005).
@@ -2959,8 +2876,6 @@ impl App {
             LogLevel::Info,
             format!("queued ({} in queue)", self.session.input_queue.len()),
         );
-        // The counter renders the new length on the next frame (NFR-003).
-        self.needs_redraw = true;
         Ok(())
     }
 
@@ -3016,8 +2931,6 @@ impl App {
             let Some(entry) = self.session.input_queue.pop_front() else {
                 return;
             };
-            // FR-008: the counter decrements, so the field must repaint next frame.
-            self.needs_redraw = true;
             if next_pending {
                 // FR-031: a menu `Next` dispatch must not mutate the editable buffer,
                 // so snapshot the live draft and restore it once the queued entry has
@@ -3099,7 +3012,6 @@ impl App {
             // this is only reachable defensively; report and close.
             self.status = "queue: nothing to run - the queue is empty".to_string();
             self.close_queue_menu();
-            self.needs_redraw = true;
             return;
         }
         // FR-030: never dispatch over a compaction run or a post-compact send.
@@ -3115,7 +3027,6 @@ impl App {
                 "queue: Next deferred - compaction owns the turn (FR-030)".to_string(),
             );
             self.close_queue_menu();
-            self.needs_redraw = true;
             return;
         }
         if self.session.is_processing {
@@ -3150,7 +3061,6 @@ impl App {
             self.advance_input_queue().await;
         }
         self.close_queue_menu();
-        self.needs_redraw = true;
     }
 
     /// Select the queue-control menu's halt row (spec `inputqueue` FR-025,
@@ -3181,7 +3091,6 @@ impl App {
             }
         }
         self.close_queue_menu();
-        self.needs_redraw = true;
     }
 
     /// Halt the running turn exactly as `InputAction::CancelAgent` does: ask a
@@ -3239,8 +3148,7 @@ impl App {
     /// opens the `Clear the input queue?` confirmation dialog instead (FR-033).
     /// The queue is emptied only after the user confirms with `Yes` (FR-028,
     /// FR-037), so this action deliberately leaves the queue, the input buffer,
-    /// the staged attachments, and the running turn untouched. The dialog paints
-    /// on the next frame because the redraw flag is set (NFR-008).
+    /// the staged attachments, and the running turn untouched (NFR-008).
     ///
     /// The dialog's default selection is reset to `No` every time it opens so a
     /// stray `Enter` cannot empty the queue (FR-034).
@@ -3253,22 +3161,19 @@ impl App {
         self.close_queue_menu();
         self.queue_clear_confirm_open = true;
         self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
-        self.needs_redraw = true;
     }
 
     /// Flip the `Clear the input queue?` dialog selection between `Yes` and
     /// `No` (spec `inputqueue` FR-034, FR-035, NFR-011).
     ///
     /// The dialog has exactly two options, so any horizontal move (`Left` /
-    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection. The
-    /// redraw flag is set so the change paints on the next frame.
+    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection.
     pub fn queue_clear_confirm_toggle(&mut self) {
         self.queue_clear_confirm_selected = if self.queue_clear_confirm_is_yes() {
             crate::app::QUEUE_CLEAR_CONFIRM_NO
         } else {
             crate::app::QUEUE_CLEAR_CONFIRM_YES
         };
-        self.needs_redraw = true;
     }
 
     /// Whether the `Clear the input queue?` dialog currently has `Yes`
@@ -3286,22 +3191,19 @@ impl App {
     pub fn open_memory_clear_confirm(&mut self) {
         self.memory_clear_confirm_open = true;
         self.memory_clear_confirm_selected = crate::app::MEMORY_CLEAR_CONFIRM_NO;
-        self.needs_redraw = true;
     }
 
     /// Flip the `Clear this project's memory?` dialog selection between `Yes`
     /// and `No`.
     ///
     /// The dialog has exactly two options, so any horizontal move (`Left` /
-    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection. The
-    /// redraw flag is set so the change paints on the next frame.
+    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection.
     pub fn memory_clear_confirm_toggle(&mut self) {
         self.memory_clear_confirm_selected = if self.memory_clear_confirm_is_yes() {
             crate::app::MEMORY_CLEAR_CONFIRM_NO
         } else {
             crate::app::MEMORY_CLEAR_CONFIRM_YES
         };
-        self.needs_redraw = true;
     }
 
     /// Whether the `Clear this project's memory?` dialog currently has `Yes`
@@ -3316,7 +3218,6 @@ impl App {
     pub(crate) fn close_memory_clear_confirm(&mut self) {
         self.memory_clear_confirm_open = false;
         self.memory_clear_confirm_selected = crate::app::MEMORY_CLEAR_CONFIRM_NO;
-        self.needs_redraw = true;
     }
 
     /// Open the `Prune messages older than N days?` confirmation dialog.
@@ -3329,7 +3230,6 @@ impl App {
         self.db_prune_confirm_open = true;
         self.db_prune_confirm_selected = crate::app::DB_PRUNE_CONFIRM_NO;
         self.db_prune_confirm_days = Some(days);
-        self.needs_redraw = true;
     }
 
     /// Flip the `Prune messages older than N days?` dialog selection between
@@ -3343,7 +3243,6 @@ impl App {
         } else {
             crate::app::DB_PRUNE_CONFIRM_YES
         };
-        self.needs_redraw = true;
     }
 
     /// Whether the `Prune messages older than N days?` dialog currently has
@@ -3359,7 +3258,6 @@ impl App {
         self.db_prune_confirm_open = false;
         self.db_prune_confirm_selected = crate::app::DB_PRUNE_CONFIRM_NO;
         self.db_prune_confirm_days = None;
-        self.needs_redraw = true;
     }
 
     /// Apply the prune the armed `/db prune` dialog was confirmed for.
@@ -3547,7 +3445,6 @@ impl App {
             before_cursor = before_cursor,
             after_chars = self.input_len_chars(),
             after_cursor = self.session.input_cursor,
-            screen = ?self.current_screen,
             slash_menu = self.slash_menu.is_some(),
             file_menu = self.file_menu.is_some(),
             "input transition"
@@ -3609,13 +3506,12 @@ impl App {
         };
         let line = format!(
             "{} source={source} before_chars={before_chars} before_cursor={before_cursor} \
-             after_chars={} after_cursor={} cursor_delta={} screen={:?} \
+             after_chars={} after_cursor={} cursor_delta={} \
              before={:?} after={:?}\n",
             chrono::Utc::now().to_rfc3339(),
             self.input_len_chars(),
             self.session.input_cursor,
             self.session.input_cursor as i64 - before_cursor as i64,
-            self.current_screen,
             escape(before_input),
             escape(&self.session.input),
         );
@@ -4148,7 +4044,6 @@ impl App {
                 self.code_index_stats_last_refresh = std::time::Instant::now();
                 if self.code_index_busy && !reindex_active {
                     self.code_index_busy = false;
-                    self.needs_redraw = true;
                 }
             } else if graph_busy {
                 // Store lock held by the graph build. Do not latch the idx
@@ -4158,30 +4053,25 @@ impl App {
                 // vanishing the moment the graph build finishes.
                 if self.code_index_busy && !reindex_active {
                     self.code_index_busy = false;
-                    self.needs_redraw = true;
                 }
             } else {
                 // Locks busy - indexing in progress
                 if !self.code_index_busy {
                     self.code_index_busy = true;
-                    self.needs_redraw = true;
                 }
             }
             // If reindex counters indicate active work, keep busy flag set.
             if reindex_active && !self.code_index_busy {
                 self.code_index_busy = true;
-                self.needs_redraw = true;
             }
             if graph_busy != self.code_index_graph_busy {
                 self.code_index_graph_busy = graph_busy;
-                self.needs_redraw = true;
             }
         } else {
             self.code_index_stats_last_refresh = std::time::Instant::now();
             self.code_index_busy = false;
             if self.code_index_graph_busy {
                 self.code_index_graph_busy = false;
-                self.needs_redraw = true;
             }
         }
     }
@@ -4204,7 +4094,6 @@ impl App {
             return Err("a graph build is already running".into());
         }
         self.code_index_graph_spawned = true;
-        self.needs_redraw = true;
         let results = self.code_index_bg_result.clone();
         let spawn_result = std::thread::Builder::new()
             .name("codeindex-graph-build-request".into())
@@ -4276,7 +4165,6 @@ impl App {
             return Err("a reindex is already running".into());
         }
         self.code_index_reindex_spawned = true;
-        self.needs_redraw = true;
         let results = self.code_index_bg_result.clone();
         let spawn_result = std::thread::Builder::new()
             .name("codeindex-manual-reindex".into())
@@ -4342,7 +4230,6 @@ impl App {
                 self.push_log_no_agent(LogLevel::Error, msg);
             }
         }
-        self.needs_redraw = true;
     }
 
     /// Drain the loop-rollback result (FR-020/T-013) deposited by the async
@@ -4384,7 +4271,6 @@ impl App {
                 self.push_log_no_agent(LogLevel::Error, format!("rollback error: {e}"));
             }
         }
-        self.needs_redraw = true;
     }
 
     /// Drain the `/websearch test` engine-diagnostic result deposited by the
@@ -4405,7 +4291,6 @@ impl App {
         };
         self.append_assistant_text(&output);
         self.status = "websearch: engine test complete".to_string();
-        self.needs_redraw = true;
     }
 
     /// Test hook: exposes the crate-internal stats refresh to integration
@@ -4775,7 +4660,6 @@ impl App {
         // Structural change: restored messages replace the current timeline,
         // so the per-message render cache must be rebuilt from scratch.
         self.reset_message_cache();
-        self.current_screen = ScreenMode::Chat;
         self.status = format!("resumed ({} messages)", msg_count);
 
         // Rebuild tool_step_map from restored tool calls and populate log
@@ -5442,7 +5326,6 @@ impl App {
         match id {
             "help.shortcuts" => {
                 self.show_shortcuts = true;
-                self.needs_redraw = true;
                 true
             }
             "palette.show" => {
@@ -5451,7 +5334,6 @@ impl App {
             }
             "picker.model" => {
                 let _ = self.slash_model_picker(); // INTENTIONAL: opening the picker reports in the UI
-                self.needs_redraw = true;
                 true
             }
             "picker.agent" => {
@@ -6007,8 +5889,6 @@ impl App {
 
     pub(crate) fn open_output_view_session(&mut self, session_id: String, label: String) {
         self.session.selected_agent_session_id = Some(session_id.clone());
-        // Opening the overlay is a content change: repaint (NFR-005).
-        self.needs_redraw = true;
         self.output_view = Some(OutputViewState {
             target: OutputViewTarget::Session { session_id, label },
             scroll_offset: 0,

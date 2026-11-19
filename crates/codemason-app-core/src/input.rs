@@ -453,7 +453,6 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
             Key::Enter => app.queue_menu_activate_selected().await,
             Key::Esc => {
                 app.close_queue_menu();
-                app.needs_redraw = true;
             }
             _ => {}
         }
@@ -671,8 +670,6 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.queue_clear_confirm_toggle();
-                // NFR-011: the selection change must paint on the next frame.
-                app.needs_redraw = true;
                 return None;
             }
             Key::Enter => {
@@ -696,7 +693,6 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.memory_clear_confirm_toggle();
-                app.needs_redraw = true;
                 return None;
             }
             Key::Enter => {
@@ -718,7 +714,6 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.db_prune_confirm_toggle();
-                app.needs_redraw = true;
                 return None;
             }
             Key::Enter => {

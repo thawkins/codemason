@@ -63,7 +63,6 @@ fn test_reconcile_readds_dropped_start() {
 
     let ids: Vec<String> = app.active_tasks.iter().map(|t| t.id.clone()).collect();
     assert_eq!(ids, vec!["t1".to_string(), "t2".to_string()]);
-    assert!(app.needs_redraw, "reconciliation must flag a redraw");
 }
 
 #[test]
@@ -315,7 +314,6 @@ fn test_reconcile_keeps_suspended_row_and_refreshes_status() {
         codemason_agent::task::TaskStatus::Suspended,
         "painted status must converge with the registry"
     );
-    assert!(app.needs_redraw, "status change must repaint");
 }
 
 /// T-015/NFR-008: the merge attributes each removal log line to the removed
@@ -387,19 +385,12 @@ fn test_reconcile_readd_log_is_attributed_to_child_session() {
 #[test]
 fn test_reconcile_clean_merge_neither_logs_nor_repaints() {
     let mut app = make_app();
-    app.needs_redraw = false;
 
     let before = app.log_entries.len();
     let snapshot = vec![entry("t1", codemason_agent::task::TaskStatus::Running)];
     app.apply_registry_reconciliation(snapshot.clone());
-    let first_redraw = app.needs_redraw;
-    app.needs_redraw = false;
     app.apply_registry_reconciliation(snapshot);
 
-    assert!(
-        first_redraw,
-        "the divergent first pass must request a repaint"
-    );
     assert_eq!(
         app.log_entries.len(),
         before + 1,
@@ -409,7 +400,6 @@ fn test_reconcile_clean_merge_neither_logs_nor_repaints() {
         app.active_tasks.len() == 1,
         "the merge must never duplicate the row"
     );
-    assert!(!app.needs_redraw, "a clean pass must not repaint");
 }
 
 /// A terminated registry entry that was never painted gains no ghost row and

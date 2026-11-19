@@ -42,7 +42,6 @@ mod support;
 fn new_app(session: &str) -> App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     app
 }
 
@@ -113,7 +112,6 @@ async fn shift_k_on_a_task_row_dispatches_a_kill() {
 
     // With the rows gone the cursor is stale: Del/Shift+K dispatch nothing.
     app.active_tasks.clear();
-    app.needs_redraw = false;
     app.status = "sentinel".to_string();
     app.handle_key_event(shift_key(KeyCode::Char('K'))).await;
     assert_eq!(app.agents_cursor_subagent, Some(0));

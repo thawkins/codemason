@@ -769,7 +769,6 @@ fn backend_panel_app_methods_open_move_activate_and_close() {
 
     app.open_backend_panel();
     assert!(app.backend_panel.is_some(), "panel opened");
-    assert!(app.needs_redraw);
     let panel = app.backend_panel.as_ref().expect("panel");
     assert_ne!(panel.len(), 0);
     let opened_rows = panel.len();

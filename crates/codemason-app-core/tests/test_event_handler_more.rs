@@ -22,7 +22,6 @@ mod support;
 fn app_with_session(session: &str) -> App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     app
 }
 
@@ -677,7 +676,6 @@ async fn teammate_suspended_and_resumed_update_the_member_row() {
     })
     .await;
     assert_eq!(app.session.team_members[0].status, MemberStatus::Suspended);
-    assert!(app.needs_redraw);
 
     app.handle_event(Event::TeammateResumed {
         session_id: "s1".to_string(),
@@ -686,7 +684,6 @@ async fn teammate_suspended_and_resumed_update_the_member_row() {
     })
     .await;
     assert_eq!(app.session.team_members[0].status, MemberStatus::Idle);
-    assert!(app.needs_redraw);
 }
 
 // ===========================================================================
@@ -728,6 +725,7 @@ async fn memory_recalled_forgotten_searched_mark_cache_dirty() {
 #[tokio::test]
 async fn conversation_and_session_searched_are_accepted_noops() {
     let mut app = app_with_session("s1");
+    let status_before = app.status.clone();
     app.handle_event(Event::ConversationSearched {
         session_id: "s1".to_string(),
         query: "stats".to_string(),
@@ -742,8 +740,7 @@ async fn conversation_and_session_searched_are_accepted_noops() {
         mode: "keyword".to_string(),
     })
     .await;
-    // Both land on the catch-all: the app must still be marked dirty.
-    assert!(app.needs_redraw);
+    assert_eq!(app.status, status_before);
 }
 
 // ===========================================================================
@@ -791,7 +788,6 @@ async fn mcp_status_changed_empty_initialized_runs_the_settle_path() {
         app.mcp_status_map.is_empty(),
         "no per-server entry is recorded"
     );
-    assert!(app.needs_redraw);
 }
 
 #[tokio::test]
@@ -892,6 +888,7 @@ async fn gitlab_setup_success_and_failure_paths() {
 #[tokio::test]
 async fn session_aborted_and_memory_candidate_are_accepted_noops() {
     let mut app = app_with_session("s1");
+    let status_before = app.status.clone();
     app.handle_event(Event::SessionAborted {
         session_id: "s1".to_string(),
         reason: "user_requested".to_string(),
@@ -911,7 +908,7 @@ async fn session_aborted_and_memory_candidate_are_accepted_noops() {
         session_id: "s1".to_string(),
     })
     .await;
-    assert!(app.needs_redraw);
+    assert_eq!(app.status, status_before);
 }
 
 // ===========================================================================

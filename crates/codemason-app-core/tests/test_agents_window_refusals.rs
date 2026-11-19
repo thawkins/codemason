@@ -78,7 +78,6 @@ fn app() -> App {
     app.session.session_id = Some(LEAD_SESSION.to_string());
     app.session.agent_name = "general".to_string();
     app.status = "ready".to_string();
-    app.needs_redraw = false;
     app
 }
 
@@ -95,7 +94,6 @@ fn opening_an_empty_agents_window_opens_and_paints_its_empty_state() {
         app.show_agents_window,
         "FR-026: with nothing to show the window still opens on its empty-state hint"
     );
-    assert!(app.needs_redraw, "an open repaints (NFR-005)");
     assert_eq!(
         app.status, "ready",
         "an empty open is not an error, so it reports nothing"
@@ -166,7 +164,6 @@ fn an_available_window_opens_without_a_refusal() {
         app.status, "ready",
         "a successful open must not print the refusal"
     );
-    assert!(app.needs_redraw, "an open repaints");
 }
 
 #[test]

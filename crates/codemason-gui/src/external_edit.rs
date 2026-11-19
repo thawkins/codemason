@@ -45,7 +45,6 @@ impl ExternalEdit {
     pub fn start(&mut self, ctx: &egui::Context, app: &mut App) {
         let Some(editor) = self.editor.clone().or_else(editor_from_env) else {
             app.status = "editor: set $VISUAL or $EDITOR to use /editor".to_string();
-            app.needs_redraw = true;
             return;
         };
         let Some(text) = app.begin_external_edit() else {

@@ -214,20 +214,6 @@ async fn test_enqueue_respects_configured_capacity() {
 }
 
 #[tokio::test]
-async fn test_enqueue_requests_redraw_for_the_counter() {
-    let mut app = app_ready_to_send();
-    app.session.is_processing = true;
-    app.needs_redraw = false;
-
-    type_and_submit(&mut app, "queue me").await;
-
-    assert!(
-        app.needs_redraw,
-        "NFR-003: the new counter must be painted on the next frame"
-    );
-}
-
-#[tokio::test]
 async fn test_enqueue_echoes_queued_notice_with_post_append_depth() {
     let mut app = app_ready_to_send();
     app.session.is_processing = true;

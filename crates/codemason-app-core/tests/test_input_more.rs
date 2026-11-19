@@ -159,7 +159,6 @@ async fn queue_clear_confirm_modal() {
     // Left/Right toggle the selection and request a redraw.
     let action = handle_key(&mut app, key(KeyCode::Left)).await;
     assert!(action.is_none());
-    assert!(app.needs_redraw);
     // Enter resolves to confirm or cancel depending on the selection.
     let action = handle_key(&mut app, key(KeyCode::Enter)).await;
     assert!(

@@ -115,7 +115,6 @@ impl App {
             self.release_subagent_launch(result.launch.id);
             self.apply_subagent_launch_outcome(result);
         }
-        self.needs_redraw = true;
     }
 
     /// Report one launch outcome on the chat/status/log surfaces (D3).

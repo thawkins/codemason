@@ -67,7 +67,6 @@ fn app() -> App {
     let mut app = make_app();
     app.session.session_id = Some(LEAD_SESSION.to_string());
     app.session.agent_name = "general".to_string();
-    app.needs_redraw = false;
     app
 }
 
@@ -121,7 +120,6 @@ async fn agents_escape_dismisses_the_window_and_leaves_state_untouched() {
         .await;
 
     assert!(!app.show_agents_window, "Esc dismisses the window (FR-032)");
-    assert!(app.needs_redraw, "dismissing requests a redraw");
     assert_eq!(
         app.active_tasks.len(),
         tasks_before,
@@ -144,7 +142,6 @@ async fn teams_escape_dismisses_the_window_and_leaves_state_untouched() {
         .await;
 
     assert!(!app.show_teams_window, "Esc dismisses the window (FR-032)");
-    assert!(app.needs_redraw, "dismissing requests a redraw");
     assert_eq!(
         app.session.team_members.len(),
         1,
@@ -167,7 +164,6 @@ async fn escaping_an_already_closed_window_is_inert() {
         .await;
     assert!(!app.show_agents_window);
     assert!(!app.show_teams_window);
-    assert!(!app.needs_redraw, "escaping a closed window paints nothing");
 }
 
 // ---------------------------------------------------------------------------

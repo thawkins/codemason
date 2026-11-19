@@ -18,7 +18,7 @@
 //! `crate::frame::publish`, which draws the GUI panels the App shows;
 //! assertions that read the drawn terminal frame were dropped with it.
 
-use codemason_app_core::{app::App, app::ScreenMode};
+use codemason_app_core::app::App;
 
 #[path = "../../codemason-app-core/tests/support/mod.rs"]
 mod support;
@@ -96,7 +96,6 @@ fn test_tasks_panel_does_not_mutate_tasks() {
     let session_id = "immutable-session".to_string();
     app.session.session_id = Some(session_id.clone());
     app.show_tasks_panel = true;
-    app.current_screen = ScreenMode::Chat;
 
     create_task(
         &mut app,

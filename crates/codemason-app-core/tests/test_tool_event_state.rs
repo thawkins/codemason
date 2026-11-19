@@ -14,7 +14,6 @@ mod support;
 fn app_with_session() -> codemason_app_core::app::App {
     let mut app = support::make_app();
     app.session.session_id = Some("sess-1".to_string());
-    app.needs_redraw = false;
     app
 }
 
@@ -29,7 +28,6 @@ async fn test_tool_event_sequence_updates_state() {
     })
     .await;
 
-    assert!(app.needs_redraw, "ToolCallStart must request a redraw");
     let part = app.session.messages[0].parts[0].clone();
     let MessagePart::ToolCall { state, .. } = part else {
         panic!("expected ToolCall part");
@@ -37,7 +35,6 @@ async fn test_tool_event_sequence_updates_state() {
     assert_eq!(state.status, ToolCallStatus::Running);
     assert!(state.input.is_null());
 
-    app.needs_redraw = false;
     app.handle_event(Event::ToolCallArgs {
         session_id: "sess-1".to_string(),
         call_id: "c1".to_string(),
@@ -46,14 +43,12 @@ async fn test_tool_event_sequence_updates_state() {
     })
     .await;
 
-    assert!(app.needs_redraw, "ToolCallArgs must request a redraw");
     let part = app.session.messages[0].parts[0].clone();
     let MessagePart::ToolCall { state, .. } = part else {
         panic!("expected ToolCall part");
     };
     assert_eq!(state.input["path"], "src/main.rs");
 
-    app.needs_redraw = false;
     app.handle_event(Event::ToolCallEnd {
         session_id: "sess-1".to_string(),
         call_id: "c1".to_string(),
@@ -63,7 +58,6 @@ async fn test_tool_event_sequence_updates_state() {
     })
     .await;
 
-    assert!(app.needs_redraw, "ToolCallEnd must request a redraw");
     let part = app.session.messages[0].parts[0].clone();
     let MessagePart::ToolCall { state, .. } = part else {
         panic!("expected ToolCall part");
@@ -82,7 +76,6 @@ async fn test_tool_call_batch_updates_status_and_duration() {
         tool: "Bash".to_string(),
     })
     .await;
-    app.needs_redraw = false;
 
     app.handle_event(Event::ToolCallBatch {
         session_id: "sess-1".to_string(),
@@ -101,7 +94,6 @@ async fn test_tool_call_batch_updates_status_and_duration() {
     })
     .await;
 
-    assert!(app.needs_redraw, "ToolCallBatch must request a redraw");
     let part = app.session.messages[0].parts[0].clone();
     let MessagePart::ToolCall { state, .. } = part else {
         panic!("expected ToolCall part");

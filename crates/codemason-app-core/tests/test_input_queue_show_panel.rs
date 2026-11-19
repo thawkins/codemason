@@ -87,17 +87,6 @@ fn test_opening_the_panel_resets_the_highlight_to_the_oldest_entry() {
     );
 }
 
-#[test]
-fn test_opening_the_panel_sets_the_redraw_flag() {
-    let mut app = support::make_app();
-    app.session.input_queue.push_back(entry("a"));
-    app.needs_redraw = false;
-
-    app.queue_show_open_panel();
-
-    assert!(app.needs_redraw, "the panel must paint on the next frame");
-}
-
 // ---------------------------------------------------------------------------
 // Rendering: entries oldest-first with a block cursor on the highlight
 // ---------------------------------------------------------------------------
@@ -109,12 +98,10 @@ fn test_opening_the_panel_sets_the_redraw_flag() {
 #[tokio::test]
 async fn test_down_moves_the_highlight_to_the_next_entry() {
     let mut app = panel_with(&["a", "b", "c"]);
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Down)).await;
 
     assert_eq!(app.queue_show_selected, 1, "Down highlights the next entry");
-    assert!(app.needs_redraw, "the move must repaint on the next frame");
 }
 
 #[tokio::test]
@@ -226,11 +213,9 @@ async fn test_enter_preserves_the_order_of_the_other_entries() {
 async fn test_enter_sets_the_redraw_flag() {
     let mut app = panel_with(&["a", "b"]);
     app.queue_show_selected = 1;
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Enter)).await;
 
-    assert!(app.needs_redraw, "the reorder must repaint the panel");
     assert!(app.queue_show_open, "Enter must not dismiss the panel");
 }
 
@@ -251,7 +236,6 @@ async fn test_del_removes_the_highlighted_entry() {
         "Del removes only the highlighted entry"
     );
     assert_eq!(app.input_queue_len(), 2);
-    assert!(app.needs_redraw, "the removal must repaint the panel");
     assert!(app.queue_show_open, "Del must not dismiss the panel");
 }
 

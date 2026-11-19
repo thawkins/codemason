@@ -212,7 +212,6 @@ async fn space_on_a_running_agent_row_requests_suspension() {
         app.session.input_cursor, 5,
         "the cursor must not advance either"
     );
-    assert!(app.needs_redraw, "the request line repaints (NFR-005)");
 }
 
 /// `Space` on the cursor suspended sub-agent row requests resumption instead

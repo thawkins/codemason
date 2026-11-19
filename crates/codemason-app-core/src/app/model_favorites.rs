@@ -186,7 +186,6 @@ impl App {
             });
         let Some((target, entry)) = usable else {
             self.status = "model: no other recent model".to_string();
-            self.needs_redraw = true;
             return false;
         };
         let level = Self::default_thinking_level_for_entry(&entry);
@@ -206,7 +205,6 @@ impl App {
                 target.provider_name
             ),
         );
-        self.needs_redraw = true;
         true
     }
 }

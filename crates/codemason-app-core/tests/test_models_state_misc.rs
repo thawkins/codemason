@@ -866,7 +866,6 @@ fn state_poll_stale_spinners_reaps_expired_latches() {
     app.poll_stale_spinners();
     assert!(app.model_loading_state.is_none());
     assert_eq!(app.status, "ready");
-    assert!(app.needs_redraw);
 
     // A fresh latch is left alone.
     app.status = "busy".to_string();
@@ -1021,7 +1020,6 @@ fn state_apply_registry_reconciliation_merges_both_ways() {
     let ids: Vec<&str> = app.active_tasks.iter().map(|t| t.id.as_str()).collect();
     assert!(ids.contains(&"fresh"));
     assert!(!ids.contains(&"done"));
-    assert!(app.needs_redraw);
 }
 
 #[test]

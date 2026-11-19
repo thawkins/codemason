@@ -34,7 +34,6 @@ fn test_code_index_busy_clears_when_no_index_attached() {
     // the busy flag, and age out the refresh throttle so the refresh body
     // actually runs.
     app.code_index_busy = true;
-    app.needs_redraw = false;
     app.code_index_stats_last_refresh = std::time::Instant::now()
         .checked_sub(std::time::Duration::from_secs(10))
         .unwrap_or(std::time::Instant::now());

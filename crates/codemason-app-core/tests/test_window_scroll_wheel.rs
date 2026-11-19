@@ -94,7 +94,6 @@ fn test_agents_scrollbar_gutter_drag_jumps_then_drags_then_ends() {
     // Click at the gutter's column, near the top of the track: jump-to-
     // position.
     let gutter = app.active_agents_area.right() - 1;
-    app.needs_redraw = false;
     app.handle_mouse_event(mouse_event(
         MouseEventKind::Down(crate::term_events::MouseButton::Left),
         gutter,

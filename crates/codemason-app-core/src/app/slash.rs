@@ -354,7 +354,6 @@ impl App {
                 text.push_str(&line);
             }
             self.govcreate_progress_text = Some(text);
-            self.needs_redraw = true;
         }
         if self.govcreate_progress_text.is_some() {
             self.refresh_govcreate_progress_message();
@@ -372,7 +371,6 @@ impl App {
         };
         self.govcreate_running = false;
         self.govcreate_origin_session = None;
-        self.needs_redraw = true;
         let rendered = report.render();
         self.session.force_new_message = true;
         self.append_assistant_text(&format!("From: /spec govcreate\n\n{rendered}"));
@@ -421,7 +419,6 @@ impl App {
                 LogLevel::Warn,
                 "govcreate: user pressed Esc - cancelling at the next stage boundary".to_string(),
             );
-            self.needs_redraw = true;
         }
     }
 
@@ -5937,7 +5934,6 @@ Usage: `/log [clear subagents|panics|research|editlog|logwindow|help]`",
             } else {
                 "tasks panel hidden".to_string()
             };
-            self.needs_redraw = true;
         } else {
             let sub = args.split_whitespace().next().unwrap_or("");
             let rest = args
@@ -8814,7 +8810,6 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                 }
             },
         }
-        self.needs_redraw = true;
     }
 
     /// Run the `/verbosity` slash command: a bare form reports the level,
@@ -8835,7 +8830,6 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                 Err(err) => self.status = format!("verbosity: {err}"),
             }
         }
-        self.needs_redraw = true;
     }
 
     /// Run the `/thinking-display` slash command: a bare form reports the
@@ -8853,7 +8847,6 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
             other => {
                 self.status =
                     format!("thinking-display: unknown `{other}`, use show, hide or collapse");
-                self.needs_redraw = true;
                 return;
             }
         };
@@ -8861,7 +8854,6 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
             self.transcript_prefs.thinking = mode;
         }
         self.status = format!("thinking-display: {}", self.transcript_prefs.thinking);
-        self.needs_redraw = true;
     }
 
     /// Run the `/yolo` slash command.
@@ -8962,7 +8954,6 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                 }
             }
         }
-        self.needs_redraw = true;
     }
 
     /// Run the `/undo` slash command.

@@ -142,7 +142,6 @@ fn app_with_agents_window() -> App {
     app.session.session_id = Some(LEAD_SESSION.to_string());
     app.session.agent_name = "general".to_string();
     app.show_agents_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -156,7 +155,6 @@ fn app_with_teams_window(status: MemberStatus) -> App {
         .team_members
         .push(member("tm-001", "reviewer", status));
     app.show_teams_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -189,7 +187,6 @@ async fn space_on_a_running_subagent_requests_suspension() {
         .agent_manager
         .set(Arc::clone(&manager));
     render(&mut app);
-    app.needs_redraw = false;
 
     app.move_agents_cursor(1);
     app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))
@@ -207,10 +204,6 @@ async fn space_on_a_running_subagent_requests_suspension() {
         ),
         "the request must be attributed to the child session (NFR-008)"
     );
-    assert!(
-        app.needs_redraw,
-        "logging the request repaints the log panel (NFR-005)"
-    );
 }
 
 /// Space on the cursor-selected suspended sub-agent row requests resumption
@@ -221,7 +214,6 @@ async fn space_on_a_suspended_subagent_requests_resumption() {
     app.active_tasks
         .push(task("b2c3d4e5", "explore", TaskStatus::Suspended));
     render(&mut app);
-    app.needs_redraw = false;
 
     app.move_agents_cursor(1);
     app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))

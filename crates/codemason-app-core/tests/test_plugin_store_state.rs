@@ -387,7 +387,6 @@ fn closing_a_loaded_panel_discards_the_browser_and_requests_a_repaint() {
         image_paths: Vec::new(),
     });
     app.open_plugin_store(StoreKind::Codex, "wea", false);
-    app.needs_redraw = false;
 
     app.close_plugin_store();
 
@@ -395,7 +394,6 @@ fn closing_a_loaded_panel_discards_the_browser_and_requests_a_repaint() {
         app.plugin_store.is_none(),
         "the browser is dropped (FR-012)"
     );
-    assert!(app.needs_redraw, "the restored screen repaints");
     // Nothing else changes (FR-012).
     assert_eq!(app.session.input, "draft");
     assert_eq!(app.session.input_cursor, 2);
@@ -407,10 +405,8 @@ fn closing_twice_is_idempotent_and_leaves_nothing_behind() {
     let mut app = support::make_app();
     app.open_plugin_store(StoreKind::Codex, "", false);
     app.close_plugin_store();
-    app.needs_redraw = false;
 
     app.close_plugin_store();
 
     assert!(app.plugin_store.is_none());
-    assert!(!app.needs_redraw, "a second close has nothing to repaint");
 }

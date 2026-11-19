@@ -64,7 +64,6 @@ fn test_poll_adopts_refresh_result_and_clears_inflight() {
         Some(snapshot),
         "poll must adopt the deposited snapshot"
     );
-    assert!(app.needs_redraw, "adopting a snapshot must flag redraw");
 }
 
 #[test]

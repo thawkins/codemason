@@ -69,13 +69,11 @@ fn status(app: &App) -> PluginStoreStatus {
 #[test]
 fn poll_with_no_pending_result_is_a_noop() {
     let mut app = open_loading();
-    app.needs_redraw = false;
 
     app.poll_plugin_store_result();
 
     // Nothing arrived, so the panel stays loading and no repaint is requested.
     assert_eq!(status(&app), PluginStoreStatus::Loading);
-    assert!(!app.needs_redraw);
 }
 
 // -- A delivered index fills the open panel (FR-007, FR-016, FR-017) ---------
@@ -83,7 +81,6 @@ fn poll_with_no_pending_result_is_a_noop() {
 #[test]
 fn a_delivered_index_fills_the_open_panel() {
     let mut app = open_loading();
-    app.needs_redraw = false;
     deliver(
         &app,
         StoreKind::Codex,
@@ -99,7 +96,6 @@ fn a_delivered_index_fills_the_open_panel() {
     assert_eq!(browser.status, PluginStoreStatus::Ready);
     assert_eq!(browser.all.len(), 2);
     assert_eq!(browser.filtered.len(), 2);
-    assert!(app.needs_redraw, "applying the result requests a repaint");
     // The slot is drained so the same result is not applied twice.
     assert!(app.plugin_store_result.lock().expect("slot").is_none());
 }
@@ -162,7 +158,6 @@ fn a_delivered_error_sets_the_inline_failure() {
         }
         other => panic!("expected a Failed status, got {other:?}"),
     }
-    assert!(app.needs_redraw);
 }
 
 #[test]

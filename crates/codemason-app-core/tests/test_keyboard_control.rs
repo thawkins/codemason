@@ -113,7 +113,6 @@ async fn teams_keys_without_a_live_cursor_are_consumed_no_ops() {
         .push(member("tm-001", "reviewer", MemberStatus::Working));
     app.show_teams_window = true;
     app.teams_cursor_teammate = Some(3); // beyond the live rows
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Char(' '), KeyModifiers::NONE))
         .await;

@@ -41,7 +41,6 @@ const fn mouse(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
 fn app_with_session(session: &str) -> codemason_app_core::app::App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.current_screen = codemason_app_core::app::ScreenMode::Chat;
     app
 }
 

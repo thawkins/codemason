@@ -102,19 +102,6 @@ async fn test_left_right_toggle_the_selection() {
     );
 }
 
-#[tokio::test]
-async fn test_selection_change_sets_the_redraw_flag() {
-    let mut app = app_with_dialog_open();
-    app.needs_redraw = false;
-
-    app.handle_key_event(key(KeyCode::Right)).await;
-
-    assert!(
-        app.needs_redraw,
-        "NFR-011: moving the dialog selection must repaint on the next frame"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // FR-034 - Enter with the default selection does not confirm `Yes`
 // ---------------------------------------------------------------------------
@@ -184,14 +171,9 @@ async fn test_cancel_closes_the_dialog_and_leaves_the_queue_unchanged() {
 async fn test_dismiss_sets_the_redraw_flag_and_resets_the_default() {
     let mut app = app_with_dialog_open();
     app.queue_clear_confirm_selected = QUEUE_CLEAR_CONFIRM_YES;
-    app.needs_redraw = false;
 
     app.handle_key_event(key(KeyCode::Esc)).await;
 
-    assert!(
-        app.needs_redraw,
-        "NFR-011: dismissing the dialog must repaint on the next frame"
-    );
     assert_eq!(
         app.queue_clear_confirm_selected, QUEUE_CLEAR_CONFIRM_NO,
         "FR-034: the selection must reset to `No` for the next open"

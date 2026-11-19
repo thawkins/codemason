@@ -75,7 +75,6 @@ async fn test_compression_finished_updates_last_input_tokens_and_status() {
     .await;
     assert!(app.session.compress_in_progress);
     assert_eq!(app.status, "compressing context...");
-    assert!(app.needs_redraw);
 
     app.handle_event(Event::CompressionFinished {
         session_id: "session-1".to_string(),
@@ -89,7 +88,6 @@ async fn test_compression_finished_updates_last_input_tokens_and_status() {
     assert!(!app.session.compress_in_progress);
     assert_eq!(app.session.last_input_tokens, 45_000);
     assert!(app.status.contains("saved 45000 tokens"));
-    assert!(app.needs_redraw);
 }
 
 #[tokio::test]

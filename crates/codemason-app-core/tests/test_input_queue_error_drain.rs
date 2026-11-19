@@ -204,22 +204,6 @@ async fn test_agent_error_drain_is_skipped_without_an_active_session() {
 }
 
 #[tokio::test]
-async fn test_agent_error_drain_requests_redraw_for_the_counter() {
-    let mut app = app_with_session();
-    app.session.is_processing = true;
-    app.session.input_queue.push_back(entry("one"));
-    app.session.input_queue.push_back(entry("two"));
-    app.needs_redraw = false;
-
-    agent_error(&mut app).await;
-
-    assert!(
-        app.needs_redraw,
-        "FR-008: the decremented counter must be painted on the next frame"
-    );
-}
-
-#[tokio::test]
 async fn test_agent_error_drain_uses_the_async_dispatch_path() {
     let mut app = app_with_session();
     app.session.is_processing = true;

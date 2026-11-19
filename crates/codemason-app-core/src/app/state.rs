@@ -416,13 +416,6 @@ impl ContextPartitionSnapshot {
     }
 }
 
-/// Which screen the TUI is currently showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScreenMode {
-    /// Three-panel chat layout with status bar, messages, and input.
-    Chat,
-}
-
 /// Providers that codemason can connect to.
 ///
 /// Local/keyless providers are listed first so users can quickly find them,
@@ -3155,8 +3148,6 @@ fn marketplace_of(entry: &StoreEntry) -> Option<&str> {
 /// Holds the message list, input buffer, scroll offset, permission dialogs,
 /// token usage counters, and a reference to the shared [`EventBus`].
 pub struct App {
-    /// Flag indicating whether a UI redraw is required.
-    pub needs_redraw: bool,
     /// State of the focused session: transcript, scroll position and the
     /// per-message render cache (spec MULTISESSION, M2 group S1).
     pub session: super::SessionView,
@@ -3218,8 +3209,6 @@ pub struct App {
     pub model_loading_state: Option<ModelLoadingState>,
     /// Active model download state, if any (progress bar popup).
     pub model_download_state: Option<ModelDownloadState>,
-    /// Which screen is currently displayed.
-    pub current_screen: ScreenMode,
     /// Current working directory displayed on the home screen.
     ///
     /// This value may be `~`-collapsed for display (e.g. `~/Projects/codemason`).
@@ -4457,7 +4446,6 @@ impl App {
         self.mcp_servers.sort_by(|a, b| a.id.cmp(&b.id));
         self.refresh_mcp_enabled_map();
         self.mcp_client_adopted = true;
-        self.needs_redraw = true;
     }
 
     /// Append the per-server MCP connection report to the message window, once.
@@ -5146,7 +5134,6 @@ impl App {
         // something else (e.g. agent processing started and set "busy").
         if self.status == snapshot && !self.status.is_empty() {
             self.status = "ready".to_string();
-            self.needs_redraw = true;
         }
     }
 
@@ -5160,7 +5147,6 @@ impl App {
             if shown_at.elapsed() >= std::time::Duration::from_secs(RUN_COST_BANNER_EXPIRY_SECS) {
                 self.session.run_cost_banner = None;
                 self.session.run_cost_banner_at = None;
-                self.needs_redraw = true;
             }
         }
     }
@@ -5275,7 +5261,6 @@ impl App {
         if self.session.question_queue.is_empty() {
             self.set_status_working("processing");
         }
-        self.needs_redraw = true;
     }
 
     /// Clear spinner latches that have outlived their self-healing staleness
@@ -5316,7 +5301,6 @@ impl App {
         }
         if reaped {
             self.status = "ready".to_string();
-            self.needs_redraw = true;
         }
     }
 
@@ -5497,9 +5481,6 @@ impl App {
             );
         }
 
-        if !removed_ghosts.is_empty() || !added.is_empty() {
-            self.needs_redraw = true;
-        }
         // The registry merge is the safety net for dropped lifecycle events
         // (FR-054); when it removes a ghost the window may already be able to
         // empty, so the auto-close runs on the merge too (FR-063).

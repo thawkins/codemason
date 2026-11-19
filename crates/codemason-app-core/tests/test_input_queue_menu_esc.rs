@@ -76,19 +76,6 @@ async fn test_esc_resets_the_selection_for_the_next_open() {
     );
 }
 
-#[tokio::test]
-async fn test_esc_sets_the_redraw_flag() {
-    let mut app = app_with_menu_open().await;
-    app.needs_redraw = false;
-
-    app.handle_key_event(key(KeyCode::Esc)).await;
-
-    assert!(
-        app.needs_redraw,
-        "NFR-008: dismissing the menu must repaint on the next frame"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // FR-031 - the menu never mutates the editable input buffer
 // ---------------------------------------------------------------------------

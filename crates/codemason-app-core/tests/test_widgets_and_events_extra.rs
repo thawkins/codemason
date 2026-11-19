@@ -30,7 +30,6 @@ mod support;
 fn app_with_session(session: &str) -> codemason_app_core::app::App {
     let mut app = support::make_app();
     app.session.session_id = Some(session.to_string());
-    app.needs_redraw = false;
     app
 }
 
@@ -666,7 +665,6 @@ async fn event_session_created_populates_session_id() {
     })
     .await;
     assert_eq!(app.session.session_id.as_deref(), Some("sess-created"));
-    assert!(app.needs_redraw);
 }
 
 #[tokio::test]
@@ -1071,7 +1069,7 @@ async fn event_service_start_error_opens_dialog_state() {
         error: "timed out".to_string(),
     })
     .await;
-    assert!(app.needs_redraw);
+    assert_eq!(app.status, "ollama serve failed to start");
 }
 
 #[tokio::test]
@@ -1087,7 +1085,7 @@ async fn event_mcp_status_and_enabled_changed() {
         enabled: false,
     })
     .await;
-    assert!(app.needs_redraw);
+    assert_eq!(app.mcp_enabled_map.get("filesystem"), Some(&false));
 }
 
 #[tokio::test]

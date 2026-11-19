@@ -145,7 +145,6 @@ impl App {
             scope,
             ..PaletteState::default()
         });
-        self.needs_redraw = true;
     }
 
     /// The rows the open palette shows: the entries ranked against its
@@ -205,7 +204,6 @@ impl App {
             }
             _ => {}
         }
-        self.needs_redraw = true;
     }
 
     /// Run a slash command chosen in the palette as a typed one runs: queued
@@ -268,6 +266,5 @@ impl App {
             }
             _ => {}
         }
-        self.needs_redraw = true;
     }
 }

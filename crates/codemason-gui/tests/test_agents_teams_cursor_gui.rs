@@ -261,7 +261,6 @@ async fn agents_stale_cursor_actions_are_consumed_no_ops() {
     // the painted frame, FR-069).
     app.agents_cursor_subagent = Some(0);
     app.active_tasks.clear();
-    app.needs_redraw = false;
 
     app.agents_cursor_toggle_stop_resume();
     assert_eq!(
@@ -273,7 +272,6 @@ async fn agents_stale_cursor_actions_are_consumed_no_ops() {
         !app.row_action_confirm_open(),
         "Del on a stale cursor arms no dialog"
     );
-    app.needs_redraw = false;
     app.status = String::new();
     app.agents_cursor_open_output();
     assert!(
@@ -329,7 +327,6 @@ async fn teams_space_splits_by_member_status() {
         .push(member("tm-001", "reviewer", MemberStatus::Suspended));
     render_teams(&mut app, 170, 44);
     app.move_teams_cursor(1);
-    app.needs_redraw = false;
     app.teams_cursor_toggle_stop_resume();
 
     assert!(
@@ -385,7 +382,6 @@ fn teams_enter_focuses_and_opens_the_overlay() {
     render_teams(&mut app, 170, 44);
 
     app.move_teams_cursor(1);
-    app.needs_redraw = false;
     app.teams_cursor_focus();
 
     assert_eq!(
@@ -409,7 +405,6 @@ fn teams_enter_focuses_and_opens_the_overlay() {
         }
         other => panic!("expected a TeamMember target, got {other:?}"),
     }
-    assert!(app.needs_redraw, "focusing repaints (NFR-005)");
 }
 
 /// Stale team cursors are consumed no-ops that report on the status line
@@ -427,7 +422,6 @@ async fn teams_stale_cursor_actions_are_consumed_no_ops() {
 
     app.teams_cursor_teammate = Some(0);
     app.session.team_members.clear();
-    app.needs_redraw = false;
 
     app.teams_cursor_toggle_stop_resume();
     assert_eq!(
@@ -439,7 +433,6 @@ async fn teams_stale_cursor_actions_are_consumed_no_ops() {
         !app.row_action_confirm_open(),
         "Del on a stale cursor arms no dialog"
     );
-    app.needs_redraw = false;
     app.status = "sentinel".to_string();
     app.teams_cursor_focus();
     assert!(
@@ -507,7 +500,6 @@ async fn agents_click_selects_then_space_toggles() {
         "the click moves the cursor onto the clicked row"
     );
 
-    app.needs_redraw = false;
     app.agents_cursor_toggle_stop_resume();
     assert!(
         app.log_entries

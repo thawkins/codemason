@@ -41,7 +41,6 @@ impl App {
             return;
         };
         self.session.compact_in_progress = false;
-        self.needs_redraw = true;
         let was_auto_compaction = self.session.auto_compact_in_progress;
         match outcome {
             Ok(new_messages) => {
@@ -102,7 +101,6 @@ impl App {
 
         self.session.auto_compact_in_progress = auto_triggered;
         self.session.compact_in_progress = true;
-        self.needs_redraw = true;
         if auto_triggered {
             self.session.auto_compact_failed = false;
             self.status = "compacting before send...".to_string();

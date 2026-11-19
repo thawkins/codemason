@@ -79,7 +79,6 @@ fn app_with_task() -> App {
     app.active_tasks
         .push(task("a1b2c3d4", "explore", TaskStatus::Running));
     app.show_agents_window = true;
-    app.needs_redraw = false;
     app
 }
 
@@ -92,7 +91,6 @@ fn app_with_task() -> App {
 #[tokio::test]
 async fn open_row_action_arms_the_dialog_with_no_selected() {
     let mut app = make_app();
-    app.needs_redraw = false;
 
     app.open_row_action(RowAction::KillSubagent {
         task_id: "a1b2c3d4".to_string(),
@@ -106,10 +104,6 @@ async fn open_row_action_arms_the_dialog_with_no_selected() {
     assert!(
         !app.row_action_confirm_is_yes(),
         "No must be the default selection (FR-069)"
-    );
-    assert!(
-        app.needs_redraw,
-        "arming the dialog requests a redraw (NFR-005)"
     );
 }
 
@@ -133,7 +127,6 @@ async fn enter_on_the_default_no_dismisses_without_dispatching() {
         !app.row_action_confirm_open(),
         "Enter on the default No closes the dialog"
     );
-    assert!(app.needs_redraw, "the closure requests a redraw (NFR-005)");
     assert!(
         app.active_tasks
             .iter()
@@ -229,7 +222,6 @@ async fn background_cancel_opens_the_cancel_dialog() {
     let mut app = app_with_task();
     app.active_tasks.clear();
     app.bg_tasks = vec![bg_task("cc112233", "sleep 30")];
-    app.needs_redraw = false;
     app.open_row_action(RowAction::CancelBackground {
         task_id: "cc112233".to_string(),
         command: "sleep 30".to_string(),
@@ -246,7 +238,6 @@ async fn background_cancel_opens_the_cancel_dialog() {
         }
         other => panic!("expected CancelBackground, got {other:?}"),
     }
-    assert!(app.needs_redraw, "arming the dialog requests a redraw");
 }
 
 /// `Space` on the cursor-selected RUNNING sub-agent row suspends it without a
