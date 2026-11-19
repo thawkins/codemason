@@ -24,7 +24,7 @@ use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 /// its prefix; if the processor already reported the failure, nothing more is
 /// published, because a second terminal error would end whatever turn the
 /// first one allowed the input queue to start.
-pub async fn run_command_turn(
+pub(super) async fn run_command_turn(
     processor: Arc<SessionProcessor>,
     event_bus: Arc<EventBus>,
     session_id: String,

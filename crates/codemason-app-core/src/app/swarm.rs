@@ -791,7 +791,7 @@ impl App {
 /// the team directory use [`App::stop_swarm_autocomplete`], which also
 /// waits for the job to end.
 #[derive(Debug)]
-pub struct SwarmAutoComplete {
+pub(super) struct SwarmAutoComplete {
     /// The swarm the job completes tasks for.
     team_name: String,
     /// The spawned job.
