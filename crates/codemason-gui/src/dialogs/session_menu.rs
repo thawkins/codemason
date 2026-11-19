@@ -113,7 +113,7 @@ fn surface(
 ) -> (Option<usize>, Vec<Rect>) {
     let mut clicked = None;
     let mut rects = Vec::with_capacity(menu.items.len());
-    let width = natural_width(ui, menu);
+    let width = natural_width(ui, palette, menu);
     let frame = menu_frame(palette).show(ui, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -144,11 +144,11 @@ fn surface(
 
 /// The menu's width: its widest label and accelerator with padding, and at
 /// least [`MIN_WIDTH`].
-fn natural_width(ui: &egui::Ui, menu: &SessionMenu) -> f32 {
+fn natural_width(ui: &egui::Ui, palette: &Palette, menu: &SessionMenu) -> f32 {
     let font = egui::FontId::proportional(text_size::BODY);
     let measure = |text: String| {
         ui.painter()
-            .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
+            .layout_no_wrap(text, font.clone(), rgb(palette.m3.on_surface))
             .size()
             .x
     };
