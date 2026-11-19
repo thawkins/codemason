@@ -234,7 +234,20 @@ Done for the `document-*` themes, with these differences:
    - Verify: the existing 76 GUI test files pass unchanged in behaviour; update
      only assertions that read colours or sizes, each with a reason.
 
-### Phase 6: polish, defaults and docs (1 to 2 days)
+### Phase 6: polish, defaults and docs (1 to 2 days) - DONE
+
+Done, with these differences:
+- The default theme is unchanged (owner's decision); step 1 needed no code.
+- Motion: the ribbon band slides open and shut and the tab underline
+  glides (200 ms, cubic ease-out, `material::motion_time`); the snackbar
+  and tooltip use egui's own `Area` fade-in. The side panels are opened by
+  the dock, which has no open animation, so they do not slide. There is no
+  reduced-motion setting in the app; egui's `animation_time` of zero
+  turns the motion off.
+- AAA check: two derived roles of `high-contrast` missed 7:1 (`on_primary`
+  6.81, `on_error` 5.75). The theme's accent and error colours were lifted
+  to `#1a9fff` and `#ff6060`, which also raises them as text on black.
+- Screenshots were captured under `target/temp/newui/` and not committed.
 
 1. Keep the current default theme. `document-light` and `document-dark` are
    listed by `/theme` and selectable like the other bundled themes.

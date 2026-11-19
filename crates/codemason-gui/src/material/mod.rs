@@ -20,8 +20,8 @@
 //! - [`feedback`]: slider, linear progress, plain tooltip and snackbar.
 //!
 //! The helpers here are the parts every component shares: the state layer
-//! drawn over a hovered, focused or pressed component, the focus ring, and
-//! elevation shadows.
+//! drawn over a hovered, focused or pressed component, the focus ring,
+//! elevation shadows, and motion ([`motion_time`], [`standard_easing`]).
 //!
 //! Dependencies: `egui`, and this crate's palette, icons, fonts and metrics.
 
@@ -192,4 +192,28 @@ pub(crate) fn text_galley(
 #[must_use]
 pub fn label_large() -> egui::FontId {
     crate::fonts::bold_font(crate::metrics::text_size::BODY, false)
+}
+
+/// The Material "standard" motion duration, in seconds.
+pub const MOTION_DURATION: f32 = 0.2;
+
+/// How long a component's motion takes in `ctx`.
+///
+/// # Returns
+///
+/// [`MOTION_DURATION`], or 0.0 (no motion) when the app's style turns
+/// egui's animations off (`animation_time` of zero).
+#[must_use]
+pub fn motion_time(ctx: &egui::Context) -> f32 {
+    if ctx.global_style().animation_time > 0.0 {
+        MOTION_DURATION
+    } else {
+        0.0
+    }
+}
+
+/// The Material standard easing, decelerating: fast out, slow in.
+#[must_use]
+pub fn standard_easing(t: f32) -> f32 {
+    egui::emath::easing::cubic_out(t)
 }

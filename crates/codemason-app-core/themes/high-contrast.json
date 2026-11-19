@@ -14,18 +14,18 @@
   },
   "border": {
     "base": "#ffffff",
-    "focus": "#0096ff"
+    "focus": "#1a9fff"
   },
-  "accent": "#0096ff",
+  "accent": "#1a9fff",
   "state": {
     "success": "#32ff32",
     "warning": "#ffff00",
-    "error": "#ff3232",
+    "error": "#ff6060",
     "info": "#00ffff"
   },
   "diff": {
     "added": "#32ff32",
-    "removed": "#ff3232",
+    "removed": "#ff6060",
     "context": "#ffffff",
     "added_bg": "#002800",
     "removed_bg": "#300000",
@@ -35,23 +35,23 @@
     "keyword": "#ff80ff",
     "string": "#32ff32",
     "comment": "#b0b0b0",
-    "function": "#0096ff",
+    "function": "#1a9fff",
     "type": "#00ffff",
     "number": "#ffa040",
     "operator": "#ffffff",
     "punctuation": "#ffffff"
   },
   "markdown": {
-    "heading": "#0096ff",
+    "heading": "#1a9fff",
     "link": "#00ffff",
     "code": "#ffff00",
     "blockquote": "#c8c8c8"
   },
   "categorical": [
-    "#0096ff",
+    "#1a9fff",
     "#32ff32",
     "#ffff00",
-    "#ff3232",
+    "#ff6060",
     "#ff80ff",
     "#00ffff",
     "#ffa040",

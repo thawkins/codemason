@@ -32,7 +32,8 @@ use egui::{CornerRadius, Rect, Response, Role, Sense, Stroke, Vec2, WidgetInfo};
 use crate::icons::Icon;
 use crate::material::icon_button::{IconButtonKind, icon_button};
 use crate::material::{
-    content_colour, icon_galley, label_large, paint_focus_ring, paint_state_layer, text_galley,
+    content_colour, icon_galley, label_large, motion_time, paint_focus_ring, paint_state_layer,
+    standard_easing, text_galley,
 };
 use crate::metrics::{space, text_size};
 use crate::palette::{Palette, rgb};
@@ -48,6 +49,9 @@ pub const TAB_HEIGHT: f32 = 36.0;
 
 /// Height of the band of grouped commands under the tabs, in points.
 pub const BAND_HEIGHT: f32 = 88.0;
+
+/// Vertical padding of the band, in points.
+const BAND_MARGIN: f32 = 4.0;
 
 /// Width of a ribbon command button, in points.
 const BUTTON_WIDTH: f32 = 72.0;
@@ -369,11 +373,28 @@ pub fn ribbon_ui(
     state: &mut RibbonState,
 ) -> Option<RibbonAction> {
     tab_strip(ui, palette, state);
-    if state.collapsed {
+    // The band slides open and shut: its height follows the openness, and
+    // what does not fit yet is clipped.
+    let ctx = ui.ctx().clone();
+    let openness = ctx.animate_bool_with_time_and_easing(
+        ui.scope_id().with("ribbon_band_open"),
+        !state.collapsed,
+        motion_time(&ctx),
+        standard_easing,
+    );
+    if openness <= 0.0 {
         return None;
     }
     let tab = TABS.get(state.tab).or_else(|| TABS.first())?;
-    band(ui, palette, tab)
+    let full = BAND_MARGIN.mul_add(2.0, BAND_HEIGHT);
+    let top = ui.cursor().min;
+    let width = ui.available_width();
+    let (shown, _) = ui.allocate_exact_size(Vec2::new(width, full * openness), Sense::hover());
+    let mut band_ui = ui.new_child(
+        egui::UiBuilder::new().max_rect(Rect::from_min_size(top, Vec2::new(width, full))),
+    );
+    band_ui.set_clip_rect(shown.intersect(ui.clip_rect()));
+    band(&mut band_ui, palette, tab)
 }
 
 /// The tab strip with the collapse chevron at its right end.
@@ -394,6 +415,7 @@ fn tab_strip(ui: &mut egui::Ui, palette: &Palette, state: &mut RibbonState) {
     let chevron = crate::material::icon_button::SIZE;
     let fit = fit_whole(&natural, state.tab, strip.width() - chevron, 0.0);
     let mut x = strip.left();
+    let mut underline = None;
     for (index, width) in fit.shown {
         let Some(tab) = TABS.get(index) else { continue };
         let rect = Rect::from_min_size(egui::pos2(x, strip.top()), Vec2::new(width, TAB_HEIGHT));
@@ -403,12 +425,28 @@ fn tab_strip(ui: &mut egui::Ui, palette: &Palette, state: &mut RibbonState) {
         let response = Tab::new(id, tab.label, on)
             .focus_stroke(Stroke::new(2.0, rgb(m3.secondary)))
             .show_at(ui, rect, |ui, response| {
-                paint_tab(ui, palette, response, tab.label, on);
+                let text_width = paint_tab(ui, palette, response, tab.label, on);
+                if on {
+                    underline = Some((rect.center().x, text_width));
+                }
             });
         if response.clicked() {
             state.tab = index;
             state.collapsed = false;
         }
+    }
+    // The open tab's underline glides to the tab that opens.
+    if let Some((centre, width)) = underline {
+        let ctx = ui.ctx().clone();
+        let time = motion_time(&ctx);
+        let id = ui.scope_id().with("ribbon_underline");
+        let centre = ctx.animate_value_with_time(id.with("x"), centre, time);
+        let width = ctx.animate_value_with_time(id.with("w"), width, time);
+        let bar = Rect::from_center_size(
+            egui::pos2(centre, strip.bottom() - 1.5),
+            Vec2::new(width, 3.0),
+        );
+        ui.painter().rect_filled(bar, 1.5, rgb(m3.primary));
     }
     let chevron_rect = Rect::from_min_size(
         egui::pos2(strip.right() - chevron, strip.center().y - chevron / 2.0),
@@ -429,8 +467,12 @@ fn tab_strip(ui: &mut egui::Ui, palette: &Palette, state: &mut RibbonState) {
     }
 }
 
-/// Paint one tab: its label, and a `primary` underline when it is open.
-fn paint_tab(ui: &egui::Ui, palette: &Palette, response: &Response, label: &str, on: bool) {
+/// Paint one tab: its state layer and label (in `primary` when it is open).
+///
+/// # Returns
+///
+/// The label's width, which the open tab's underline takes.
+fn paint_tab(ui: &egui::Ui, palette: &Palette, response: &Response, label: &str, on: bool) -> f32 {
     let m3 = &palette.m3;
     let rect = response.rect;
     let colour = content_colour(
@@ -447,13 +489,7 @@ fn paint_tab(ui: &egui::Ui, palette: &Palette, response: &Response, label: &str,
     let text_width = text.size().x;
     ui.painter()
         .galley(rect.center() - text.size() / 2.0, text, colour);
-    if on {
-        let underline = Rect::from_center_size(
-            egui::pos2(rect.center().x, rect.bottom() - 1.5),
-            Vec2::new(text_width, 3.0),
-        );
-        ui.painter().rect_filled(underline, 1.5, rgb(m3.primary));
-    }
+    text_width
 }
 
 /// The open tab's band: each group's buttons over its caption, groups
@@ -464,7 +500,7 @@ fn band(ui: &mut egui::Ui, palette: &Palette, tab: &RibbonTab) -> Option<RibbonA
     egui::Frame::new()
         .fill(rgb(m3.surface_container))
         .corner_radius(CornerRadius::same(crate::metrics::radius::MD))
-        .inner_margin(egui::Margin::symmetric(8, 4))
+        .inner_margin(egui::Margin::symmetric(8, BAND_MARGIN as i8))
         .show(ui, |ui| {
             ui.set_height(BAND_HEIGHT);
             ui.horizontal(|ui| {

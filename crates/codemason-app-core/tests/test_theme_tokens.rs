@@ -294,3 +294,57 @@ fn test_m3_block_rejects_unknown_roles() {
         .replace("\"scrim\":", "\"glow\": \"#000000\", \"scrim\":");
     assert!(ThemeTokens::from_json(&json).is_err());
 }
+
+#[test]
+fn test_high_contrast_m3_roles_reach_aaa() {
+    let theme = ThemeCatalog::builtin()
+        .get(HIGH_CONTRAST_THEME)
+        .expect("built-in");
+    let m3 = theme.roles();
+    let pairs = [
+        ("on_primary", m3.on_primary, m3.primary),
+        (
+            "on_primary_container",
+            m3.on_primary_container,
+            m3.primary_container,
+        ),
+        ("on_secondary", m3.on_secondary, m3.secondary),
+        (
+            "on_secondary_container",
+            m3.on_secondary_container,
+            m3.secondary_container,
+        ),
+        ("on_tertiary", m3.on_tertiary, m3.tertiary),
+        (
+            "on_tertiary_container",
+            m3.on_tertiary_container,
+            m3.tertiary_container,
+        ),
+        ("on_error", m3.on_error, m3.error),
+        (
+            "on_error_container",
+            m3.on_error_container,
+            m3.error_container,
+        ),
+        ("on_surface", m3.on_surface, m3.surface),
+        ("on_surface_variant", m3.on_surface_variant, m3.surface),
+        (
+            "on_surface/highest",
+            m3.on_surface,
+            m3.surface_container_highest,
+        ),
+        (
+            "inverse_on_surface",
+            m3.inverse_on_surface,
+            m3.inverse_surface,
+        ),
+    ];
+    let failures: Vec<String> = pairs
+        .iter()
+        .filter_map(|(name, fg, bg)| {
+            let ratio = contrast_ratio(*fg, *bg);
+            (ratio < 7.0).then(|| format!("{name} {ratio:.2}"))
+        })
+        .collect();
+    assert_eq!(failures, Vec::<String>::new());
+}

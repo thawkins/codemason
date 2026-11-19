@@ -60,3 +60,17 @@ fn test_document_panes_zoom_slider_only_in_document_themes() {
     let zoom = document.ctx.zoom_factor();
     assert!((zoom - 1.25).abs() < 0.02, "{zoom}");
 }
+
+#[test]
+fn test_document_panes_motion_follows_the_animation_setting() {
+    use codemason_gui::material::{MOTION_DURATION, motion_time, standard_easing};
+
+    let ctx = egui::Context::default();
+    assert!((motion_time(&ctx) - MOTION_DURATION).abs() < f32::EPSILON);
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    assert!(motion_time(&ctx).abs() < f32::EPSILON);
+    assert!(standard_easing(0.0).abs() < f32::EPSILON);
+    assert!((standard_easing(1.0) - 1.0).abs() < f32::EPSILON);
+    // Decelerating: more than half way at half the time.
+    assert!(standard_easing(0.5) > 0.5);
+}
