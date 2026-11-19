@@ -48,7 +48,7 @@ pub fn primary_tabs(
     let count = labels.len().max(1) as f32;
     let tab_width = outer.width() / count;
     for (index, label) in labels.iter().enumerate() {
-        let left = outer.left() + tab_width * index as f32;
+        let left = tab_width.mul_add(index as f32, outer.left());
         let rect = Rect::from_min_size(egui::pos2(left, outer.top()), Vec2::new(tab_width, HEIGHT));
         let on = *selected == index;
         let id = ui.scope_id().with(("tab", index));
