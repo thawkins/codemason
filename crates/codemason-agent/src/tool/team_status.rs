@@ -70,13 +70,14 @@ impl Tool for TeamStatusTool {
             .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
         super::team_caller::resolve_caller(ctx, team_name, &team_dir)?;
 
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
 
         // Task store is supplementary - don't fail the whole report if
         // tasks.json is missing or corrupt.
-        let task_list = TaskStore::open(&team_dir)
-            .and_then(|ts| ts.read())
-            .unwrap_or_default();
+        let task_list = match TaskStore::open(&team_dir) {
+            Ok(ts) => ts.read_blocking().await.unwrap_or_default(),
+            Err(_) => Default::default(),
+        };
 
         let total_tasks = task_list.tasks.len();
         let done_tasks = task_list

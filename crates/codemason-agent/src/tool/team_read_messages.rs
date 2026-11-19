@@ -69,7 +69,7 @@ impl Tool for TeamReadMessagesTool {
 
         // M4-T1: peek without marking read so a failure here leaves the
         // messages unread and they are redelivered on the next call.
-        let unread = mailbox.peek_unread()?;
+        let unread = mailbox.peek_unread_blocking().await?;
 
         if unread.is_empty() {
             return Ok(ToolOutput {
@@ -149,6 +149,10 @@ impl Tool for TeamReadMessagesTool {
         // `Mailbox::mark_all_read`. A failed batch ack is non-fatal - the
         // affected messages stay unread and are re-peeked next time
         // (idempotent `mark_read`).
+        //
+        // The ack stays synchronous, not `mark_all_read_blocking`: an await
+        // here would let a cancelled call mark messages read whose output
+        // never reached the caller.
         let ids: Vec<String> = unread.iter().map(|m| m.message_id.clone()).collect();
         if let Err(e) = mailbox.mark_all_read(&ids) {
             tracing::warn!(

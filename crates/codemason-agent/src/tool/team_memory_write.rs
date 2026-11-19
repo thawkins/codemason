@@ -89,7 +89,7 @@ impl Tool for TeamMemoryWriteTool {
             .agent_id()
             .to_string();
 
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
         let member = store
             .config
             .members

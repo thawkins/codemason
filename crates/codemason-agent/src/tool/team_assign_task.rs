@@ -80,7 +80,7 @@ impl Tool for TeamAssignTaskTool {
         // refusals name the entity, its state, and one next action (FR-032): a
         // caller that mis-typed a name is told which names exist, and one that
         // picked a finished teammate is told how to revive it.
-        let config_store = TeamStore::load(&team_dir)?;
+        let config_store = TeamStore::load_blocking(team_dir.clone()).await?;
         if agent_id != "lead" && config_store.config.member_by_id(&agent_id).is_none() {
             let known: Vec<&str> = config_store
                 .config

@@ -91,7 +91,7 @@ impl Tool for TeamTaskCreateTool {
             .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
         super::team_caller::require_lead(ctx, team_name, &team_dir, self.name())?;
 
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
 
         // FR-017: the `TaskCreated` hook fires from the task store's mutation
         // path, not from here, so a task seeded by `team_create` fires it too.

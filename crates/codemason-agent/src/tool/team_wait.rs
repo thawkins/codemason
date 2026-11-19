@@ -176,7 +176,8 @@ impl Tool for TeamWaitTool {
 
         // Load the team store to discover current membership.
         let store = if let Some(ref name) = team_name {
-            TeamStore::load_by_name(name, &working_dir)
+            TeamStore::load_by_name_blocking(name.to_string(), working_dir.clone())
+                .await
                 .map_err(|e| anyhow::anyhow!("Cannot load team '{name}': {e}"))?
         } else {
             // Find the most recently modified team.
@@ -185,7 +186,9 @@ impl Tool for TeamWaitTool {
                 .into_iter()
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("No teams found in this project."))?;
-            TeamStore::load(&dir).map_err(|e| anyhow::anyhow!("Cannot load team store: {e}"))?
+            TeamStore::load_blocking(dir.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!("Cannot load team store: {e}"))?
         };
 
         let resolved_team_name = store.config.name.clone();
@@ -387,7 +390,12 @@ impl Tool for TeamWaitTool {
         // recognised as parked rather than still running (FR-031).
         let mut final_members = store.config.members.clone();
         if !waiting_for.is_empty() {
-            if let Ok(fresh) = TeamStore::load_by_name(&resolved_team_name, &working_dir) {
+            if let Ok(fresh) = TeamStore::load_by_name_blocking(
+                resolved_team_name.to_string(),
+                working_dir.clone(),
+            )
+            .await
+            {
                 let settled_on_disk: Vec<String> = fresh
                     .config
                     .members

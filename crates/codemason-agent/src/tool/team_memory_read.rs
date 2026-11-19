@@ -67,7 +67,7 @@ impl Tool for TeamMemoryReadTool {
             .to_string();
 
         // Look up member to confirm membership and check memory scope.
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
         let member = store
             .config
             .members

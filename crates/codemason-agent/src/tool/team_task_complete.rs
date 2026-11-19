@@ -97,7 +97,7 @@ impl Tool for TeamTaskCompleteTool {
         // only happens when debug logging is actually enabled, instead of
         // on every `team_task_complete` call.
         if tracing::enabled!(tracing::Level::DEBUG) {
-            if let Ok(list) = store.read() {
+            if let Ok(list) = store.read_blocking().await {
                 let task_summary: Vec<String> = list
                     .tasks
                     .iter()

@@ -74,7 +74,7 @@ impl Tool for TeamBroadcastTool {
             .agent_id()
             .to_string();
 
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
         let active: Vec<_> = store
             .config
             .members

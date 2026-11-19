@@ -93,7 +93,7 @@ impl Tool for TeamApprovePlanTool {
         // `plan_status` on a member that never submitted one, which is what the
         // TUI surface already refuses before making the round trip.
         {
-            let store = TeamStore::load(&team_dir)?;
+            let store = TeamStore::load_blocking(team_dir.clone()).await?;
             let Some(member) = store.config.member_by_id(&agent_id) else {
                 return Err(anyhow::anyhow!(
                     "cannot record a plan verdict for '{teammate}' (id: {agent_id}): it is not \
@@ -146,6 +146,10 @@ impl Tool for TeamApprovePlanTool {
         .with_sender_session(&ctx.session_id);
         // M5-T4: copy the correlation id from the member's plan_request_id so
         // the teammate can tell which plan was approved/rejected.
+        //
+        // From the status update above to the id cleanup below the I/O stays
+        // synchronous: an await in between would let a cancelled call leave a
+        // member working without the verdict ever being sent.
         {
             let store = TeamStore::load(&team_dir)?;
             if let Some(m) = store.config.member_by_id(&agent_id) {

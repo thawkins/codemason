@@ -88,7 +88,7 @@ impl Tool for TeamMessageTool {
         // valid). For teammates, reject `Stopped` / `Failed` so the sender
         // gets an error instead of a false success.
         if recipient_id != "lead" {
-            let store = TeamStore::load(&team_dir)?;
+            let store = TeamStore::load_blocking(team_dir.clone()).await?;
             match store.config.member_by_id(&recipient_id) {
                 None => {
                     return Err(anyhow::anyhow!(

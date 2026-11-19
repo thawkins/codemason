@@ -69,7 +69,7 @@ impl Tool for TeamIdleTool {
         // This prevents teammates from going idle mid-task, which leaves tasks stuck.
         {
             let task_store = TaskStore::open(&team_dir)?;
-            let list = task_store.read()?;
+            let list = task_store.read_blocking().await?;
             if let Some(active) = list.in_progress_for(&agent_id) {
                 return Ok(ToolOutput {
                     content: format!(
