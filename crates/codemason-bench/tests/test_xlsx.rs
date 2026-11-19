@@ -8,6 +8,15 @@ use serde_json::json;
 
 use codemason_bench::xlsx::write_xlsx;
 
+/// A scratch directory under the workspace's git-ignored `target/temp/`, removed
+/// on drop. `tempfile::tempdir()` would land in the OS temp dir (`/tmp`), which
+/// the project's temporary-file rules forbid.
+fn scratch_dir() -> tempfile::TempDir {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
+    std::fs::create_dir_all(&root).expect("create target/temp");
+    tempfile::tempdir_in(&root).expect("tempdir under target/temp")
+}
+
 /// An XLSX file is a ZIP archive, so it begins with the `PK\x03\x04` signature.
 fn assert_is_zip_archive(path: &std::path::Path) {
     let bytes = std::fs::read(path).expect("read written workbook");
@@ -21,7 +30,7 @@ fn assert_is_zip_archive(path: &std::path::Path) {
 
 #[test]
 fn test_write_xlsx_happy_path_mixed_cell_types() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = scratch_dir();
     let path = dir.path().join("out.xlsx");
     let content = json!({
         "sheets": [
@@ -43,7 +52,7 @@ fn test_write_xlsx_happy_path_mixed_cell_types() {
 
 #[test]
 fn test_write_xlsx_multiple_sheets_and_default_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = scratch_dir();
     let path = dir.path().join("multi.xlsx");
     let content = json!({
         "sheets": [
@@ -58,7 +67,7 @@ fn test_write_xlsx_multiple_sheets_and_default_name() {
 
 #[test]
 fn test_write_xlsx_missing_sheets_array_is_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = scratch_dir();
     let path = dir.path().join("bad.xlsx");
     let err = write_xlsx(&path, &json!({ "rows": [] }))
         .unwrap_err()
@@ -72,7 +81,7 @@ fn test_write_xlsx_missing_sheets_array_is_error() {
 
 #[test]
 fn test_write_xlsx_empty_sheets_is_valid_empty_workbook() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = scratch_dir();
     let path = dir.path().join("empty.xlsx");
     write_xlsx(&path, &json!({ "sheets": [] })).expect("empty sheet list is valid");
     assert_is_zip_archive(&path);
@@ -81,7 +90,7 @@ fn test_write_xlsx_empty_sheets_is_valid_empty_workbook() {
 /// Moved from tools-core `test_file_ops_happy_paths.rs` with the writer (#10, TL-07).
 #[test]
 fn test_xlsx_writer_edge_shapes() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch_dir();
     let dir = tmp.path();
     // Missing sheets array is an error.
     assert!(write_xlsx(&dir.join("bad.xlsx"), &json!({})).is_err());
