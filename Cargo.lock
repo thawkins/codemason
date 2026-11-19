@@ -2185,6 +2185,9 @@ source = "git+https://github.com/storytold/craft-libs?rev=d15bf1f35b17b759870f9e
 dependencies = [
  "craft-atomic",
  "craft-settings",
+ "egui",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "serde",
  "serde_json",
  "wayland-client",

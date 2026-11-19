@@ -54,6 +54,7 @@ pub mod shell;
 pub mod signal;
 pub mod styled_text;
 pub mod theme;
+pub mod title_bar;
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -96,6 +96,21 @@ word-processor layout:
 
 Every other theme keeps the plain `File` menu bar.
 
+### Title bar
+
+On Windows, GNOME, KDE and most other desktops codemason draws its own title
+bar: the strip at the top shows the project and the minimise, maximise and
+close buttons (where your desktop puts them), drag it to move the window,
+double-click it to maximise, and drag a window edge to resize. On macOS the
+traffic lights sit at the left of the same strip. Tiling window managers keep
+their own frame.
+
+To use the system's title bar instead, start codemason with:
+
+```bash
+CODEMASON_TITLEBAR=system cdmn
+```
+
 ---
 
 ## 2. Creating an `AGENTS.md` file for your project

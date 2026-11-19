@@ -269,6 +269,8 @@ mod test_teams_tui_gui;
 mod test_teams_window_frame_gui;
 #[path = "test_text_selection_gui.rs"]
 mod test_text_selection_gui;
+#[path = "test_title_bar.rs"]
+mod test_title_bar;
 #[path = "test_window_lifecycle_gui.rs"]
 mod test_window_lifecycle_gui;
 #[path = "test_window_routing_gui.rs"]

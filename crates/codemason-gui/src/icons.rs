@@ -98,11 +98,17 @@ pub enum Icon {
     Quit,
     /// Collapse (`expand_less`).
     ChevronUp,
+    /// Minimise the window (`minimize`).
+    Minimize,
+    /// Maximise the window (`crop_square`).
+    Maximize,
+    /// Restore the window (`filter_none`).
+    Restore,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 37] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -137,6 +143,9 @@ impl Icon {
         Self::Doctor,
         Self::Quit,
         Self::ChevronUp,
+        Self::Minimize,
+        Self::Maximize,
+        Self::Restore,
     ];
 
     /// The icon's character in the Material Symbols font.
@@ -177,6 +186,9 @@ impl Icon {
             Self::Doctor => "\u{e1d5}",
             Self::Quit => "\u{e9ba}",
             Self::ChevronUp => "\u{e5ce}",
+            Self::Minimize => "\u{e931}",
+            Self::Maximize => "\u{e3c6}",
+            Self::Restore => "\u{e3e0}",
         }
     }
 
@@ -218,6 +230,9 @@ impl Icon {
             Self::Doctor => "dr",
             Self::Quit => "q",
             Self::ChevronUp => "^",
+            Self::Minimize => "_",
+            Self::Maximize => "[ ]",
+            Self::Restore => "[=]",
         }
     }
 }

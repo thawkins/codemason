@@ -15,12 +15,18 @@
 //! their natural width ([`fit_whole`]), and each is a [`Tab`] with the
 //! accessible tab role. Buttons use [`crate::material`]'s state layers.
 //!
-//! Dependencies: `egui`, `craft-ui` (tabs), `codemason-app-core` (key
-//! presses), and this crate's material components, icons, menus and file
-//! dialogs.
+//! When the app draws the window frame ([`crate::title_bar`]), the title
+//! strip is the window's title bar, with the caption buttons, on every
+//! theme; then only the `document-*` themes add the quick access toolbar.
+//!
+//! Dependencies: `egui`, `craft-ui` (tabs), `craft-window` (the title bar),
+//! `codemason-app-core` (key presses), and this crate's material
+//! components, icons, menus and file dialogs.
 
 use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use craft_ui::tabs::{Tab, fit_whole};
+use craft_window::Button;
+use craft_window::policy::Frame;
 use egui::{CornerRadius, Rect, Response, Role, Sense, Stroke, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
@@ -32,6 +38,7 @@ use crate::metrics::{space, text_size};
 use crate::palette::{Palette, rgb};
 use crate::platform::files::FileIntent;
 use crate::platform::menu::MenuAction;
+use crate::title_bar::{app_drawn, caption_buttons};
 
 /// Height of the title strip, in points.
 pub const TITLE_STRIP_HEIGHT: f32 = 40.0;
@@ -262,41 +269,81 @@ impl Default for RibbonState {
     }
 }
 
-/// Draw the title strip: the window title, then the quick access toolbar at
-/// the right.
+/// Draw the title strip: the window title, the quick access toolbar at the
+/// right, and, when the app draws the window frame, the caption buttons and
+/// the drag area that makes the strip the window's title bar.
 ///
 /// # Arguments
 ///
 /// * `ui` - the strip's ui.
 /// * `palette` - the colours.
 /// * `title` - the title, e.g. `codemason - <project>`.
+/// * `quick_access` - whether to show the quick access toolbar (the
+///   `document-*` themes).
+/// * `enabled` - whether the quick access toolbar can be used (not while an
+///   app-core modal owns the window); the caption buttons always can.
+/// * `frame` - who draws the window frame ([`crate::title_bar`]).
 ///
 /// # Returns
 ///
 /// The quick access command clicked this frame, if any.
-pub fn title_strip_ui(ui: &mut egui::Ui, palette: &Palette, title: &str) -> Option<RibbonAction> {
+pub fn title_strip_ui(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    title: &str,
+    quick_access: bool,
+    enabled: bool,
+    frame: &Frame,
+) -> Option<RibbonAction> {
     let mut chosen = None;
+    let strip = Rect::from_min_size(
+        ui.available_rect_before_wrap().min,
+        Vec2::new(ui.available_width(), TITLE_STRIP_HEIGHT),
+    );
+    // The empty part of the strip moves the window; the controls drawn after
+    // it keep their own clicks.
+    if app_drawn(frame) {
+        craft_window::title_bar::empty_area(ui, strip);
+    }
+    let (left, right): (&[Button], &[Button]) = match frame {
+        Frame::Integrated(captions) => (&captions.layout.left, &captions.layout.right),
+        Frame::Native | Frame::Inset(_) => (&[], &[]),
+    };
     ui.set_height(TITLE_STRIP_HEIGHT);
     ui.horizontal_centered(|ui| {
+        if let Frame::Inset(inset) = frame {
+            ui.add_space(inset.leading);
+        }
+        // Outermost last: the leftmost button is the last of the list.
+        let left: Vec<Button> = left.iter().rev().copied().collect();
+        caption_buttons(ui, palette, &left);
         ui.label(
             egui::RichText::new(title)
                 .size(text_size::BODY)
                 .color(rgb(palette.m3.on_surface_variant)),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            for item in QUICK_ACCESS.iter().rev() {
-                let response = icon_button(
-                    ui,
-                    palette,
-                    IconButtonKind::Standard,
-                    item.icon,
-                    item.label,
-                    None,
-                );
-                if response.clicked() {
-                    chosen = Some(item.action);
-                }
+            let right: Vec<Button> = right.iter().rev().copied().collect();
+            caption_buttons(ui, palette, &right);
+            if !right.is_empty() && quick_access {
+                ui.add_space(space::LG);
             }
+            let items = if quick_access { QUICK_ACCESS } else { &[] };
+            ui.add_enabled_ui(enabled, |ui| {
+                for item in items.iter().rev() {
+                    let response = icon_button(
+                        ui,
+                        palette,
+                        IconButtonKind::Standard,
+                        item.icon,
+                        item.label,
+                        None,
+                    );
+                    if response.clicked() {
+                        chosen = Some(item.action);
+                    }
+                }
+            });
         });
     });
     chosen

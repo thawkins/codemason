@@ -160,9 +160,13 @@ Done, with these differences:
   an outlined frame; it is not replaced by `material::text_field`.
 - The collapsed state is not persisted yet; it resets on restart.
 - craft-libs: the ribbon's tab strip and `material::tabs` use
-  `craft_ui::tabs` (`Tab`, `fit_whole`). `craft_window::title_bar` (the app
-  strip as the real window title bar) needs an undecorated window, which is
-  decided at startup for every theme; it is left as an open option.
+  `craft_ui::tabs` (`Tab`, `fit_whole`).
+- Follow-up (owner's decision): the title strip is the real window title
+  bar on every theme. `craft_window::policy::decide_for` picks the frame at
+  startup (`CODEMASON_TITLEBAR=system` opts out), `craft_window::title_bar`
+  makes the strip's empty area move the window, and `title_bar.rs` draws
+  the caption buttons in the desktop's layout and resizes the undecorated
+  window from its edges.
 
 1. **Title strip** (`shell.rs`, replaces `egui::Panel::top("menu_bar")`):
    small top app bar showing `codemason - <session title>` and a Quick Access
