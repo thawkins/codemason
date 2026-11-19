@@ -67,8 +67,8 @@ pub use event::{Event, EventBus};
 // Shared security guards (SECTASKS MS-05): one implementation for the guard
 // shapes each earlier milestone re-implemented per crate.
 pub use guard::{
-    MAX_IDENTIFIER_LEN, MAX_RETRY_AFTER, cap_read, clamp_retry_after, contained_join,
-    is_safe_operand, reject_option_like, validate_identifier, validate_relative_component,
+    MAX_IDENTIFIER_LEN, MAX_RETRY_AFTER, clamp_retry_after, contained_join, is_safe_operand,
+    reject_option_like, validate_identifier, validate_relative_component,
 };
 pub use id::{EventId, MessageId, RunId, SessionId};
 pub use llm::{

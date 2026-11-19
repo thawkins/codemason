@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use codemason_llm::provider::http_client::{
-    MAX_SSE_BUFFER_BYTES, append_stream_chunk_capped, create_http_client, execute_with_retry,
+    MAX_SSE_BUFFER_BYTES, append_chunk_guarded, create_http_client, execute_with_retry,
     read_body_capped, redact_frame, sse_buffer_exceeded, take_sse_line,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,14 +37,20 @@ fn test_sse_buffer_exceeded_uses_strict_greater_than() {
 }
 
 #[test]
-fn test_append_stream_chunk_capped_reports_overflow() {
+fn test_append_chunk_guarded_reports_overflow() {
     let mut buffer = String::new();
-    assert!(append_stream_chunk_capped(&mut buffer, "hello"));
+    let mut pending = Vec::new();
+    assert!(append_chunk_guarded(&mut buffer, &mut pending, b"hello", "Test").is_ok());
     assert_eq!(buffer, "hello");
 
     let big = "x".repeat(MAX_SSE_BUFFER_BYTES + 5);
     let mut buffer = String::new();
-    assert!(!append_stream_chunk_capped(&mut buffer, &big));
+    let err = append_chunk_guarded(&mut buffer, &mut pending, big.as_bytes(), "Test")
+        .expect_err("over-cap buffer must fail the stream");
+    assert_eq!(
+        err.to_string(),
+        format!("SSE buffer exceeded {MAX_SSE_BUFFER_BYTES} bytes without a complete frame")
+    );
 }
 
 #[test]

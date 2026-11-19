@@ -1373,7 +1373,6 @@ and CI gates fail a build that reintroduces a class.
 | `reject_symlink_escape(path, root, label)` | `path` is not a symlink and canonicalises inside `root` |
 | `open_owner_only(path)` | creates/truncates `path` owner-only (`0o600`), so a secret-bearing temp file is not world-readable |
 | `clamp_retry_after(hint)` | the 1 s floor and `MAX_RETRY_AFTER` (30 s) ceiling on a server-supplied delay |
-| `cap_read(bytes, max)` | a UTF-8-boundary-safe prefix of a buffered read |
 
 Call-site-preserving adapters delegate to it:
 `codemason-tools-vcs::git::reject_option_like`,
