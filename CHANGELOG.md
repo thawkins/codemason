@@ -107,6 +107,8 @@
 
 ### Changed
 
+- Changed: the unused `codemason_research::source_registry` module is removed: the `SourceRegistry` trait had one implementation (`BuiltinSourceRegistry`) and no production caller, and no spec requires it. Its crate-root re-exports and DOCS.md entry go with it. Sanctioned test edit: the module's one inline test, `tests/inline/source_registry_tests.rs`, is deleted (#10, B-04).
+
 - Changed: the `write_xlsx` helper moves from `codemason-tools-core` (`src/xlsx.rs`) to its only caller, `codemason-bench` (`codemason_bench::xlsx`). tools-core no longer depends on `rust_xlsxwriter`, and bench no longer depends on tools-core. Sanctioned test edits: `test_xlsx.rs` moves to the bench crate's `tests/` with its import updated, and the `test_xlsx_writer_edge_shapes` case moves out of tools-core's `test_file_ops_happy_paths.rs` into it (#10, TL-07).
 
 - Changed: the deprecated `obfuscate_key` / `deobfuscate_key` wrappers in `codemason-storage` (and their re-exports from `codemason_storage` and `codemason_agent::storage`) are removed. They only forwarded to `encrypt_key` / `decrypt_key`, and their docs still described a v1/v2 format although the store writes v3. `Storage::set_provider_auth` now calls `encrypt_key` directly; stored values are unchanged. Sanctioned test edit: `test_provider_auth_store.rs` decodes through `decrypt_key` (#10, LC-13).

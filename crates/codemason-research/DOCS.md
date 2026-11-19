@@ -83,9 +83,8 @@ Dev-dependencies: tempfile, criterion, proptest, async-trait, codemason-specs.
 - **FindingEdge** / **EdgeStrength** / **render_findings_diagram** — Mermaid diagram.
 - **Chapter** / **ChapterPlan** / **partition_topic** — Dissertation chapter partitioning.
 
-### Source registry & dependencies
+### Dependencies
 
-- **SourceRegistry** (trait) / **BuiltinSourceRegistry** / **ResearchSourceKind** — Pluggable source registry.
 - **ResearchDependency** / **ResearchDependencyError** / **parse_research_dependencies** / **parse_spec_frontmatter_research** / **research_dependency_names** — Plan dependencies.
 
 ### CLI
