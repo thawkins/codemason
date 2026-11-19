@@ -4,6 +4,7 @@
 
 ### Added
 
+- Changed: the border of a markdown table in the transcript is drawn twice as wide as before (2 pt with the default style). Only replies that contain a table are affected; a horizontal rule or task-list checkbox in the same reply is drawn with the wider line too.
 - Added: motion in the word-processor layout: the ribbon's band slides open and shut and the open tab's underline glides to the next tab (200 ms, decelerating), and the snackbar and tooltip fade in. Setting egui's animation time to zero turns the motion off (NEWUI Phase 6).
 - Changed: the `high-contrast` theme's accent (`#0096ff` to `#1a9fff`) and error colour (`#ff3232` to `#ff6060`) are lighter, so they reach the WCAG AAA ratio (7:1) on its black background, as text and as fills under black text (NEWUI Phase 6).
 - Added: in the `document-light` and `document-dark` themes the dock's panes and tabs use the Material sheet colours, the sessions sidebar's rows are drawer items (pill corners, roomier padding, the cursor row on `secondary_container`), and the status bar has a zoom slider (50% to 200%) bound to the window's zoom factor. Dialogs already follow the Material roles (NEWUI Phase 5).

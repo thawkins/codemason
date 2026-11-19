@@ -51,6 +51,7 @@ use std::time::{Duration, Instant};
 use codemason_agent::message::{Message, Role as MessageRole};
 use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
+use codemason_app_core::markdown::has_table;
 use codemason_app_core::message_blocks::{ToolState, TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_app_core::message_text::canonical_tool_name;
@@ -65,6 +66,10 @@ use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 use crate::panels::code_block::{CodeAction, code_block_ui};
 use crate::styled_text::{Bold, FONT_SIZE, styled_to_layout_job};
+
+/// How many times wider than egui's noninteractive stroke the border of a
+/// markdown table in the transcript is drawn.
+pub const TABLE_BORDER_SCALE: f32 = 2.0;
 
 /// The chip on a user turn.
 pub const USER_CHIP: &str = "You";
@@ -900,6 +905,12 @@ fn draw_blocks(
         match block {
             TranscriptBlock::Markdown(text) => {
                 ui.push_id(index, |ui| {
+                    if has_table(text) {
+                        // egui_commonmark frames a table in egui's
+                        // noninteractive stroke; draw it wider here only.
+                        let border = &mut ui.visuals_mut().widgets.noninteractive.bg_stroke;
+                        border.width *= TABLE_BORDER_SCALE;
+                    }
                     CommonMarkViewer::new().show(ui, markdown, text);
                 });
             }

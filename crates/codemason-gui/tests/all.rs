@@ -124,6 +124,8 @@ mod test_launch;
 mod test_main_thread;
 #[path = "test_markdown.rs"]
 mod test_markdown;
+#[path = "test_markdown_table_border.rs"]
+mod test_markdown_table_border;
 #[path = "test_material_button.rs"]
 mod test_material_button;
 #[path = "test_material_card.rs"]
