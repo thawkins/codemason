@@ -475,6 +475,10 @@ pub(crate) fn modal<R>(
         .inner
 }
 
+/// Room a Material dialog leaves around it in the window: its own padding
+/// on both sides plus a margin, in points.
+const DIALOG_WINDOW_MARGIN: f32 = 80.0;
+
 /// Draw a Material dialog titled `title`, `width` points wide: the
 /// `surface_container_high` surface with its headline, the title as its
 /// accessible label (`Role::Dialog`), and the backdrop.
@@ -494,16 +498,33 @@ pub(crate) fn material_modal<R>(
     egui::Modal::new(Id::unique(id))
         .frame(dialog_frame(palette))
         .show(ctx, |ui| {
-            ui.set_width(width);
+            // In a small window (or at a large zoom) the dialog keeps inside
+            // it: narrower than `width` if need be, and its content scrolls
+            // so every field and the actions stay reachable.
+            let window = ctx.content_rect();
+            ui.set_width(width.min((window.width() - DIALOG_WINDOW_MARGIN).max(0.0)));
+            // A centred area offers its last frame's size; let the content
+            // grow to the window's bound instead, and scroll past it.
+            let max_height = (window.height() - DIALOG_WINDOW_MARGIN).max(0.0);
+            ui.set_max_height(max_height);
             ui.visuals_mut().panel_fill = crate::palette::rgb(palette.m3.surface_container_high);
-            let inner = ui.vertical(|ui| {
-                dialog_headline(ui, palette, title);
-                add_contents(ui)
+            // The dialog is what shows: the scroll area's visible part, not
+            // its (possibly taller) content. A scope's response is made
+            // before its content, so it stays beneath the dialog's buttons.
+            let shown = ui.scope(|ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("material_dialog_body")
+                    .max_height(max_height)
+                    .show(ui, |ui| {
+                        dialog_headline(ui, palette, title);
+                        add_contents(ui)
+                    })
+                    .inner
             });
-            inner
+            shown
                 .response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
-            inner.inner
+            shown.inner
         })
         .inner
 }

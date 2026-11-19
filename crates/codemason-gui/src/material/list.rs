@@ -59,8 +59,14 @@ pub fn list_item(
         .widget_info(|| WidgetInfo::selected(Role::ListItem, ui.is_enabled(), selected, headline));
     // egui passes `selected` on for tabs and options only; a list item
     // states it itself, so assistive technology hears the selected row.
-    ui.ctx()
-        .accesskit_node_builder(response.id, |node| node.set_selected(selected));
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_selected(selected);
+        // The painted second line and trailing text, for screen readers.
+        let description: Vec<&str> = [supporting, trailing].into_iter().flatten().collect();
+        if !description.is_empty() {
+            node.set_description(description.join(", "));
+        }
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }

@@ -54,6 +54,10 @@ const ACCEL_GAP: f32 = 32.0;
 /// Size of the chevron on an item that opens a submenu, in points.
 const CHEVRON_SIZE: f32 = 18.0;
 
+/// Space kept between a menu and the window's top and bottom edges,
+/// including the surface's own padding, in points.
+const VIEWPORT_MARGIN: f32 = 32.0;
+
 /// Gap between the menu and its submenu, in points.
 const SUBMENU_GAP: f32 = 2.0;
 
@@ -110,31 +114,50 @@ fn surface(
     palette: &Palette,
     menu: &SessionMenu,
     label: &str,
+    max_height: f32,
 ) -> (Option<usize>, Vec<Rect>) {
     let mut clicked = None;
     let mut rects = Vec::with_capacity(menu.items.len());
     let width = natural_width(ui, palette, menu);
+    // A menu taller than the window scrolls; the highlight is scrolled
+    // into view whenever it moves.
+    let moved = ui.ctx().data_mut(|d| {
+        let id = Id::unique(("codemason_session_menu_cursor", label));
+        let last = d.get_temp::<usize>(id);
+        d.insert_temp(id, menu.cursor);
+        last != Some(menu.cursor)
+    });
     let frame = menu_frame(palette).show(ui, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing.y = 0.0;
-        ui.vertical(|ui| {
-            for (i, item) in menu.items.iter().enumerate() {
-                if i > 0 && menu.items[i - 1].group != item.group {
-                    let y = ui.cursor().top() + space::SM / 2.0;
-                    let x = ui.max_rect().x_range();
-                    ui.painter()
-                        .hline(x, y, (1.0, rgb(palette.m3.outline_variant)));
-                    ui.add_space(space::SM);
-                }
-                let row = ui
-                    .add_enabled_ui(item.enabled, |ui| row(ui, palette, item, i == menu.cursor))
-                    .inner;
-                if row.clicked() {
-                    clicked = Some(i);
-                }
-                rects.push(row.rect);
-            }
-        });
+        egui::ScrollArea::vertical()
+            .id_salt(label)
+            .max_height(max_height)
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    for (i, item) in menu.items.iter().enumerate() {
+                        if i > 0 && menu.items[i - 1].group != item.group {
+                            let y = ui.cursor().top() + space::SM / 2.0;
+                            let x = ui.max_rect().x_range();
+                            ui.painter()
+                                .hline(x, y, (1.0, rgb(palette.m3.outline_variant)));
+                            ui.add_space(space::SM);
+                        }
+                        let row = ui
+                            .add_enabled_ui(item.enabled, |ui| {
+                                row(ui, palette, item, i == menu.cursor)
+                            })
+                            .inner;
+                        if row.clicked() {
+                            clicked = Some(i);
+                        }
+                        if i == menu.cursor && moved {
+                            row.scroll_to_me(None);
+                        }
+                        rects.push(row.rect);
+                    }
+                });
+            });
     });
     frame
         .response
@@ -254,19 +277,26 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         .frame(egui::Frame::NONE)
         .backdrop_color(Color32::TRANSPARENT)
         .show(ctx, |ui| {
+            // The tallest a menu's items may be: the window, less the
+            // surface's padding and a margin.
+            let max_height = (ctx.content_rect().height() - VIEWPORT_MARGIN).max(DENSE_ITEM_HEIGHT);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = SUBMENU_GAP;
-                let (clicked, rects) = surface(ui, &palette, menu, SESSION_MENU_TITLE);
+                let (clicked, rects) = surface(ui, &palette, menu, SESSION_MENU_TITLE, max_height);
                 top = clicked;
                 if let Some(submenu) = menu.submenu.as_deref() {
                     ui.vertical(|ui| {
                         // Line the submenu's first item up with the item
-                        // that opened it.
-                        if let (Some(opener), Some(first)) = (rects.get(menu.cursor), rects.first())
-                        {
-                            ui.add_space(opener.top() - first.top());
-                        }
-                        sub = surface(ui, &palette, submenu, SUBMENU_LABEL).0;
+                        // that opened it, as far as the window allows.
+                        let offset = match (rects.get(menu.cursor), rects.first()) {
+                            (Some(opener), Some(first)) => (opener.top() - first.top()).max(0.0),
+                            _ => 0.0,
+                        };
+                        let offset =
+                            offset.min(DENSE_ITEM_HEIGHT.mul_add(-3.0, max_height).max(0.0));
+                        ui.add_space(offset);
+                        let room = (max_height - offset).max(DENSE_ITEM_HEIGHT);
+                        sub = surface(ui, &palette, submenu, SUBMENU_LABEL, room).0;
                     });
                 }
             });

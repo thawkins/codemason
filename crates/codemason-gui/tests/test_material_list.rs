@@ -22,6 +22,16 @@ fn test_material_list_item_heights_and_selected_state() {
         });
     let selected = harness.get_by_role_and_label(Role::ListItem, "GPT-4o");
     assert_eq!(selected.accesskit_node().is_selected(), Some(true));
+    // The painted second line and trailing text reach screen readers.
+    assert_eq!(
+        selected.accesskit_node().description().as_deref(),
+        Some("gpt-4o")
+    );
+    let plain_item = harness.get_by_role_and_label(Role::ListItem, "glm-5.2");
+    assert_eq!(
+        plain_item.accesskit_node().description().as_deref(),
+        Some("1M  Free")
+    );
     let plain = harness.get_by_role_and_label(Role::ListItem, "glm-5.2");
     assert_ne!(plain.accesskit_node().is_selected(), Some(true));
 }
