@@ -87,7 +87,8 @@ for it):
   (cost, stats, doctor). Every button runs a command codemason already has
   and is labelled with its name. The Log, Profile, Tasks and Memory buttons
   stay highlighted while their panel is open. The band of buttons spans the
-  window, so it keeps its size when you switch tabs.
+  window, so it keeps its size when you switch tabs; in a window too narrow
+  for a tab's buttons, scroll the mouse wheel over the band to reach the rest.
 - The chevron at the right of the tabs collapses the ribbon to its tabs;
   clicking any tab opens it again.
 - The transcript fills its pane as a page, and the prompt is an outlined

@@ -153,3 +153,32 @@ fn test_ribbon_panel_button_toggles_the_panel() {
     };
     assert_eq!(toggled, vec![want]);
 }
+
+#[test]
+fn test_ribbon_band_scrolls_when_the_window_is_too_narrow() {
+    let mut rig = rig("document-light");
+    let width = 520.0;
+    rig.harness.set_size(egui::vec2(width, 900.0));
+    rig.harness.run();
+    let compact = rig.harness.get_by_label("Compact").rect();
+    assert!(compact.right() > width, "Compact fits already: {compact:?}");
+    // A plain mouse wheel over the band scrolls it sideways.
+    rig.harness
+        .hover_at(egui::pos2(width / 2.0, compact.center().y));
+    rig.harness.run();
+    for _ in 0..10 {
+        rig.harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -100.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        rig.harness.run();
+    }
+    let compact = rig.harness.get_by_label("Compact").rect();
+    assert!(
+        compact.right() <= width && compact.left() >= 0.0,
+        "Compact is still out of view: {compact:?}"
+    );
+}

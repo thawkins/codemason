@@ -17,7 +17,8 @@
 //! panel toggle is filled in `secondary_container` while its panel is open.
 //!
 //! The band spans the window's width on every tab, so switching tabs never
-//! changes its size, and each button is as wide as its label needs.
+//! changes its size, and each button is as wide as its label needs. In a
+//! window too narrow for a tab's groups the band scrolls sideways.
 //!
 //! When the app draws the window frame ([`crate::title_bar`]), the title
 //! strip is also the window's title bar, with the caption buttons.
@@ -513,17 +514,25 @@ fn band(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_height(BAND_HEIGHT);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for (index, group) in tab.groups.iter().enumerate() {
-                    if index > 0 {
-                        divider(ui, palette);
-                    }
-                    if let Some(action) = band_group(ui, palette, group, shown) {
-                        chosen = Some(action);
-                    }
-                }
-            });
+            // In a window too narrow for the groups the band scrolls
+            // sideways (a plain mouse wheel scrolls it too), so no command
+            // is cut off; at full width nothing scrolls.
+            ui.style_mut().always_scroll_the_only_direction = true;
+            egui::ScrollArea::horizontal()
+                .id_salt("ribbon_band_scroll")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        for (index, group) in tab.groups.iter().enumerate() {
+                            if index > 0 {
+                                divider(ui, palette);
+                            }
+                            if let Some(action) = band_group(ui, palette, group, shown) {
+                                chosen = Some(action);
+                            }
+                        }
+                    });
+                });
         });
     chosen
 }
