@@ -2099,6 +2099,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/thinking-display show\|hide\|collapse` | Set how thinking text shows (config key `thinking_display`) |
 | `/undo` | Remove the last turn and restore the files it changed |
 | `/redo` | Put back the turn the last `/undo` removed |
+| `/editor` | Edit the prompt in `$VISUAL` or `$EDITOR` (GUI; leader `e`) |
 | `/stats [--days N] [--project] [--json]` | Usage and cost per model across sessions (CLI: `cdmn stats`) |
 | `/model` | Switch model |
 | `/thinking auto|off|low|medium|high` | Switch reasoning level for the active model |
