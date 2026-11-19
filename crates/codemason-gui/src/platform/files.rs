@@ -37,7 +37,9 @@ use craft_dialogs::{Answer, Dialogs, FileDialog, Override};
 
 /// The extensions the attach dialog offers: the ones app-core accepts as
 /// images (`is_image_path`).
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"];
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "svg",
+];
 
 /// What a file dialog's answer is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

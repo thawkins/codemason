@@ -15,7 +15,9 @@ use codemason_app_core::app::ContextAction;
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
-use codemason_gui::dialogs::image_view::{CLOSE_IMAGE, IMAGE_VIEW_TITLE};
+use codemason_gui::dialogs::image_view::{
+    ACTUAL_SIZE, CLOSE_IMAGE, FIT_TO_WINDOW, IMAGE_VIEW_TITLE,
+};
 use codemason_gui::palette::{Palette, palette_for};
 use codemason_gui::panels::code_block::{COPY, INSERT, NO_LANGUAGE, WRAP, code_block_ui, code_job};
 use codemason_gui::panels::messages::{MESSAGES_LABEL, MessagesView, USER_CHIP};
@@ -570,6 +572,12 @@ async fn test_image_thumbnail_opens_the_image_view() {
             .is_some()
     };
     assert!(dialog(&harness));
+    // Actual size and back: the toggle names what it will do next.
+    harness.get_by_label(ACTUAL_SIZE).click();
+    harness.run();
+    harness.get_by_label(FIT_TO_WINDOW).click();
+    harness.run();
+    harness.get_by_label(ACTUAL_SIZE);
     harness.get_by_label(CLOSE_IMAGE).click();
     harness.run();
     assert!(!dialog(&harness));
@@ -669,4 +677,122 @@ async fn test_output_view_code_block_insert_reaches_the_prompt() {
         .click();
     harness.run();
     assert_eq!(harness.state().app.session.input, "make");
+}
+
+/// A scratch folder of `name` under the git-ignored `target/temp`.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp")
+        .join(name);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+#[tokio::test]
+async fn test_reply_image_is_inline_at_reading_width_and_opens_the_image_view() {
+    use codemason_gui::panels::messages::{INLINE_IMAGE_WIDTH, THUMBNAIL_SIZE};
+    let root = scratch("test_messages_reply_image");
+    std::fs::create_dir_all(root.join("out")).expect("out dir");
+    // A wide JPEG: it decodes, and it is drawn wider than a thumbnail.
+    image::RgbImage::from_pixel(1200, 300, image::Rgb([30, 90, 200]))
+        .save(root.join("out/chart.jpg"))
+        .expect("write jpeg");
+    let mut app = support::make_app();
+    app.cwd_path = root;
+    app.session.messages = vec![Message::assistant_text(
+        "s1",
+        "Here is the chart:\n\n![Sales by month](out/chart.jpg)\n\nAs you can see.",
+    )];
+    let mut harness = shell_harness(app);
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    let image = harness.get_by_label("Image: Sales by month");
+    let width = image.rect().width();
+    assert!(
+        width > THUMBNAIL_SIZE && width <= INLINE_IMAGE_WIDTH + 0.5,
+        "inline image is {width} wide"
+    );
+    harness.get_by_label_contains("As you can see.");
+    image.click();
+    harness.run();
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Dialog, IMAGE_VIEW_TITLE)
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn test_reply_web_image_is_named_not_loaded() {
+    let mut app = support::make_app();
+    app.session.messages = vec![Message::assistant_text(
+        "s1",
+        "![logo](https://example.com/logo.png)",
+    )];
+    let mut harness = shell_harness(app);
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    harness.get_by_label("[image: logo] (web images are not loaded)");
+    assert!(harness.query_by_label("Image: logo").is_none());
+}
+
+#[test]
+fn test_reply_image_source_resolves_paths_and_refuses_urls() {
+    use codemason_gui::panels::messages::{ReplyImageSource, reply_image_source};
+    let root = std::path::Path::new("/work/project");
+    assert_eq!(
+        reply_image_source("out/a.png", root),
+        ReplyImageSource::File(root.join("out/a.png"))
+    );
+    assert_eq!(
+        reply_image_source("/tmp/b.png", root),
+        ReplyImageSource::File("/tmp/b.png".into())
+    );
+    assert_eq!(
+        reply_image_source("file:///tmp/c.png", root),
+        ReplyImageSource::File("/tmp/c.png".into())
+    );
+    for url in [
+        "https://x.test/a.png",
+        "http://x.test/a.png",
+        "data:image/png;base64,AA",
+    ] {
+        assert_eq!(
+            reply_image_source(url, root),
+            ReplyImageSource::NotLoaded,
+            "{url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_reply_svg_image_is_drawn_and_opens_the_image_view() {
+    let root = scratch("test_messages_reply_svg");
+    std::fs::write(
+        root.join("diagram.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><rect width="300" height="120" fill="#3060c0"/></svg>"##,
+    )
+    .expect("write svg");
+    let mut app = support::make_app();
+    app.cwd_path = root;
+    app.session.messages = vec![Message::assistant_text(
+        "s1",
+        "![Architecture](diagram.svg)",
+    )];
+    let mut harness = shell_harness(app);
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    let image = harness.get_by_label("Image: Architecture");
+    let size = image.rect().size();
+    assert!(
+        (size.x - 300.0).abs() < 1.0 && (size.y - 120.0).abs() < 1.0,
+        "drawn at its own size: {size:?}"
+    );
+    image.click();
+    harness.run();
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Dialog, IMAGE_VIEW_TITLE)
+            .is_some()
+    );
 }

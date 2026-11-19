@@ -1,6 +1,9 @@
 //! Frontend-neutral markdown rendering into [`StyledLine`]s, and
 //! [`has_table`], which tells a frontend whether a document holds a table.
 //!
+//! [`split_standalone_images`] cuts a document around the images that
+//! stand alone in a paragraph, so a frontend can draw them itself.
+//!
 //! [`markdown_to_styled`] turns a markdown document (a `RESEARCH.md` body,
 //! for the `/research open` viewer) into styled lines: headings, lists,
 //! code blocks (monospace), inline code (monospace), links, images as
@@ -40,6 +43,135 @@ pub fn has_table(markdown: &str) -> bool {
     markdown.contains('|')
         && Parser::new_ext(markdown, Options::ENABLE_TABLES)
             .any(|event| matches!(event, MdEvent::Start(Tag::Table(_))))
+}
+
+/// One piece of a markdown document split by [`split_standalone_images`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkdownPiece {
+    /// Markdown to render as it is.
+    Markdown(String),
+    /// An image that stood alone in its paragraph (`![alt](src)` on its own
+    /// line or lines).
+    Image {
+        /// The image's alt text.
+        alt: String,
+        /// The image's source as written: a path or a URL.
+        src: String,
+    },
+}
+
+/// Split `markdown` around its standalone images: images that make up a
+/// whole top-level paragraph on their own. A frontend draws those itself
+/// (sized and clickable) and the markdown between them as usual; an image
+/// inside a sentence, list or table stays in the markdown.
+///
+/// A document without `![` is answered without parsing.
+///
+/// # Returns
+///
+/// The pieces in document order; markdown pieces that are only whitespace
+/// are left out. A document with no standalone image is one markdown piece.
+#[must_use]
+pub fn split_standalone_images(markdown: &str) -> Vec<MarkdownPiece> {
+    let whole = || {
+        if markdown.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![MarkdownPiece::Markdown(markdown.to_string())]
+        }
+    };
+    if !markdown.contains("![") {
+        return whole();
+    }
+    let mut pieces = Vec::new();
+    let mut emitted = 0;
+    // Nesting of block containers (lists, quotes, tables...) above the
+    // current event; only a paragraph at depth zero is top level.
+    let mut depth = 0usize;
+    // The open top-level paragraph: its start, the images in it and
+    // whether anything but one image is in it.
+    let mut paragraph: Option<(usize, Vec<(String, String)>, bool)> = None;
+    let mut in_image = false;
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    // Each piece is parsed on its own, so a reference link (`[docs][d]`) on
+    // one side of an image needs the document's definitions: they are
+    // appended to every piece once the document is split (a definition
+    // renders as nothing), as `message_blocks::split_code_blocks` does.
+    let definitions: Vec<&str> = Parser::new_ext(markdown, options)
+        .reference_definitions()
+        .iter()
+        .filter_map(|(_, def)| markdown.get(def.span.clone()))
+        .map(str::trim)
+        .collect();
+    let piece = |text: &str| {
+        let mut text = text.to_string();
+        if !definitions.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&definitions.join("\n"));
+        }
+        MarkdownPiece::Markdown(text)
+    };
+    for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+        match event {
+            MdEvent::Start(Tag::Paragraph) if depth == 0 => {
+                paragraph = Some((range.start, Vec::new(), false));
+            }
+            MdEvent::End(TagEnd::Paragraph) if depth == 0 => {
+                if let Some((start, images, other)) = paragraph.take()
+                    && !other
+                    && images.len() == 1
+                    && let Some((alt, src)) = images.into_iter().next()
+                {
+                    let before = &markdown[emitted..start];
+                    if !before.trim().is_empty() {
+                        pieces.push(piece(before));
+                    }
+                    pieces.push(MarkdownPiece::Image { alt, src });
+                    emitted = range.end;
+                }
+            }
+            MdEvent::Start(Tag::Image { dest_url, .. }) => {
+                in_image = true;
+                if let Some((_, images, _)) = paragraph.as_mut() {
+                    images.push((String::new(), dest_url.to_string()));
+                }
+            }
+            MdEvent::End(TagEnd::Image) => in_image = false,
+            MdEvent::Text(text) | MdEvent::Code(text) if in_image => {
+                if let Some((_, images, _)) = paragraph.as_mut()
+                    && let Some((alt, _)) = images.last_mut()
+                {
+                    alt.push_str(&text);
+                }
+            }
+            MdEvent::SoftBreak | MdEvent::HardBreak => {}
+            MdEvent::Text(text) if text.trim().is_empty() => {}
+            MdEvent::Start(Tag::Paragraph) | MdEvent::End(TagEnd::Paragraph) => {}
+            MdEvent::Start(_) => {
+                depth += usize::from(paragraph.is_none());
+                mark_other(&mut paragraph, in_image);
+            }
+            MdEvent::End(_) => {
+                depth = depth.saturating_sub(usize::from(paragraph.is_none()));
+            }
+            _ => mark_other(&mut paragraph, in_image),
+        }
+    }
+    if emitted == 0 {
+        return whole();
+    }
+    let rest = &markdown[emitted..];
+    if !rest.trim().is_empty() {
+        pieces.push(piece(rest));
+    }
+    pieces
+}
+
+/// Note that the open paragraph holds something other than its image.
+fn mark_other(paragraph: &mut Option<(usize, Vec<(String, String)>, bool)>, in_image: bool) {
+    if !in_image && let Some((_, _, other)) = paragraph.as_mut() {
+        *other = true;
+    }
 }
 
 /// Convert a markdown body into styled lines.

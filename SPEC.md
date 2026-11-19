@@ -63,7 +63,7 @@ graph LR
 | Capability | Summary |
 |-----------|---------|
 | **Multi-provider LLM** | Every provider registered in `codemason-llm` (`crates/codemason-llm/src/providers/`), with automatic model discovery, health monitoring, streaming, vision, and reasoning levels |
-| **Desktop GUI** | egui window with dockable panes, streaming markdown, syntax highlighting, slash commands, native file dialogs, and image support; the default frontend (`cdmn run` stays headless) |
+| **Desktop GUI** | egui window with dockable panes, streaming markdown, syntax highlighting, slash commands, native file dialogs, and image support (attachment thumbnails, inline reply images from the session's folder, web images not loaded, a full-size view; PNG, JPEG, GIF, WebP, SVG; an attached SVG is rasterised to PNG for the model) and Mermaid diagrams drawn in the transcript (pure-Rust `mermaid-rs-renderer`, themed with the Material colours); the default frontend (`cdmn run` stays headless) |
 | **HTTP Server** | REST + SSE API (Axum) for headless operation and external integrations |
 | **Tool System** | Broad tool coverage across file ops, shell, search, GitHub, GitLab, code index, memory, teams, sub-agents, PDF, web, and MCP |
 | **Code Intelligence** | Tree-sitter parsing (15+ languages), Tantivy FTS, symbol/reference search, and code index queries |

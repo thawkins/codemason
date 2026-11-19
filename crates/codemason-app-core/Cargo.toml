@@ -35,6 +35,11 @@ dirs = { workspace = true }
 fs2 = { workspace = true }
 futures = { workspace = true }
 image = { workspace = true }
+# SVG attachments are rasterised to PNG before they are sent: providers take
+# raster images only. 0.45.1 matches egui_extras' resvg (newer versions would
+# duplicate tiny-skia); `text` and `system-fonts` draw an SVG's labels and
+# `raster-images` its embedded PNG/JPEG/GIF/WebP images.
+resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 lru = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }

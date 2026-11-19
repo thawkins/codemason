@@ -42,6 +42,7 @@ pub mod dock;
 pub mod external_edit;
 pub mod fonts;
 pub mod icons;
+pub mod image_load;
 pub mod keys;
 pub mod main_thread;
 pub mod material;

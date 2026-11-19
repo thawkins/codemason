@@ -25,6 +25,7 @@ pub mod diff;
 pub mod empty_state;
 pub mod log;
 pub mod memory;
+pub mod mermaid;
 pub mod messages;
 pub mod profile;
 pub mod prompt;

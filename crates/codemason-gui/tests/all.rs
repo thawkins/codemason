@@ -118,6 +118,8 @@ mod test_files;
 mod test_fonts;
 #[path = "test_housekeeping.rs"]
 mod test_housekeeping;
+#[path = "test_image_load.rs"]
+mod test_image_load;
 #[path = "test_keys.rs"]
 mod test_keys;
 #[path = "test_launch.rs"]
@@ -154,6 +156,8 @@ mod test_material_tabs;
 mod test_material_text_field;
 #[path = "test_menu.rs"]
 mod test_menu;
+#[path = "test_mermaid_gui.rs"]
+mod test_mermaid_gui;
 #[path = "test_messages.rs"]
 mod test_messages;
 #[path = "test_overlays.rs"]
