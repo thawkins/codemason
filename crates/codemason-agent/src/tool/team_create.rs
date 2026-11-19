@@ -211,7 +211,10 @@ impl Tool for TeamCreateTool {
         }
 
         // Reload store to get the final member list after blueprint seeding.
-        let final_store = TeamStore::load_by_name(&name, &ctx.working_dir).unwrap_or(store);
+        let final_store =
+            TeamStore::load_by_name_blocking(name.to_string(), ctx.working_dir.clone())
+                .await
+                .unwrap_or(store);
         let member_summary = member_summary(&final_store);
         let failed_spawn_count = failed_spawns.len();
         let failed_summary = failed_spawn_summary(&failed_spawns);
@@ -511,7 +514,12 @@ async fn run_spawn_prompts(
                         tracing::warn!(tool = %tool_name, team = %name, "Spawn returned pending_manager; recording spawning member in team config");
                         record_spawning_member(&args, name, ctx);
                         // Keep local store in sync for next_agent_id() calculations.
-                        if let Ok(fresh) = TeamStore::load_by_name(name, &ctx.working_dir) {
+                        if let Ok(fresh) = TeamStore::load_by_name_blocking(
+                            name.to_string(),
+                            ctx.working_dir.clone(),
+                        )
+                        .await
+                        {
                             *store = fresh;
                         }
                     } else if status == "spawned" {
@@ -521,7 +529,12 @@ async fn run_spawn_prompts(
                         // would overwrite that correct state and leave the member stuck in
                         // "spawning" forever.  Just refresh the local store reference so
                         // next_agent_id() stays accurate.
-                        if let Ok(fresh) = TeamStore::load_by_name(name, &ctx.working_dir) {
+                        if let Ok(fresh) = TeamStore::load_by_name_blocking(
+                            name.to_string(),
+                            ctx.working_dir.clone(),
+                        )
+                        .await
+                        {
                             *store = fresh;
                         }
                     }

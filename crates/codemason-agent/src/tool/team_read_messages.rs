@@ -69,7 +69,7 @@ impl Tool for TeamReadMessagesTool {
 
         // M4-T1: peek without marking read so a failure here leaves the
         // messages unread and they are redelivered on the next call.
-        let unread = mailbox.peek_unread()?;
+        let unread = mailbox.peek_unread_blocking().await?;
 
         if unread.is_empty() {
             return Ok(ToolOutput {
@@ -150,7 +150,7 @@ impl Tool for TeamReadMessagesTool {
         // affected messages stay unread and are re-peeked next time
         // (idempotent `mark_read`).
         let ids: Vec<String> = unread.iter().map(|m| m.message_id.clone()).collect();
-        if let Err(e) = mailbox.mark_all_read(&ids) {
+        if let Err(e) = mailbox.mark_all_read_blocking(ids.clone()).await {
             tracing::warn!(
                 count = ids.len(),
                 error = %e,

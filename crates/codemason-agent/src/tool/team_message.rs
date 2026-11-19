@@ -88,7 +88,7 @@ impl Tool for TeamMessageTool {
         // valid). For teammates, reject `Stopped` / `Failed` so the sender
         // gets an error instead of a false success.
         if recipient_id != "lead" {
-            let store = TeamStore::load(&team_dir)?;
+            let store = TeamStore::load_blocking(team_dir.clone()).await?;
             match store.config.member_by_id(&recipient_id) {
                 None => {
                     return Err(anyhow::anyhow!(
@@ -114,15 +114,17 @@ impl Tool for TeamMessageTool {
         // SEC-codemason-team-003 (SECTASKS T-018): record the authenticated
         // session id alongside the derived `from`, so the recipient can tell a
         // genuine lead message from a forged one.
-        mailbox.push(
-            MailboxMessage::new(
-                from.clone(),
-                recipient_id.clone(),
-                MessageType::Message,
-                content,
+        mailbox
+            .push_blocking(
+                MailboxMessage::new(
+                    from.clone(),
+                    recipient_id.clone(),
+                    MessageType::Message,
+                    content,
+                )
+                .with_sender_session(&ctx.session_id),
             )
-            .with_sender_session(&ctx.session_id),
-        )?;
+            .await?;
 
         Ok(ToolOutput {
             content: format!("Message sent to '{to}' in team '{team_name}'."),

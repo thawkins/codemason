@@ -69,7 +69,7 @@ impl Tool for TeamIdleTool {
         // This prevents teammates from going idle mid-task, which leaves tasks stuck.
         {
             let task_store = TaskStore::open(&team_dir)?;
-            let list = task_store.read()?;
+            let list = task_store.read_blocking().await?;
             if let Some(active) = list.in_progress_for(&agent_id) {
                 return Ok(ToolOutput {
                     content: format!(
@@ -138,7 +138,8 @@ impl Tool for TeamIdleTool {
         // the idle transition even when the mailbox poll loop does not deliver
         // an `IdleNotify` message. We lack the lead's session id in the tool
         // context, so derive it from the on-disk team config.
-        let lead_session_id = TeamStore::load(&team_dir)
+        let lead_session_id = TeamStore::load_blocking(team_dir.clone())
+            .await
             .ok()
             .map(|s| s.config.lead_session_id.clone())
             .unwrap_or_else(|| ctx.session_id.clone());
@@ -154,7 +155,8 @@ impl Tool for TeamIdleTool {
         // Reading the roster back is how the reply tells the teammate which
         // happened: telling it to wait for work when it has just been given some
         // would leave it parked on a task it never started.
-        let claimed = TeamStore::load(&team_dir)
+        let claimed = TeamStore::load_blocking(team_dir.clone())
+            .await
             .ok()
             .and_then(|store| {
                 store

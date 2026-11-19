@@ -93,7 +93,7 @@ impl Tool for TeamApprovePlanTool {
         // `plan_status` on a member that never submitted one, which is what the
         // TUI surface already refuses before making the round trip.
         {
-            let store = TeamStore::load(&team_dir)?;
+            let store = TeamStore::load_blocking(team_dir.clone()).await?;
             let Some(member) = store.config.member_by_id(&agent_id) else {
                 return Err(anyhow::anyhow!(
                     "cannot record a plan verdict for '{teammate}' (id: {agent_id}): it is not \
@@ -147,12 +147,12 @@ impl Tool for TeamApprovePlanTool {
         // M5-T4: copy the correlation id from the member's plan_request_id so
         // the teammate can tell which plan was approved/rejected.
         {
-            let store = TeamStore::load(&team_dir)?;
+            let store = TeamStore::load_blocking(team_dir.clone()).await?;
             if let Some(m) = store.config.member_by_id(&agent_id) {
                 msg.correlation_id = m.plan_request_id.clone();
             }
         }
-        teammate_mailbox.push(msg)?;
+        teammate_mailbox.push_blocking(msg).await?;
 
         // M5-T4: clear the member's plan_request_id now that the reply is sent.
         TeamStore::update(&team_dir, |config| {

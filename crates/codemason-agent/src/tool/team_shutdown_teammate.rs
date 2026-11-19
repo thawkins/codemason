@@ -128,16 +128,19 @@ impl Tool for TeamShutdownTeammateTool {
             if let Ok(mailbox) = Mailbox::open(&team_dir, &agent_id) {
                 // SEC-codemason-team-003: a lead-authored message must carry the
                 // sender session, or the mailbox write boundary rejects it.
-                if let Err(e) = mailbox.push(
-                    MailboxMessage::new_correlated(
-                        "lead".to_string(),
-                        agent_id.clone(),
-                        MessageType::ShutdownRequest,
-                        content,
-                        &correlation_id,
+                if let Err(e) = mailbox
+                    .push_blocking(
+                        MailboxMessage::new_correlated(
+                            "lead".to_string(),
+                            agent_id.clone(),
+                            MessageType::ShutdownRequest,
+                            content,
+                            &correlation_id,
+                        )
+                        .with_sender_session(&ctx.session_id),
                     )
-                    .with_sender_session(&ctx.session_id),
-                ) {
+                    .await
+                {
                     tracing::warn!(error = %e, "disk-only shutdown: cannot push ShutdownRequest");
                 }
             }

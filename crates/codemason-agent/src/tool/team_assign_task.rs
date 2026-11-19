@@ -80,7 +80,7 @@ impl Tool for TeamAssignTaskTool {
         // refusals name the entity, its state, and one next action (FR-032): a
         // caller that mis-typed a name is told which names exist, and one that
         // picked a finished teammate is told how to revive it.
-        let config_store = TeamStore::load(&team_dir)?;
+        let config_store = TeamStore::load_blocking(team_dir.clone()).await?;
         if agent_id != "lead" && config_store.config.member_by_id(&agent_id).is_none() {
             let known: Vec<&str> = config_store
                 .config
@@ -131,15 +131,18 @@ impl Tool for TeamAssignTaskTool {
                 );
                 // SEC-codemason-team-003 (SECTASKS T-018): authenticated lead
                 // session id on every lead-authored assignment.
-                match mailbox.push(
-                    MailboxMessage::new(
-                        "lead".to_string(),
-                        agent_id.clone(),
-                        MessageType::Message,
-                        content,
+                match mailbox
+                    .push_blocking(
+                        MailboxMessage::new(
+                            "lead".to_string(),
+                            agent_id.clone(),
+                            MessageType::Message,
+                            content,
+                        )
+                        .with_sender_session(&ctx.session_id),
                     )
-                    .with_sender_session(&ctx.session_id),
-                ) {
+                    .await
+                {
                     Ok(()) => "delivered".to_string(),
                     Err(e) => format!("failed: {e}"),
                 }

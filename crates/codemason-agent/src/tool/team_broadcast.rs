@@ -74,7 +74,7 @@ impl Tool for TeamBroadcastTool {
             .agent_id()
             .to_string();
 
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
         let active: Vec<_> = store
             .config
             .members
@@ -103,20 +103,25 @@ impl Tool for TeamBroadcastTool {
             let content = content.to_string();
             let sender_session = sender_session.clone();
             async move {
-                let outcome = Mailbox::open(&team_dir, &agent_id).and_then(|mailbox| {
+                let outcome = match Mailbox::open(&team_dir, &agent_id) {
                     // SEC-codemason-team-003 (SECTASKS T-018): authenticated
                     // sender session id, so a spoofed `from: "lead"` is
                     // detectable and rejected at push time.
-                    mailbox.push(
-                        MailboxMessage::new(
-                            from,
-                            agent_id.clone(),
-                            MessageType::Broadcast,
-                            content,
-                        )
-                        .with_sender_session(&sender_session),
-                    )
-                });
+                    Ok(mailbox) => {
+                        mailbox
+                            .push_blocking(
+                                MailboxMessage::new(
+                                    from,
+                                    agent_id.clone(),
+                                    MessageType::Broadcast,
+                                    content,
+                                )
+                                .with_sender_session(&sender_session),
+                            )
+                            .await
+                    }
+                    Err(e) => Err(e),
+                };
                 (agent_id, name, outcome)
             }
         });

@@ -65,7 +65,7 @@ impl Tool for TeamShutdownAckTool {
         // M5-T4: copy the correlation id from the member's shutdown_request_id
         // so the lead can pair request/ack.
         let correlation_id = {
-            let store = TeamStore::load(&team_dir)?;
+            let store = TeamStore::load_blocking(team_dir.clone()).await?;
             store
                 .config
                 .member_by_id(&agent_id)
@@ -81,7 +81,7 @@ impl Tool for TeamShutdownAckTool {
         // SEC-codemason-team-003 (SECTASKS T-018): authenticated sender session id.
         .with_sender_session(&ctx.session_id);
         msg.correlation_id = correlation_id;
-        lead_mailbox.push(msg)?;
+        lead_mailbox.push_blocking(msg).await?;
 
         // M5-T4: clear the member's shutdown_request_id now that the ack is sent.
         TeamStore::update(&team_dir, |config| {

@@ -93,11 +93,11 @@ impl Tool for TeamTaskCompleteTool {
         let store = crate::team::TaskStore::open(&team_dir)?;
 
         // PERF-018: gate the debug read behind `tracing::enabled!(DEBUG)` so
-        // the per-completion `store.read()` (a full file read + deserialise)
+        // the per-completion `store.read_blocking().await` (a full file read + deserialise)
         // only happens when debug logging is actually enabled, instead of
         // on every `team_task_complete` call.
         if tracing::enabled!(tracing::Level::DEBUG) {
-            if let Ok(list) = store.read() {
+            if let Ok(list) = store.read_blocking().await {
                 let task_summary: Vec<String> = list
                     .tasks
                     .iter()

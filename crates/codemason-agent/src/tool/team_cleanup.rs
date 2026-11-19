@@ -70,7 +70,7 @@ impl Tool for TeamCleanupTool {
         super::team_caller::require_lead(ctx, team_name, &team_dir, self.name())?;
 
         // Load config to check for active teammates.
-        let store = TeamStore::load(&team_dir)?;
+        let store = TeamStore::load_blocking(team_dir.clone()).await?;
         // teamssetup FR-022: the teardown guard is shared with `/team cleanup`
         // and `/team delete` through `cleanup_refusal`, so the three surfaces
         // cannot disagree. The pre-fix rule here was `status != Stopped`, which

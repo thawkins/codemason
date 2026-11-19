@@ -51,7 +51,7 @@ impl Tool for TeamTaskListTool {
         super::team_caller::resolve_caller(ctx, team_name, &team_dir)?;
 
         let store = TaskStore::open(&team_dir)?;
-        let list = store.read()?;
+        let list = store.read_blocking().await?;
 
         if list.tasks.is_empty() {
             return Ok(ToolOutput {
