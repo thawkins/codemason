@@ -73,7 +73,7 @@ pub enum PrState {
     None,
     /// The session has had requests, none bound now.
     Past,
-    /// The session is bound to a request and Auto-fix is running.
+    /// The session is bound to a request (Auto-fix may be on or off).
     Active,
     /// The session is bound to a request and Auto-fix waits on the user.
     Paused,
@@ -202,14 +202,14 @@ pub fn session_details(
     lines.push(format!("Backend: {}", backend_name(backend_of(app, id))));
     if let Some(branch) = branch {
         match requests.filter(|n| *n > 0) {
-            Some(n) => lines.push(format!("Branch: {branch} ({n} open from it)")),
+            Some(n) => lines.push(format!("Branch: {branch} ({n} requests from it)")),
             None => lines.push(format!("Branch: {branch}")),
         }
     }
     let badge = pr_badge(app, id);
     let state = match badge.state {
         PrState::None | PrState::Past => "",
-        PrState::Active => " (one bound, Auto-fix on)",
+        PrState::Active => " (one bound)",
         PrState::Paused => " (one bound, Auto-fix waiting on you)",
     };
     lines.push(format!("Pull requests: {}{state}", badge.count));

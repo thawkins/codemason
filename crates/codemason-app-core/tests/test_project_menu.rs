@@ -133,8 +133,14 @@ async fn test_project_menu_backend_switch_on_a_project_session_is_its_own() {
         .await;
     app.execute_slash_command("/session new").await;
     let created = app.session.session_id.clone().expect("new session");
+    app.sidebar.dirty = false;
 
     app.execute_slash_command("/backend local").await;
+
+    assert!(
+        app.sidebar.dirty,
+        "the sidebar reloads so the row shows the new backend icon"
+    );
 
     assert_eq!(
         app.storage

@@ -316,7 +316,7 @@ async fn test_sessions_sidebar_session_details_name_backend_and_requests() {
         "{details:?}"
     );
     assert!(
-        details.contains(&"Branch: feature/x (2 open from it)".to_string()),
+        details.contains(&"Branch: feature/x (2 requests from it)".to_string()),
         "{details:?}"
     );
     assert_eq!(details.last().map(String::as_str), Some("Pull requests: 0"));
