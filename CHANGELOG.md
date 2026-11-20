@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Changed: Sessions panel rows are restyled. Each session row shows its title, a coloured attention dot while it needs a look (amber waiting, accent running, red failed, blue unread), then two aligned columns on the right: a pull-request icon with the session's request count, shown on every row with `0` when it has none (grey none, blue past, green while one is bound, amber while Auto-fix waits on you), and an icon for the execution backend the session runs on (monitor for the local computer, slatted container for Docker, three boxes for Podman, cloud for a remote system). The relative age, branch and request details move to the row's tooltip and accessible description. The open or cursor row sits on a rounded selection fill, multi-selected rows carry an accent bar on their left edge, project headings are small and muted with the disclosure triangle after the name, and rows are taller. A session's backend is its own stored `execution_backend`, else the global one from the config (`Storage::session_backends`, `sessions_sidebar_state::backend_of`).
 - Changed: **slash-command reports are Markdown tables, and the transcript keeps
   them as Markdown.** A reply that starts `From: /` is now stored as Markdown
   source instead of being run through the `markdown -> HTML -> html2text` pass,

@@ -250,3 +250,74 @@ async fn test_sessions_sidebar_focused_passes_alt_panel_chords_through() {
     assert!(app.sidebar.menu.is_none(), "Alt+M opens no session menu");
     assert!(app.sidebar.focused, "the sidebar keeps the keyboard");
 }
+
+#[tokio::test]
+async fn test_sessions_sidebar_pr_badge_shows_zero_without_requests() {
+    use codemason_gui::panels::sessions::{PrBadge, PrState, pr_badge};
+
+    let (mut app, a, b) = app_with_sidebar().await;
+    assert_eq!(
+        pr_badge(&app, &a),
+        PrBadge {
+            count: 0,
+            state: PrState::None
+        },
+        "a session with no request still has a badge, counting 0"
+    );
+    app.sidebar.request_totals.insert(a.clone(), 3);
+    assert_eq!(pr_badge(&app, &a).count, 3);
+    assert_eq!(pr_badge(&app, &a).state, PrState::Past);
+    app.sidebar.bound.insert(b.clone(), false);
+    assert_eq!(
+        pr_badge(&app, &b),
+        PrBadge {
+            count: 1,
+            state: PrState::Active
+        }
+    );
+    app.sidebar.bound.insert(b.clone(), true);
+    assert_eq!(pr_badge(&app, &b).state, PrState::Paused);
+}
+
+#[test]
+fn test_sessions_sidebar_backend_names() {
+    use codemason_config::ExecutionBackendKind;
+    use codemason_gui::panels::sessions::backend_name;
+
+    assert_eq!(backend_name(ExecutionBackendKind::Local), "Local computer");
+    assert_eq!(
+        backend_name(ExecutionBackendKind::Docker),
+        "Docker container"
+    );
+    assert_eq!(
+        backend_name(ExecutionBackendKind::Podman),
+        "Podman container"
+    );
+    assert_eq!(backend_name(ExecutionBackendKind::Remote), "Remote system");
+}
+
+#[tokio::test]
+async fn test_sessions_sidebar_session_details_name_backend_and_requests() {
+    use codemason_config::ExecutionBackendKind;
+    use codemason_gui::panels::sessions::session_details;
+
+    let (mut app, a, _b) = app_with_sidebar().await;
+    app.sidebar
+        .backends
+        .insert(a.clone(), ExecutionBackendKind::Docker);
+    let now = chrono::Utc::now().to_rfc3339();
+    let details = session_details(&app, &a, &now, Some("feature/x"), Some(2));
+    assert_eq!(
+        details.first().map(String::as_str),
+        Some("Updated just now")
+    );
+    assert!(
+        details.contains(&"Backend: Docker container".to_string()),
+        "{details:?}"
+    );
+    assert!(
+        details.contains(&"Branch: feature/x (2 requests from it)".to_string()),
+        "{details:?}"
+    );
+    assert_eq!(details.last().map(String::as_str), Some("Pull requests: 0"));
+}

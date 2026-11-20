@@ -1394,7 +1394,7 @@ cdmn session import session_archive.tar.gz
 
 The GUI keeps several sessions open at once. A session keeps working while
 you look at another one; when it needs you (a permission prompt or a
-question) its sidebar row shows `!` and the status bar shows `N need you`.
+question) its sidebar row shows an amber dot and the status bar shows `N need you`.
 
 ```text
 /session new                 # start another session in this project
@@ -1450,8 +1450,8 @@ A PR or MR the agent opens with `github_create_pr` or `gitlab_create_mr` is
 bound automatically. To do it all in one step, ask the agent to use
 `autofix_add`: it pushes the current branch, opens a PR/MR into the branch it
 was created from (or reuses the branch's open one), binds it and turns
-Auto-fix on. The sidebar row shows `#` when bound and `#!` when
-Auto-fix has paused after 3 tries on one commit (`/autofix on` resumes). It
+Auto-fix on. The sidebar row's pull-request count turns green when bound and amber
+when Auto-fix has paused after 3 tries on one commit (`/autofix on` resumes). It
 stops when the request is merged or closed, and never merges, force-pushes
 or resolves review threads. GitHub Enterprise Server hosts and the Auto-fix
 settings go under `vcs` in your global `codemason.json` (a project's config
@@ -1499,8 +1499,10 @@ With `--branch` the session gets its own `git worktree` at that branch, so
 it does not disturb the project's main checkout. Quote a project name that
 contains spaces: `/session new --project "My App"`. A session can only be
 started in a project whose checkout is under the launch directory or a
-`dirs.allowed_roots` entry. The sidebar shows `Y` and
-the number of pull/merge requests for that branch beside the session.
+`dirs.allowed_roots` entry. Each sidebar row shows a pull-request icon with the
+session's request count (`0` when it has none) and an icon for the backend it
+runs on (local computer, Docker, Podman or remote); hover the row for its age,
+branch and the pull/merge requests from that branch.
 
 The same data is available outside the GUI:
 

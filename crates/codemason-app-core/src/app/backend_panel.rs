@@ -252,6 +252,8 @@ impl App {
             match self.storage.set_session_backend(&session_id, Some(kind)) {
                 Ok(()) => {
                     self.session.active_backend = kind.to_string();
+                    // The sidebar shows each session's backend icon.
+                    self.sidebar.dirty = true;
                     self.append_assistant_text(&format!(
                         "From: /backend\n[ok] This session now runs tools on **{kind}** \
                          (`{id}`). Its project sets its backend, so the global backend \
@@ -282,6 +284,8 @@ impl App {
         }
         match self.persist_active_backend(kind) {
             Ok(()) => {
+                // Sessions on the global backend show its icon in the sidebar.
+                self.sidebar.dirty = true;
                 self.append_assistant_text(&format!(
                     "From: /backend\n[ok] Active execution backend is now **{kind}** \
                      (`{id}`). The change applies to the next turn."

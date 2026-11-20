@@ -332,6 +332,24 @@ impl Storage {
         Ok(kind)
     }
 
+    /// The execution backend kind of every session that has its own (see
+    /// [`Self::session_backend`]), keyed by session id; sessions on the
+    /// global one are absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn session_backends(&self) -> Result<HashMap<String, String>> {
+        let conn = lock_conn_read!(self)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, execution_backend FROM sessions WHERE execution_backend IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        Ok(rows)
+    }
+
     /// Records the result of remote detection: the remote, or `None` when
     /// the worktree has no recognised remote. Either way the project is
     /// marked as checked.

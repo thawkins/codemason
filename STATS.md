@@ -4,6 +4,12 @@
 
 **Update prompt:** Update @STATS.md to show the composition of the project, show breakdown by crate
 
+> **Sessions panel restyle (unreleased, branch `claude/sessions-panel-styling-a32012`).**
+> Session rows show a pull-request badge and an execution-backend icon. No
+> crate is added or removed; 5 tests are added (1 in `codemason-storage`, 1 in
+> `codemason-app-core`, 3 in `codemason-gui`). The tables below are not
+> re-measured.
+>
 > **Frontend migration (TUI to egui GUI).** The `codemason-tui` crate is
 > removed (it held 322 files, 184,438 lines and about 4,014 tests). Its
 > frontend-neutral code now lives in `codemason-app-core` and the window in
