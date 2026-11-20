@@ -17,7 +17,7 @@ use crate::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
 use codemason_agent::message::{Message, MessagePart, Role, ToolCallStatus};
 use codemason_types::sanitize_terminal::sanitize_terminal;
 
-use crate::app::App;
+use crate::app::{App, MessageLineGroup};
 use crate::line_wrap::{wrap_line_styled, wrapped_lines_to_strings};
 use crate::message_text::{
     ICON_ATTACHMENT, INDENT_SPACES, THINK_STYLE, canonical_tool_name, capitalize_tool_name,
@@ -457,7 +457,27 @@ pub fn part_lines<S: BuildHasher>(
 /// reads exactly what is on screen, then project the wrapped rows into
 /// `message_content_lines`.
 pub fn ensure_message_copy_lines(app: &mut App) {
-    let w = app.session.message_cache_width.max(1) as usize;
+    // Width 0 means no frontend has laid the transcript out at a terminal
+    // width (the GUI never does): copy each line unwrapped.
+    let w = app.session.message_cache_width as usize;
+    // A message no render has cached yet (every message, in the GUI) gets a
+    // stale group so the loop below renders it.
+    let cached = app.session.message_line_cache.len();
+    app.session
+        .message_line_cache
+        .extend(
+            app.session
+                .messages
+                .iter()
+                .skip(cached)
+                .map(|msg| MessageLineGroup {
+                    lines: Vec::new(),
+                    wrapped_lines: Vec::new(),
+                    content_lines: Vec::new(),
+                    wrapped_count: 0,
+                    edit_seq: msg.edit_seq.wrapping_add(1),
+                }),
+        );
     // Render only the groups whose `edit_seq` is behind (usually the single
     // streaming message), so a copy costs one group render at most.
     for i in 0..app.session.message_line_cache.len() {

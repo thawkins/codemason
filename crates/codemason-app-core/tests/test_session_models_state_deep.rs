@@ -695,6 +695,28 @@ async fn cut_kb_selection_removes_the_selected_span() {
     assert_eq!(app.session.kb_select_anchor, None);
 }
 
+/// In the GUI the window owns the clipboard: Alt+V asks it to paste (an image
+/// arrives as a pasted image and is attached then) instead of reading the
+/// clipboard here and logging a missing image before that paste arrives.
+#[tokio::test]
+async fn paste_image_from_frontend_clipboard_requests_paste_without_notice() {
+    let mut app = support::make_app();
+    codemason_app_core::clipboard::route_copies_to_frontend(true);
+
+    app.handle_key_event(key_mod(KeyCode::Char('v'), KeyModifiers::ALT))
+        .await;
+
+    let requested = codemason_app_core::clipboard::take_frontend_paste_request();
+    codemason_app_core::clipboard::route_copies_to_frontend(false);
+    assert!(requested, "Alt+V asks the frontend to paste");
+    assert!(
+        !app.log_entries
+            .iter()
+            .any(|e| e.message.contains("No image data found in clipboard")),
+        "no missing-image notice before the paste arrives"
+    );
+}
+
 #[tokio::test]
 async fn paste_image_from_clipboard_without_image_logs_notice() {
     // The guard pins the image query to "no image" as well as the text, so the

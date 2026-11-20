@@ -17,11 +17,20 @@
 //!   [`forward_copies`] sends it to `Context::copy_text`, so it lands on the
 //!   clipboard egui-winit owns.
 //!
+//! - App paste: app-core's clipboard reads on the UI thread (Ctrl+Shift+V,
+//!   `Alt+V`) never use `arboard` there: on Wayland the window serves its
+//!   own selection from this thread, so that read deadlocked the window.
+//!   They leave a paste request instead, and [`forward_copies`] answers it
+//!   with egui's `RequestPaste`, which arrives as `Event::Paste` (or
+//!   `Event::PasteImage`) next frame.
+//!
 //! Dependencies: `egui` (input events, `copy_text`) and
 //! `codemason-app-core` (the attachment step and the copy routing).
 
 use codemason_app_core::app::App;
-use codemason_app_core::clipboard::{ImageData, route_copies_to_frontend, take_frontend_copies};
+use codemason_app_core::clipboard::{
+    ImageData, route_copies_to_frontend, take_frontend_copies, take_frontend_paste_request,
+};
 
 use crate::dialogs;
 
@@ -39,7 +48,9 @@ pub fn stop_routing_copies() {
 }
 
 /// Put the text app-core copied since the last call on the window's
-/// clipboard. Only the last copy is sent: each would replace the one before.
+/// clipboard, and answer app-core's paste request with egui's
+/// `RequestPaste`. Only the last copy is sent: each would replace the one
+/// before.
 ///
 /// # Arguments
 ///
@@ -47,6 +58,9 @@ pub fn stop_routing_copies() {
 pub fn forward_copies(ctx: &egui::Context) {
     if let Some(text) = take_frontend_copies().pop() {
         ctx.copy_text(text);
+    }
+    if take_frontend_paste_request() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
     }
 }
 

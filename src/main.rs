@@ -492,6 +492,10 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     panic_hook::install();
 
     check_and_stamp_crash_marker(&working_dir);
+    // The GUI's quit safety net ends the process with `process::exit`, which
+    // skips the `clean exit` stamp in `main_body`; stamp the marker first so
+    // a deliberate forced exit is not reported as a crash on the next start.
+    codemason_app_core::app::quit::set_force_exit_hook(stamp_forced_exit);
 
     let mut startup = StartupTimings::new();
     let t0 = Instant::now();
@@ -957,6 +961,12 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         tracing::warn!(error = %e, "Failed to checkpoint WAL on shutdown");
     }
     Ok(())
+}
+
+/// Stamp the crash marker as `forced exit` (not reported as unclean): run by
+/// the quit safety net just before it calls `process::exit`.
+fn stamp_forced_exit() {
+    let _ = crash_dump::write_record(&crate::working_dir(), "forced exit"); // INTENTIONAL: best-effort crash-marker stamp; the process is about to exit
 }
 
 /// Report a previous unclean exit, then stamp this process's crash marker.

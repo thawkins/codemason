@@ -430,7 +430,8 @@ shortcuts do not act behind it. On macOS the menu bar also carries About, Quit
 - **Code blocks** have **Copy**, **Wrap** and **Insert** buttons; Insert puts
   the code at the end of the prompt.
 - **`/clip`** — copies the entire rendered contents of the message window (the
-  plain-text transcript) to the system clipboard in one step.
+  plain-text transcript) to the system clipboard in one step. The ribbon's
+  **Copy transcript** runs it.
 
 ### Permission prompts
 

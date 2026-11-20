@@ -203,14 +203,13 @@ pub fn apply_pending(ctx: &egui::Context) {
     let event = match action {
         ContextAction::Cut => Some(egui::Event::Cut),
         ContextAction::Copy => Some(egui::Event::Copy),
-        ContextAction::Paste => {
-            codemason_app_core::clipboard::get_clipboard_text().map(egui::Event::Paste)
-        }
+        // Pasted through the window's own clipboard: the `Event::Paste`
+        // arrives next frame, into the prompt focused below. An `arboard`
+        // read here froze the window on Wayland, where the window serves its
+        // own selection from this thread.
+        ContextAction::Paste => None,
         // Never queued: app-core runs these at once.
-        ContextAction::CopyMarkdown | ContextAction::QuoteReply => None,
-    };
-    let Some(event) = event else {
-        return;
+        ContextAction::CopyMarkdown | ContextAction::QuoteReply => return,
     };
     let saved = ctx.data_mut(|d| {
         let state = d.get_temp::<egui::text_edit::TextEditState>(saved_state_id());
@@ -221,7 +220,10 @@ pub fn apply_pending(ctx: &egui::Context) {
         state.store(ctx, prompt_id());
     }
     ctx.memory_mut(|m| m.request_focus(prompt_id()));
-    ctx.input_mut(|input| input.events.push(event));
+    match event {
+        Some(event) => ctx.input_mut(|input| input.events.push(event)),
+        None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+    }
 }
 
 /// Draw the context menu while the App shows it.
