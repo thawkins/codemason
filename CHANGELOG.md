@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed: the GUI froze when pasting with **Ctrl+Shift+V**, right-click **Paste** or **Alt+V** after copying text in the window (on Wayland). App-core read the clipboard with `arboard` on the UI thread, through XWayland, while the window served that same selection from the same thread, so the read waited on itself. On the GUI's UI thread app-core's clipboard reads now leave a paste request (`clipboard::take_frontend_paste_request`) that the GUI answers with egui's non-blocking `RequestPaste`, and right-click Paste sends it directly. With text on the clipboard, Alt+V in the GUI now pastes it as text; an image still attaches.
+- Fixed: **Copy transcript** (`/clip`) copied nothing in the GUI ("nothing to copy"). It read a line cache only the removed terminal renderer filled; `ensure_message_copy_lines` now renders every uncached message itself, unwrapped when no terminal width is set.
+- Fixed: a GUI quit whose teardown outran the 3-second safety net left the crash marker at `running`, so the next start reported a crash that never happened. The safety net now runs a hook first (`quit::set_force_exit_hook`) and the binary stamps the marker `forced exit`, which is not reported.
+
 ## [1.0.172] - 2026-11-20
 
 Sessions panel restyle, a Help tab with About, and Markdown tables for

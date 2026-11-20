@@ -17,10 +17,12 @@
 //! Neither step may hang the exit: the MCP shutdown is bounded by
 //! [`MCP_SHUTDOWN_TIMEOUT`], and both frontends arm the same safety net,
 //! [`arm_force_exit`], which ends the process [`FORCE_EXIT_AFTER`] after it
-//! is armed if teardown is still running.
+//! is armed if teardown is still running. Before ending the process it runs
+//! the hook registered with [`set_force_exit_hook`].
 //!
 //! Depends on `codemason_agent`'s `SessionProcessor` for the MCP shutdown.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use codemason_agent::session::processor::SessionProcessor;
@@ -52,8 +54,35 @@ pub const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 pub fn arm_force_exit(after: Duration) {
     std::thread::spawn(move || {
         std::thread::sleep(after);
+        run_force_exit_hook();
         std::process::exit(0);
     });
+}
+
+/// The hook [`arm_force_exit`] runs just before it ends the process.
+static FORCE_EXIT_HOOK: OnceLock<fn()> = OnceLock::new();
+
+/// Register the hook the exit safety net runs just before it ends the
+/// process. `std::process::exit` skips everything after the program body,
+/// so the binary uses this to stamp its crash marker; without it a forced
+/// exit leaves the marker at `running` and the next start reports a crash
+/// that never happened. Only the first registration takes effect.
+///
+/// # Arguments
+///
+/// * `hook` - called once on the safety-net thread; must not block.
+pub fn set_force_exit_hook(hook: fn()) {
+    // INTENTIONAL: a second registration is ignored; the first hook stays.
+    let _ = FORCE_EXIT_HOOK.set(hook);
+}
+
+/// Run the hook registered with [`set_force_exit_hook`], if any. Exposed so
+/// tests can check the hook without ending the process.
+#[doc(hidden)]
+pub fn run_force_exit_hook() {
+    if let Some(hook) = FORCE_EXIT_HOOK.get() {
+        hook();
+    }
 }
 
 impl App {

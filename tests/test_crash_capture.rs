@@ -40,3 +40,17 @@ fn crash_marker_records_and_reports_unclean_exit() {
     assert!(found.is_unclean());
     assert!(found.core_dump_hint.contains("core"));
 }
+
+// The GUI's quit safety net ends the process with `process::exit` and stamps
+// the marker `forced exit` first: a deliberate exit, not a crash to report.
+#[test]
+fn crash_marker_forced_exit_is_not_reported_as_unclean() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crash_dump::write_record(dir.path(), "running").expect("write running");
+    crash_dump::write_record(dir.path(), "forced exit").expect("write forced");
+    let found = crash_dump::previous_unclean_exit(dir.path()).expect("scan");
+    assert!(
+        found.is_none(),
+        "forced exit must not be reported as a crash"
+    );
+}

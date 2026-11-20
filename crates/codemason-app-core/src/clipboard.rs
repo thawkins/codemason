@@ -8,7 +8,11 @@
 //! A frontend that owns the system clipboard itself (the GUI writes through
 //! its toolkit) calls [`route_copies_to_frontend`] on its UI thread: text
 //! writes made there are then kept for it ([`take_frontend_copies`]) instead
-//! of going to `arboard`.
+//! of going to `arboard`, and reads made there do not touch `arboard` either:
+//! they return `None` and leave a paste request for the frontend
+//! ([`take_frontend_paste_request`]). On Wayland the window serves its own
+//! clipboard selection from that thread, so an `arboard` read there (through
+//! XWayland) waits on the thread it blocks and freezes the window.
 //!
 //! # Clipboard image lifecycle
 //!
@@ -51,6 +55,9 @@ pub fn get_clipboard_image() -> Option<arboard::ImageData<'static>> {
             bytes: std::borrow::Cow::Owned(bytes),
         });
     }
+    if request_frontend_paste() {
+        return None;
+    }
     arboard::Clipboard::new()
         .ok()
         .and_then(|mut cb| cb.get_image().ok())
@@ -65,7 +72,7 @@ pub fn get_clipboard_image() -> Option<arboard::ImageData<'static>> {
         })
 }
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 thread_local! {
     /// Thread-local test override for the system clipboard image.
@@ -87,6 +94,9 @@ thread_local! {
     /// Text writes kept for a frontend that owns the clipboard (see
     /// [`route_copies_to_frontend`]); `None` while writes go to `arboard`.
     static FRONTEND_COPIES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    /// Whether a clipboard read on this thread asked the frontend to paste
+    /// (see [`take_frontend_paste_request`]).
+    static FRONTEND_PASTE: Cell<bool> = const { Cell::new(false) };
     /// Test override for the directory pasted images are saved in (see
     /// [`set_paste_dir_override`]).
     static PASTE_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
@@ -121,7 +131,10 @@ pub fn route_copies_to_frontend(on: bool) {
         let mut copies = c.borrow_mut();
         match (on, copies.is_some()) {
             (true, false) => *copies = Some(Vec::new()),
-            (false, _) => *copies = None,
+            (false, _) => {
+                *copies = None;
+                FRONTEND_PASTE.with(|p| p.set(false));
+            }
             (true, true) => {}
         }
     });
@@ -146,14 +159,45 @@ pub fn take_frontend_copies() -> Vec<String> {
 ///
 /// Returns `None` if the clipboard is unavailable or does not contain text.
 /// During tests the result may be overridden via [`set_clipboard_text_test_override`].
+/// While [`route_copies_to_frontend`] is on for the calling thread it returns
+/// `None` and leaves a paste request for the frontend instead.
 pub fn get_clipboard_text() -> Option<String> {
     let override_text = CLIPBOARD_TEXT_OVERRIDE.with(|o| o.borrow().clone());
     if let Some(text) = override_text {
         return Some(text);
     }
+    if request_frontend_paste() {
+        return None;
+    }
     arboard::Clipboard::new()
         .ok()
         .and_then(|mut cb| cb.get_text().ok())
+}
+
+/// Leave a paste request for the frontend when it owns this thread's
+/// clipboard ([`route_copies_to_frontend`]).
+///
+/// # Returns
+///
+/// `true` when the request was left, so the caller must not read `arboard`.
+fn request_frontend_paste() -> bool {
+    let routed = FRONTEND_COPIES.with(|c| c.borrow().is_some());
+    if routed {
+        FRONTEND_PASTE.with(|p| p.set(true));
+    }
+    routed
+}
+
+/// Whether a clipboard read on this thread asked the frontend to paste since
+/// the last call. The frontend answers by pasting through its own clipboard
+/// (the GUI sends egui's `RequestPaste`), which delivers the text as a paste
+/// event.
+///
+/// # Returns
+///
+/// `true` once per request; `false` when none is pending.
+pub fn take_frontend_paste_request() -> bool {
+    FRONTEND_PASTE.with(Cell::take)
 }
 
 /// Set (or clear) the thread-local test override for the system clipboard.

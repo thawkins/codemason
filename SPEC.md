@@ -1070,12 +1070,23 @@ Two complementary mechanisms cover the two ways a codemason process can die.
 point runs. codemason therefore does not try. Instead, `src/crash_dump.rs` stamps
 `log/panics/last-crash.json` at startup (pid, exe, args, cwd, thread,
 `status: running`, and a platform-specific core-dump retrieval hint), overwrites
-it with `clean exit` on a normal return, and — when the next start finds a
+it with `clean exit` on a normal return (or `forced exit` when the GUI's quit
+safety net ends a slow teardown with `process::exit`, through the hook
+registered with `quit::set_force_exit_hook`), and — when the next start finds a
 still-`running` record whose pid is gone — prints a warning naming the marker,
 the dead pid, and the host's core-dump command. The hint is `coredumpctl
 list/info/debug <pid>` when `/proc/sys/kernel/core_pattern` pipes into a helper
 (typical `systemd-coredump` hosts), otherwise the `core_pattern` file path or
-the macOS `/cores` convention. A clean exit never reports.
+the macOS `/cores` convention. A clean or forced exit never reports.
+
+**GUI clipboard reads never use `arboard` on the UI thread.** On Wayland the
+window serves its own clipboard selection from the UI thread, so an `arboard`
+read there (through XWayland) waited on itself and froze the window. While the
+GUI routes the thread's clipboard (`clipboard::route_copies_to_frontend`),
+`get_clipboard_text` and `get_clipboard_image` return `None` and leave a paste
+request (`take_frontend_paste_request`) that the GUI answers with egui's
+non-blocking `ViewportCommand::RequestPaste`; right-click Paste sends it
+directly.
 
 **There is no stderr spool.** The GUI does not own the terminal's alternate
 screen, so the fd-2 redirection (`src/stderr_spool.rs`) was removed with the TUI;

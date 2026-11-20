@@ -563,6 +563,31 @@ fn ensure_copy_content_lines_does_not_panic_on_empty_history() {
     );
 }
 
+/// The GUI never renders through the terminal line cache, so the cache is
+/// empty and its width is 0. `/clip` must still copy every message, unwrapped.
+#[test]
+fn ensure_copy_content_lines_builds_uncached_messages_unwrapped() {
+    use codemason_agent::message::Message;
+    let mut app = support::make_app();
+    let long = "a message that is long enough to wrap in any narrow pane";
+    app.session.messages.push(Message::user_text("s1", long));
+    app.session
+        .messages
+        .push(Message::assistant_text("s1", "second message"));
+    assert!(app.session.message_line_cache.is_empty());
+    assert_eq!(app.session.message_cache_width, 0);
+
+    app.ensure_copy_content_lines();
+
+    let text = app.session.message_content_lines.join("\n");
+    assert!(text.contains(long), "message copied unwrapped, got: {text}");
+    assert!(text.contains("second message"), "got: {text}");
+    assert_eq!(
+        app.session.message_line_cache.len(),
+        app.session.messages.len()
+    );
+}
+
 #[test]
 fn mark_message_dirty_lowers_the_watermark_only() {
     let mut app = support::make_app();
