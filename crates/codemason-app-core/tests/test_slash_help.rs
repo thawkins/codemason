@@ -432,14 +432,14 @@ async fn test_toolchain_unknown_subcommand_correction() {
 // ---------------------------------------------------------------------------
 
 fn data_row_count(table: &str) -> usize {
-    // The rendered grid carries one top border, one header separator, and one
-    // close border after each data row's last grid line. Data rows = border
-    // lines - 2.
-    let borders = table
+    // These assertions read the *stored* report, which is Markdown source: a
+    // `|`-table of one header row, one `| --- |` delimiter row, then one line
+    // per data row. Data rows = table lines - 2.
+    let table_lines = table
         .lines()
-        .filter(|line| line.trim_start().starts_with("+-"))
+        .filter(|line| line.trim_start().starts_with('|'))
         .count();
-    borders.saturating_sub(2)
+    table_lines.saturating_sub(2)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -609,11 +609,7 @@ async fn test_toolchain_list_runs_probes_off_the_event_loop_with_wait_status() {
         text.contains("From: /toolchain list"),
         "report must render after the blocking walk: {text}"
     );
-    let data_rows = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("+-"))
-        .count()
-        .saturating_sub(2);
+    let data_rows = data_row_count(&text);
     assert_eq!(data_rows, 50, "all language rows present: {text}");
 }
 
@@ -649,13 +645,9 @@ async fn test_toolchain_list_within_responsiveness_budget() {
 async fn test_toolchain_list_absent_runtimes_do_not_truncate_report() {
     let mut app = make_app();
     let text = last_output_after(&mut app, "/toolchain list").await;
-    // Every SUPPORTED_LANGUAGES id appears as a row (table-grid borders
-    // minus the header block gives the data-row count, cf. T-014 test).
-    let data_rows = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("+-"))
-        .count()
-        .saturating_sub(2);
+    // Every SUPPORTED_LANGUAGES id appears as a row (the table's pipe lines
+    // minus the header block give the data-row count, cf. T-014 test).
+    let data_rows = data_row_count(&text);
     assert_eq!(
         data_rows, 50,
         "walk must emit one row per language even with absent runtimes: {text}"
@@ -668,66 +660,49 @@ async fn test_toolchain_list_absent_runtimes_do_not_truncate_report() {
         flat.contains("not installed") || flat.contains("installed"),
         "status column renders for absent and installed runtimes: {flat}"
     );
-    let absent_rows = flat.matches("format -").count();
+    // The rendered grid wraps the data-format marker across grid lines, so
+    // count its closing token: one per data-format row.
+    let absent_rows = flat.matches("n/a)").count();
     assert!(
         absent_rows >= 20,
-        "data-format rows survive the walk (>= 20, word-wrapped in the status column): {flat}"
+        "data-format rows survive the walk (>= 20): {flat}"
     );
     assert_eq!(app.status, "toolchain: list");
 }
 
 // ---------------------------------------------------------------------------
-// /toolchain fixed-width table render (FR-017: 10/10/10/50 char columns,
-// Language/Runtime clip, Status and Version word-wrap)
+// /toolchain table render: the markdown table reaches the transcript as a
+// rendered grid with one row per report row
 // ---------------------------------------------------------------------------
-
-/// FR-017: the Language, Runtime, Status, and Version columns of the
-/// `/toolchain list` ASCII grid are fixed at 10/10/10/50 characters, so
-/// every border line is exactly (10+2)x3 + (50+2) + 5 = 93 columns wide and
-/// every grid (pipe) line is too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_toolchain_list_table_renders_at_fixed_column_widths() {
+async fn test_toolchain_list_renders_one_row_per_report_row() {
     let mut app = make_app();
     let text = last_output_after(&mut app, "/toolchain list").await;
-    let borders = text
+    // The markdown table reaches the transcript as Markdown source: a header
+    // row, a delimiter row, then one line per reported language. The viewer
+    // sizes the columns, so every line is one row and no fixed width applies.
+    let table_lines: Vec<&str> = text
         .lines()
-        .filter(|line| line.trim_start().starts_with("+-"))
-        .map(|line| line.trim().len())
-        .collect::<Vec<_>>();
+        .filter(|line| line.trim_start().starts_with('|'))
+        .collect();
     assert!(
-        !borders.is_empty(),
-        "table must carry +-- border lines, got: {text}"
+        table_lines.len() > 2,
+        "table must carry a header, a delimiter and data rows, got: {text}"
     );
-    for width in &borders {
-        assert_eq!(
-            *width,
-            93,
-            "border must be exactly 93 cols ((10+2)x3 + (50+2) + 5), got {width}: first borders: {}",
-            text.lines()
-                .filter(|line| line.trim_start().starts_with("+-"))
-                .take(2)
-                .collect::<Vec<_>>()
-                .join(" | ")
+    for line in &table_lines {
+        assert!(
+            line.trim_end().ends_with('|'),
+            "table line must be a closed row: {line}"
         );
     }
-    // Every pipe-delimited grid line (data + wrapped continuation) keeps the
-    // same 93-column shape so wrap continuation lines align under their row.
-    for line in text.lines().filter(|l| l.starts_with('|')) {
-        assert_eq!(
-            line.chars().count(),
-            93,
-            "grid line must be 93 cols: {line}"
-        );
-    }
+    assert_eq!(data_row_count(&text), 50, "one row per language: {text}");
     assert_eq!(app.status, "toolchain: list");
 }
 
-/// FR-017 word-wrap: version text wider than the 50-char Version column
-/// wraps onto continuation grid lines instead of being clipped - no version
-/// text is dropped (the report still renders every row's status, and any
-/// continuation line carries text only in the Version column).
+/// FR-017: a long version string stays whole in its own cell - the viewer
+/// sizes the column, so the report never hard-splits a version token.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_toolchain_list_version_column_word_wraps() {
+async fn test_toolchain_list_version_column_is_not_truncated() {
     let mut app = make_app();
     let text = last_output_after(&mut app, "/toolchain list").await;
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -738,20 +713,21 @@ async fn test_toolchain_list_version_column_word_wraps() {
     assert_eq!(app.status, "toolchain: list");
 }
 
-/// FR-017: a filtered single-language report uses the same fixed layout.
+/// FR-017: a filtered single-language report uses the same table layout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_toolchain_list_filtered_table_renders_at_fixed_column_widths() {
+async fn test_toolchain_list_filtered_report_renders_as_a_table() {
     let mut app = make_app();
     let text = last_output_after(&mut app, "/toolchain list rust").await;
-    let border = text
-        .lines()
-        .find(|line| line.trim_start().starts_with("+-"))
-        .map(|line| line.trim().len())
-        .unwrap_or(0);
-    assert_eq!(
-        border, 93,
-        "filtered table border must be exactly 93 cols, got {border}: {text}"
+    // The markdown table must reach the transcript as a table, not as a run-on
+    // paragraph: each row is its own `|`-delimited line.
+    assert!(
+        text.lines().any(|line| line.trim_start().starts_with('|')),
+        "filtered report must render as a table: {text}"
     );
+    assert_eq!(data_row_count(&text), 1, "one filtered row: {text}");
+    // Header cells stay whole: the viewer sizes each column to its content.
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("Version"), "header row: {flat}");
     assert_eq!(app.status, "toolchain: list");
 }
 
@@ -766,7 +742,7 @@ async fn test_toolchain_list_probe_failure_keeps_row_with_placeholder() {
     // renders with a single line version cell.
     let text = last_output_after(&mut app, "/toolchain list r").await;
     // The TUI markdown pipeline may narrow-wrap the `r` id onto its own
-    // grid cell, so match the flattened whole-table form instead of a
+    // cell, so match the flattened whole-table form instead of a
     // column-exact prefix.
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(

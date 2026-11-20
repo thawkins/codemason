@@ -1149,6 +1149,36 @@ pub const ACTIVITY_RUNNING_LABEL: &str = "Running";
 /// The header of a collapsed thinking block.
 pub const THINKING_LABEL: &str = "Thinking";
 
+/// The accessible label of the control that collapses every open block.
+pub const COLLAPSE_ALL_LABEL: &str = "Collapse all expanded blocks";
+
+/// egui id of the collapse epoch: a counter [`collapse_all`] bumps, which
+/// closes every disclosure row that has not been opened since.
+fn collapse_epoch_id() -> egui::Id {
+    egui::Id::unique("transcript_collapse_epoch")
+}
+
+/// The current collapse epoch (0 before anything has been collapsed).
+fn collapse_epoch(ctx: &egui::Context) -> u64 {
+    ctx.data(|d| d.get_temp(collapse_epoch_id())).unwrap_or(0)
+}
+
+/// Close every disclosure row in the transcript: the activity rows, the
+/// thinking rows, and any other block that opens.
+///
+/// A row keeps its open flag with the epoch it was opened in, so bumping the
+/// epoch closes every row at once and a row opened afterwards stays open.
+/// Rows that are scrolled out of view close too: their flag is not read
+/// until they are laid out, and then the epoch has moved on.
+///
+/// # Arguments
+///
+/// * `ctx` - the context whose memory holds the epoch.
+pub fn collapse_all(ctx: &egui::Context) {
+    let next = collapse_epoch(ctx) + 1;
+    ctx.data_mut(|d| d.insert_temp(collapse_epoch_id(), next));
+}
+
 /// A tool call's lines, labelled with its status for assistive technology.
 /// A `think` call's thought is drawn as thinking. A finished call's leading
 /// marker (`* ` or `[x] `) is drawn as a check or
@@ -1226,8 +1256,21 @@ fn disclosure(
     default_open: bool,
     extra: impl FnOnce(&mut egui::Ui),
 ) -> bool {
+    // The flag is the user's choice, if they made one, kept with the collapse
+    // epoch it was last settled in. [`collapse_all`] bumps the epoch, so a
+    // row settled in an earlier epoch is closed here and its choice becomes
+    // "closed"; a row first drawn after the collapse takes `default_open`
+    // as before, so a reply streaming later still opens while it streams.
+    let epoch = collapse_epoch(ui.ctx());
     let key = id.with("open");
-    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(default_open);
+    let (mut chosen, settled) = ui
+        .data(|d| d.get_temp::<(Option<bool>, u64)>(key))
+        .unwrap_or((None, epoch));
+    let collapsed = settled < epoch;
+    if collapsed {
+        chosen = Some(false);
+    }
+    let mut open = chosen.unwrap_or(default_open);
     ui.horizontal(|ui| {
         if let Some(icon) = icon {
             let size = egui::TextStyle::Body.resolve(ui.style()).size;
@@ -1245,7 +1288,13 @@ fn disclosure(
         let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
         if response.clicked() {
             open = !open;
-            ui.data_mut(|d| d.insert_temp(key, open));
+            chosen = Some(open);
+        }
+        // Settle this row in the current epoch, so the next `collapse_all`
+        // closes it: a choice the user made, or the default it was drawn at.
+        let settled_now = (chosen, epoch);
+        if ui.data(|d| d.get_temp::<(Option<bool>, u64)>(key)) != Some(settled_now) {
+            ui.data_mut(|d| d.insert_temp(key, settled_now));
         }
         if ui.is_rect_visible(rect) {
             // A triangle pointing right when closed, down when open.

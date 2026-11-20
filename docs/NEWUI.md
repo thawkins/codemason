@@ -128,7 +128,7 @@ egui keeps.
 | Component | File | Notes |
 | --- | --- | --- |
 | Buttons: filled, tonal, outlined, text | `button.rs` | 40 pt high, full radius, state layers (hover 8%, focus/press 10% of on-colour) |
-| Icon button: standard, filled, toggle | `icon_button.rs` | 40 pt target, 24 pt glyph |
+| Icon button: standard, filled, toggle | `icon_button.rs` | 40 pt target, 24 pt glyph; `icon_button_dense` is the 32 pt toolbar variant (20 pt glyph) for a strip of controls over content, e.g. the Diff pane's one row in its ~270 pt width; `icon_button_inline` is an 18 pt variant for a control sharing a line with text, e.g. the prompt row's Collapse all button |
 | Segmented button | `segmented.rs` | Used for ribbon view toggles |
 | Tabs (primary) | `tabs.rs` | 3 pt active indicator under label |
 | Menu | `menu.rs` | `surface_container`, elevation 2, 48 pt rows |

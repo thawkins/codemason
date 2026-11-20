@@ -144,6 +144,11 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
     let geometry = window::window_path().map_or_else(WindowGeometry::in_memory, |path| {
         WindowGeometry::open(&path)
     });
+    // The interface scale is saved beside the rect, so a zoom the user set
+    // (the status bar's slider, Ctrl+Plus / Ctrl+Minus) is restored before the
+    // first frame: the window is created at that zoom and every size is
+    // computed in its points.
+    let saved_zoom = geometry.saved_zoom();
     // Who draws the window frame, decided once: the app's title strip is
     // the title bar where the desktop allows it ([`crate::title_bar`]).
     let frame = crate::title_bar::decide_frame().frame;
@@ -161,6 +166,9 @@ fn run_window(launch: GuiLaunch) -> Result<(), GuiLaunchError> {
         APP_NAME,
         native_options,
         Box::new(|cc| {
+            // The saved interface scale, before any frame is drawn, so the
+            // first layout is already at the user's zoom.
+            cc.egui_ctx.set_zoom_factor(saved_zoom);
             // Bundled block/status glyphs and a bold face, then installed
             // system fonts for CJK and every other script.
             crate::fonts::install(&cc.egui_ctx, craft_ui::fonts::SystemFonts::AfterCraft);

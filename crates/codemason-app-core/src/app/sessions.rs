@@ -1175,7 +1175,10 @@ impl App {
                 let sections = self.storage.list_sections().map_err(|e| e.to_string())?;
                 let mut text = String::from("| Section |\n|---|\n");
                 for s in &sections {
-                    text.push_str(&format!("| {} |\n", s.name));
+                    text.push_str(&format!(
+                        "| {} |\n",
+                        codemason_types::mdtable::cell(&s.name)
+                    ));
                 }
                 if sections.is_empty() {
                     text = "No sections. `/session section new <name>` creates one.".into();

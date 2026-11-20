@@ -152,17 +152,19 @@ async fn test_skill_list_shows_agentskills_pack() {
 
     let text = last_message_text(&app);
     assert!(text.contains("From: /skill"), "list header, got: {text}");
+    // One table row per pack, so the scope is read off the pack's own row
+    // rather than from a `scope: ...` line the old block layout carried.
+    let tiny_row = text
+        .lines()
+        .find(|line| line.contains("| `/tiny`"))
+        .unwrap_or_else(|| panic!("the AgentSkills pack must appear in the list, got: {text}"));
     assert!(
-        text.contains("/tiny"),
-        "the AgentSkills pack must appear in the list, got: {text}"
+        tiny_row.contains("A trivial pack used by the manual test plan."),
+        "frontmatter description must be rendered, got: {tiny_row}"
     );
     assert!(
-        text.contains("A trivial pack used by the manual test plan."),
-        "frontmatter description must be rendered, got: {text}"
-    );
-    assert!(
-        text.contains("scope: openskills-project"),
-        "a .agents/skills/ pack loads at project scope, got: {text}"
+        tiny_row.contains("openskills-project"),
+        "a .agents/skills/ pack loads at project scope, got: {tiny_row}"
     );
     assert_eq!(app.status, "skill", "/skill list status");
 }
@@ -304,9 +306,21 @@ async fn test_skill_clash_prefers_existing_pack() {
         !text.contains("from the AgentSkills pack"),
         "the AgentSkills pack must not shadow the existing pack, got: {text}"
     );
+    // The winning pack's own row names its scope, so a single `/clash` row
+    // carrying `project` (and not `openskills-project`) is the assertion.
+    let clash_rows: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("| `/clash`"))
+        .collect();
+    assert_eq!(
+        clash_rows.len(),
+        1,
+        "the clash must resolve to one pack row, got: {clash_rows:?}"
+    );
     assert!(
-        text.contains("scope: project"),
-        "the winner is the higher-scope codemason pack, got: {text}"
+        clash_rows[0].contains("project") && !clash_rows[0].contains("openskills-project"),
+        "the winner is the higher-scope codemason pack, got: {}",
+        clash_rows[0]
     );
 }
 

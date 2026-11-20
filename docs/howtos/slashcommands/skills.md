@@ -3,7 +3,7 @@
 
 ## Overview
 
-`/skills` renders a fixed-width table of every skill registered in the skill
+`/skills` renders a Markdown table of every skill registered in the skill
 registry: bundled skills plus any custom YAML skill packs discovered from the
 user and project skill directories. Each row shows the command name, its
 scope, its access level, and its description.
@@ -24,7 +24,7 @@ watched live.
 
 | Form | Description |
 | --- | --- |
-| `/skills` | List all registered skills in a fixed-width table |
+| `/skills` | List all registered skills in a Markdown table |
 | `/skills help` | Print usage help |
 
 ## Examples
@@ -57,10 +57,10 @@ Find the access level of a specific skill by scanning the table output:
 
 ## Output
 
-A fenced fixed-width table with the columns:
+A Markdown table with the columns:
 
 ```
-Command | Scope | Access | Description
+Skill | Scope | Access | Description
 ```
 
 - `Access` is derived from the skill flags: `user_invocable` and

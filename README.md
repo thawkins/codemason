@@ -649,7 +649,7 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   permission auto-approval (`/autopilot on [--max-tokens N] [--max-time N]`), or a
   one-keystroke `Alt+O` toggle that drives the same state machine with a default
   1800-second limit so a stray chord cannot start an unbounded run; the status bar
-  shows `AUTO: <mark>` in bold with its `(Alt+O)` chord hint
+  shows an `AUTO` chip while it runs, and clicking the chip turns autopilot off
 - **Config error reporting** — actionable JSON parse diagnostics showing file path,
   line, column, problematic source line, and caret marker
 - **UI internationalisation** — opt-in locale message catalog (English fallback

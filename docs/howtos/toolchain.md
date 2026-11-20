@@ -49,7 +49,7 @@ There was no way, from inside codemason, to see which of those runtimes are
 actually installed locally and at what version. `/toolchain` fills that gap:
 it walks `SUPPORTED_LANGUAGES`, classifies every entry, probes the local
 system for each application language's runtime, and reports presence and
-version in a fixed-width ASCII table or a JSON document.
+version in a Markdown table or a JSON document.
 
 Key properties:
 
@@ -227,53 +227,39 @@ never interpolated into a spawned command line.
 
 ## 6. Report Output
 
-`/toolchain list` renders a fixed-width ASCII table prefixed
-`From: /toolchain list` with columns **Language**, **Runtime**, **Status**,
-**Version** fixed at 10, 10, 10, and 50 characters respectively (FR-017;
-Language and Runtime cells clip to the column width, the Status and Version
-columns word-wrap onto continuation grid lines) — followed by a summary line:
+`/toolchain list` renders a Markdown table prefixed `From: /toolchain list`
+with columns **Language**, **Runtime**, **Status**, **Version** — followed by a
+summary line:
 
 ```
 From: /toolchain list
 
-+------------+------------+------------+----------------------------------------------------+
-| Language   | Runtime    | Status     | Version                                            |
-+------------+------------+------------+----------------------------------------------------+
-| rust       | cargo, rus | cargo:     | cargo: rustc 1.98.1; rustc: rustc 1.98.1           |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | installed; |                                                    |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | rustc:     |                                                    |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | installed  |                                                    |
-+------------+------------+------------+----------------------------------------------------+
-| python     | python3    | installed  | Python 3.12.5                                      |
-+------------+------------+------------+----------------------------------------------------+
-| go         | go         | installed  | go version go1.24.5 linux/amd64                    |
-+------------+------------+------------+----------------------------------------------------+
-| toml       | -          | (data      | -                                                  |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | format —   |                                                    |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | runtime    |                                                    |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | n/a)       |                                                    |
-+------------+------------+------------+----------------------------------------------------+
-| erlang     | erl        | not        | -                                                  |
-+------------+------------+------------+----------------------------------------------------+
-|            |            | installed  |                                                    |
-+------------+------------+------------+----------------------------------------------------+
+| Language | Runtime | Status | Version |
+| --- | --- | --- | --- |
+| rust | cargo, rustc | cargo: installed; rustc: installed | cargo: rustc 1.98.1; rustc: rustc 1.98.1 |
+| python | python3 | installed | Python 3.12.5 |
+| go | go | installed | go version go1.24.5 linux/amd64 |
+| toml | - | (data format - runtime n/a) | - |
+| erlang | erl | not installed | - |
 ...
+
 12/30 application runtimes installed.
 ```
 
+The table is Markdown source, so the GUI's viewer sizes the columns itself: a
+long version stays whole in its own cell rather than being clipped to a
+character budget or wrapped onto continuation grid lines. It is preceded by a
+blank line (Markdown starts a table only after one) and the summary follows one,
+so the summary is not read as a table row. Every cell is escaped by
+`codemason_types::mdtable` (a `|` becomes `\|`, a line break or tab becomes a
+space), so a captured version string cannot split its row.
+
 - Rows follow `SUPPORTED_LANGUAGES` order; repeated invocations in the same
-  environment produce identical columns (barring concurrent `PATH` changes).
+  environment produce identical cells (barring concurrent `PATH` changes).
 - Multi-runtime rows join per-command status with `; ` and per-command version
-  with `; ` (the Status and Version columns word-wrap onto continuation lines
-  when longer, with blank Language/Runtime cells — and a blank Status cell on
-  Version-only continuation lines).
+  with `; ` in the one cell.
 - Absent runtimes render `not installed` with a `-` version placeholder.
+- A data-format row renders `(data format - runtime n/a)` and a `-` version.
 - The summary line counts application rows with at least one installed
   runtime over the number of application rows.
 

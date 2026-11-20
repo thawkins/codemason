@@ -4,14 +4,14 @@
 mod support;
 
 // =========================================================================
-// render_markdown_to_ascii - prefix gating
+// prepare_transcript_text - prefix gating
 // =========================================================================
 
 #[test]
 fn test_render_markdown_no_prefix_passthrough() {
     let mut app = support::make_app();
     let input = "Hello world, **bold** text";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     // Without the "From: /" prefix, text is returned as-is.
     assert_eq!(output, input);
 }
@@ -20,7 +20,7 @@ fn test_render_markdown_no_prefix_passthrough() {
 fn test_render_markdown_with_prefix_converts() {
     let mut app = support::make_app();
     let input = "From: /help\n\n**Bold** text";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     // html2text converts HTML back to terminal-friendly text.
     // For simple bold, output may be identical (html2text renders <strong> as **...**).
     // The key is that the pipeline runs without error and preserves content.
@@ -33,14 +33,14 @@ fn test_render_markdown_with_prefix_converts() {
 }
 
 // =========================================================================
-// render_markdown_to_ascii - table rendering
+// prepare_transcript_text - table rendering
 // =========================================================================
 
 #[test]
 fn test_render_markdown_table() {
     let mut app = support::make_app();
     let input = "From: /test\n\n| Name | Value |\n|------|-------|\n| foo | 42 |\n| bar | 99 |";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     // Should contain normalized table with pipes and dashes.
     assert!(
         output.contains("foo"),
@@ -113,13 +113,13 @@ fn test_normalize_tables_adds_borders() {
 }
 
 // =========================================================================
-// render_markdown_to_ascii - fallback on plain text
+// prepare_transcript_text - fallback on plain text
 // =========================================================================
 
 #[test]
 fn test_render_markdown_empty_input() {
     let mut app = support::make_app();
-    let output = app.render_markdown_to_ascii("");
+    let output = app.prepare_transcript_text("");
     assert_eq!(output, "");
 }
 
@@ -127,7 +127,7 @@ fn test_render_markdown_empty_input() {
 fn test_render_markdown_code_block() {
     let mut app = support::make_app();
     let input = "From: /test\n\n```rust\nfn main() {}\n```";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     assert!(
         output.contains("fn main()"),
         "code block content should survive: {output}"
@@ -138,7 +138,7 @@ fn test_render_markdown_code_block() {
 fn test_render_markdown_list() {
     let mut app = support::make_app();
     let input = "From: /test\n\n- Item one\n- Item two\n- Item three";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     assert!(
         output.contains("Item one"),
         "list items should survive: {output}"
@@ -156,7 +156,7 @@ fn test_render_markdown_html2text_panic_fallback() {
     // A deeply nested preformatted block with a width smaller than its internal
     // line accounting can cause `self.width - self.line.len` to underflow.
     let input = "From: /test\n\n```\n".to_string() + &"a ".repeat(500) + "\n```";
-    let output = app.render_markdown_to_ascii(&input);
+    let output = app.prepare_transcript_text(&input);
     // If html2text panics, the catch_unwind fallback returns the original text.
     assert!(
         output.contains("From: /test"),

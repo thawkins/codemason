@@ -66,16 +66,24 @@ are surfaced immediately without a retry.
 
 Startup does not block on the connect loop. The GUI adopts whatever state the
 loop has published and prints its one-shot per-server report off the loop's
-completion sentinel, an empty-id `initialized` event:
+completion sentinel, an empty-id `initialized` event. The report is a Markdown
+table, one row per server:
 
-```text
-[mcp] Starting <id> (<transport>)
-[mcp] Connected to mcp server <id> via <transport>
-[mcp] Failed to connect to mcp server <id> via <transport>: <reason>
-```
+| Server | Transport | Result | Detail |
+| --- | --- | --- | --- |
+| `filesystem` | stdio | connected | 11 tools |
+| `github` | http | failed | did not become ready within 30s |
+| `notion` | sse | needs auth | `/mcp` to authenticate |
+| `slack` | stdio | disabled | `/mcp connect slack` to enable |
 
-The report ends with one blank line, separating it visually from whatever the
-stream prints next.
+`Detail` carries whatever explains the `Result`: the tool count for a server that
+came up, the failure reason for one that did not, and the command that fixes a
+disabled or unauthenticated one. Every cell is escaped, so a `|` or a newline in a
+failure reason stays inside its own cell instead of splitting the row.
+
+The report is preceded and followed by one blank line, separating it from
+whatever the stream prints on either side (Markdown starts a table only after a
+blank line, and the trailing one keeps the next output out of the table).
 
 Every connect failure path records the server as `McpStatus::Failed { error }`
 before returning, so a server rejected by config validation (e.g. a stdio entry

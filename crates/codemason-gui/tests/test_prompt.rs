@@ -702,3 +702,49 @@ fn test_prompt_grows_with_its_text_up_to_eight_rows() {
         "beyond eight rows the editor scrolls instead of growing: {eight} -> {thirty}"
     );
 }
+
+#[test]
+fn test_collapse_button_sits_left_of_the_prompt_and_collapses_the_transcript() {
+    use codemason_agent::message::{
+        Message, MessagePart, Role as MessageRole, ToolCallState, ToolCallStatus,
+    };
+    use codemason_app_core::transcript_prefs::Verbosity;
+    use codemason_gui::panels::messages::COLLAPSE_ALL_LABEL;
+
+    let tool_call = MessagePart::ToolCall {
+        tool: "read".to_string(),
+        call_id: "c1".to_string(),
+        state: Box::new(ToolCallState {
+            status: ToolCallStatus::Completed,
+            input: serde_json::json!({ "file_path": "/p/a.rs" }),
+            output: None,
+            error: None,
+            duration_ms: Some(1),
+        }),
+    };
+    let (_rt, mut harness) = rig(move |app| {
+        app.transcript_prefs.verbosity = Verbosity::Low;
+        app.session.messages = vec![Message::new("s1", MessageRole::Assistant, vec![tool_call])];
+    });
+    harness.run();
+
+    // The button is left of the editor on the same row.
+    let button = harness.get_by_label(COLLAPSE_ALL_LABEL).rect();
+    let editor = prompt(&harness).rect();
+    assert!(
+        button.right() <= editor.left() + 0.5,
+        "{button:?} {editor:?}"
+    );
+    assert!((button.center().y - editor.center().y).abs() <= editor.height() / 2.0);
+}
+
+#[test]
+fn test_prompt_row_height_is_not_inflated_by_the_collapse_button() {
+    let (_rt, mut harness) = rig(|_| {});
+    harness.run();
+    let height = codemason_gui::panels::prompt::prompt_visible_height(&harness.ctx)
+        .expect("the prompt was drawn");
+    // A one-row prompt stays a text row tall: an 18-point dense button does
+    // not push it to a Material 40-point target.
+    assert!(height < 30.0, "one-row prompt is {height} points tall");
+}

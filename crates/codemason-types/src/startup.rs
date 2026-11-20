@@ -127,76 +127,25 @@ impl StartupTimings {
 
     /// Format the timings as a human-readable report string.
     ///
-    /// The output is a compact aligned table (no box-drawing borders) sized to
-    /// fit within a 100-character-wide terminal display.
+    /// The output is a Markdown table (`Stage`, `Time`) so the GUI's Markdown
+    /// viewer lays the rows out as a table and the plain-text renderer's
+    /// html2text pass draws it as an ASCII grid.
     #[must_use]
     pub fn format_report(&self) -> String {
-        // Name column: width of the longest stage name, but at least 5 ("Stage").
-        let name_w = self
+        use crate::mdtable;
+        let ms = |value: u128| format!("{value} ms");
+        let mut rows: Vec<Vec<String>> = self
             .stages
             .iter()
-            .map(|s| s.name.len())
-            .chain([5usize]) // "Stage" header
-            .max()
-            .unwrap_or(5)
-            .max(5);
-
-        // Time column: width of the longest formatted time ("NNN ms"), but at
-        // least 4 ("Time"). The Sum and Untracked rows can exceed the total
-        // (double-counted merged stages), so include their widths too.
-        let time_w = self
-            .stages
-            .iter()
-            .map(|s| format!("{} ms", s.duration_ms).len())
-            .chain([4usize]) // "Time" header
-            .chain([format!("{} ms", self.total_elapsed_ms()).len()])
-            .chain([format!("{} ms", self.sum_stages_ms()).len()])
-            .chain([format!("{} ms", self.untracked_ms()).len()])
-            .max()
-            .unwrap_or(4)
-            .max(4);
-
-        // Total visible width: name_w + 2 spaces + time_w.
-        let rule = "-".repeat(name_w + 2 + time_w);
-
-        let mut out = String::new();
-        out.push_str("From: /startup\n\n");
-        // Wrap the table in a fenced code block so the TUI markdown renderer
-        // (`try_extract_research_code_block`) preserves the preformatted layout
-        // verbatim instead of collapsing soft-wrapped lines into one paragraph.
-        out.push_str("```\n");
-        // Row formatter shared by the header, stage, Sum, Untracked, and Total
-        // rows: right-align the ms value under the "Time" header.
-        let row = |out: &mut String, name: &str, ms: u128| {
-            out.push_str(&format!(
-                "{:<name_w$}  {:>time_w$}\n",
-                name,
-                format!("{ms} ms"),
-                name_w = name_w,
-                time_w = time_w
-            ));
-        };
-        // Header row: "Stage" in the name column, "Time" in the time column.
-        out.push_str(&format!(
-            "{:<name_w$}  {:>time_w$}\n",
-            "Stage",
-            "Time",
-            name_w = name_w,
-            time_w = time_w
-        ));
-        out.push_str(&rule);
-        out.push('\n');
-        for stage in &self.stages {
-            row(&mut out, &stage.name, stage.duration_ms);
-        }
-        out.push_str(&rule);
-        out.push('\n');
+            .map(|stage| vec![mdtable::cell(&stage.name), ms(stage.duration_ms)])
+            .collect();
         // Show the sum of instrumented stages alongside the wall-clock total
         // so the uninstrumented gap is immediately visible.
-        row(&mut out, "Sum", self.sum_stages_ms());
-        row(&mut out, "Untracked", self.untracked_ms());
-        row(&mut out, "Total", self.total_elapsed_ms());
-        out.push_str("```\n");
+        rows.push(vec!["Sum".to_string(), ms(self.sum_stages_ms())]);
+        rows.push(vec!["Untracked".to_string(), ms(self.untracked_ms())]);
+        rows.push(vec!["Total".to_string(), ms(self.total_elapsed_ms())]);
+        let mut out = String::from("From: /startup\n\n");
+        out.push_str(&mdtable::table(&["Stage", "Time"], rows));
         out
     }
 }

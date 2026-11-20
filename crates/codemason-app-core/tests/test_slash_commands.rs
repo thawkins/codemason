@@ -2794,7 +2794,7 @@ async fn test_slash_tools_list_renders_every_registered_tool() {
     assert!(text.contains("read"), "should list the read tool");
     assert!(
         text.contains("codeindex_search"),
-        "should list every registered tool, not a visible subset"
+        "should list every registered tool, not a visible subset; got: {text}"
     );
 }
 
@@ -4969,11 +4969,10 @@ async fn test_slash_mcp_list_prints_client_derived_status() {
     );
 }
 
-/// The startup report must print one `[mcp] Starting mcp server <id> (<transport>)`
-/// line per attempted server and, for a server that came up, a following
-/// `[mcp] Connected to mcp server <id> via <transport>` line - each on its own
-/// line. `register_connected_for_tests` seeds the default (stdio) config, so
-/// the label must read `stdio` here.
+/// The startup report must be a Markdown table with one row per attempted
+/// server: the server id, its transport, the result and a detail cell.
+/// `register_connected_for_tests` seeds the default (stdio) config, so the
+/// transport cell must read `stdio` here.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_report_mcp_startup_lists_start_and_connect_lines() {
     use codemason_agent::mcp::McpClient;
@@ -5006,17 +5005,36 @@ async fn test_report_mcp_startup_lists_start_and_connect_lines() {
         .map(|m| m.text_content())
         .collect::<Vec<_>>()
         .join("\n");
+    // The table's header and its separator row.
     assert!(
-        joined.contains(
-            "\n[mcp] Starting mcp server alpha (stdio)\n[mcp] Connected to mcp server alpha via stdio"
-        ),
-        "alpha must report start then connect, each with its transport: {joined}"
+        joined.contains("| Server | Transport | Result | Detail |"),
+        "the report must open with a table header: {joined}"
     );
     assert!(
-        joined.contains(
-            "\n[mcp] Starting mcp server beta (stdio)\n[mcp] Connected to mcp server beta via stdio"
-        ),
-        "beta must report start then connect, each with its transport: {joined}"
+        joined.contains("| --- | --- | --- | --- |"),
+        "the report must carry a table separator row: {joined}"
+    );
+    // One row per server, each naming its transport and its tool count.
+    assert!(
+        joined.contains("| alpha | stdio | connected | 1 tool |"),
+        "alpha's row must name its transport, result and tool count: {joined}"
+    );
+    assert!(
+        joined.contains("| beta | stdio | connected | 0 tools |"),
+        "beta's row must name its transport, result and tool count: {joined}"
+    );
+    // A rendered table needs a blank line before it, or the preceding reply
+    // is swallowed into the header paragraph.
+    assert!(
+        joined.starts_with("\n\n"),
+        "the table must be preceded by a blank line: {joined:?}"
+    );
+    // The report is Markdown a frontend can lay out as a table, not plain
+    // text: the GUI's transcript parses assistant text with table support, so
+    // this is what makes it draw a table rather than a run of pipes.
+    assert!(
+        codemason_app_core::markdown::has_table(&joined),
+        "the report must parse as a Markdown table: {joined}"
     );
     // The report closes with a blank line so the startup block is separated from
     // whatever the stream prints next. Two newlines are required: `lines()`
@@ -5106,7 +5124,7 @@ async fn test_report_mcp_startup_defers_while_client_lock_held() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        !during.contains("[mcp] Starting mcp server alpha"),
+        !during.contains("| alpha |"),
         "a held lock must defer the report, not block on it: {during}"
     );
 
@@ -5122,9 +5140,7 @@ async fn test_report_mcp_startup_defers_while_client_lock_held() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        after.contains(
-            "\n[mcp] Starting mcp server alpha (stdio)\n[mcp] Connected to mcp server alpha via stdio"
-        ),
+        after.contains("| alpha | stdio | connected | 0 tools |"),
         "the retried report must name every server: {after}"
     );
 }
@@ -5171,16 +5187,12 @@ async fn test_report_mcp_startup_labels_sse_and_http_transports() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        joined.contains(
-            "\n[mcp] Starting mcp server sse-server (sse)\n[mcp] Connected to mcp server sse-server via sse"
-        ),
-        "the sse server must be labelled sse on both lines: {joined}"
+        joined.contains("| sse-server | sse | connected | 0 tools |"),
+        "the sse server's row must name the sse transport: {joined}"
     );
     assert!(
-        joined.contains(
-            "\n[mcp] Starting mcp server http-server (http)\n[mcp] Connected to mcp server http-server via http"
-        ),
-        "the http server must be labelled http on both lines: {joined}"
+        joined.contains("| http-server | http | connected | 0 tools |"),
+        "the http server's row must name the http transport: {joined}"
     );
 }
 
@@ -5224,12 +5236,91 @@ async fn test_report_mcp_startup_surfaces_a_failed_server_reason() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        joined.contains(
-            "\n[mcp] Starting mcp server broken (stdio)\n\
-             [mcp] Failed to connect to mcp server broken via stdio: \
-             did not become ready within 30s"
-        ),
-        "the failed server must be reported with its reason: {joined}"
+        joined.contains("| broken | stdio | failed | did not become ready within 30s |"),
+        "the failed server's row must name the reason: {joined}"
+    );
+}
+
+/// A failure reason that contains a `|` (a shell pipeline in an error message,
+/// for instance) must be escaped, so the report's table keeps four columns
+/// instead of quietly growing a fifth.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_report_mcp_startup_escapes_a_pipe_in_the_reason() {
+    use codemason_agent::mcp::{McpClient, McpServer, McpStatus};
+    use codemason_config::config::{McpServerConfig, McpTransport};
+
+    let mut app = make_app();
+    app.session.session_id = Some("s1".to_string());
+
+    let mut client = McpClient::new();
+    client.push_server_for_tests(McpServer {
+        id: "piped".to_string(),
+        config: McpServerConfig {
+            type_: McpTransport::Stdio,
+            command: Some("npx".to_string()),
+            ..McpServerConfig::default()
+        },
+        status: McpStatus::Failed {
+            error: "exit 1 | stderr: boom".to_string(),
+        },
+        tools: Vec::new(),
+    });
+    app.session_processor
+        .mcp_client
+        .set(Arc::new(tokio::sync::RwLock::new(client)))
+        .map_err(|_| ())
+        .expect("mcp client set once");
+
+    app.report_mcp_startup().await;
+
+    let joined: String = app
+        .session
+        .messages
+        .iter()
+        .map(|m| m.text_content())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains("| piped | stdio | failed | exit 1 \\| stderr: boom |"),
+        "the pipe in the reason must be escaped: {joined}"
+    );
+}
+
+/// A server switched off in the enable-state ledger is reported as `disabled`,
+/// with the command that re-enables it, rather than as a server that started.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_report_mcp_startup_reports_a_disabled_server() {
+    use codemason_agent::mcp::{McpClient, McpServer, McpStatus};
+    use codemason_config::config::McpServerConfig;
+
+    let mut app = make_app();
+    app.session.session_id = Some("s1".to_string());
+
+    let mut client = McpClient::new();
+    client.push_server_for_tests(McpServer {
+        id: "off".to_string(),
+        config: McpServerConfig::default(),
+        status: McpStatus::Disabled,
+        tools: Vec::new(),
+    });
+    app.session_processor
+        .mcp_client
+        .set(Arc::new(tokio::sync::RwLock::new(client)))
+        .map_err(|_| ())
+        .expect("mcp client set once");
+
+    app.report_mcp_startup().await;
+
+    let joined: String = app
+        .session
+        .messages
+        .iter()
+        .map(|m| m.text_content())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains("| off | stdio | disabled | `/mcp connect off` to enable |"),
+        "the disabled server's row must name the re-enable command: {joined}"
     );
 }
 

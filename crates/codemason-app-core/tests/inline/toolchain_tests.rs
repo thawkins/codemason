@@ -4,19 +4,15 @@
 
 use super::*;
 
-/// Build one expected grid line from `(width, text)` column pairs: each
-/// segment is clipped to its column width and right-padded with spaces,
-/// mirroring [`TABLE_COLUMN_WIDTHS`] rendering (`| seg | seg | ... |`).
-fn grid_line(columns: [(usize, &str); 4]) -> String {
+/// Build one expected Markdown table row from its four cell values,
+/// mirroring [`render_markdown_report`] (`| Language | Runtime | Status |
+/// Version |`).
+fn md_row(cells: [&str; 4]) -> String {
     let mut line = String::from("|");
-    for (width, text) in columns {
-        let text: String = text.chars().take(width).collect();
-        let pad = width.saturating_sub(text.chars().count());
+    for value in cells {
         line.push(' ');
-        line.push_str(&text);
-        line.push_str(&" ".repeat(pad));
-        line.push(' ');
-        line.push('|');
+        line.push_str(value);
+        line.push_str(" |");
     }
     line
 }
@@ -322,9 +318,10 @@ fn version_result_placeholder_mapping() {
     );
 }
 
-/// Renderer produces the FR-009 fenced ASCII-grid shape with the
-/// FR-017 fixed-width columns, summary line, and `From:` prefix for a
-/// hand-built probe set.
+/// The renderer emits a Markdown table (`Language | Runtime | Status |
+/// Version`), the summary line, and the `From:` prefix for a hand-built probe
+/// set. A Markdown table is what the GUI's viewer lays out as columns and the
+/// plain-text pipeline draws as an ASCII grid.
 #[test]
 fn render_markdown_report_table_summary_and_prefix() {
     let rows = vec![
@@ -369,207 +366,30 @@ fn render_markdown_report_table_summary_and_prefix() {
         },
     ];
     let report = render_markdown_report(&rows);
-    assert!(report.starts_with("From: /toolchain list\n\n```\n"));
-    // FR-017: fixed columns are 10/10/10/50; Language/Runtime cells are
-    // clipped (the rust row's 12-char runtime clips to 10) and the Status
-    // and Version columns word-wrap onto continuation grid lines (the
-    // rust row's 34-char status wraps to 4 lines; the nim row's 13-char
-    // status wraps to 2; the toml row's 27-char data-format marker wraps
-    // to 4; every version cell here fits its 50-char column).
-    let expected_row = |lang: &str, runtime: &str, status: &str, version: &str| {
-        grid_line([(10, lang), (10, runtime), (10, status), (50, version)])
-    };
-    // First line of a multi-line row: clipped Language/Runtime plus the
-    // first wrapped Status segment; the Version cell fits its column.
     assert!(
-        report.contains(&expected_row("Language", "Runtime", "Status", "Version")),
-        "fixed-width header row, got: {report}"
+        report.starts_with("From: /toolchain list\n\n| Language | Runtime | Status | Version |\n")
     );
+    assert!(report.contains("\n| --- | --- | --- | --- |\n"));
+    // Every row is one line: pipes separate cells, never column padding.
     assert!(
-        report.contains(&expected_row(
+        report.contains(&md_row([
             "rust",
-            "cargo, rus",
-            "cargo:",
+            "cargo, rustc",
+            "cargo: installed; rustc: installed",
             "cargo: cargo 1.85.0; rustc: rustc 1.85.0"
-        )),
-        "rust first line, got: {report}"
+        ])),
+        "rust row, got: {report}"
     );
-    assert!(report.contains(&expected_row("go", "go", "installed", "go version go1.22")));
-    assert!(report.contains(&expected_row("nim", "nim", "not", "-")));
-    assert!(report.contains(&expected_row("toml", "-", "(data", "-")));
-    // Status continuation lines: blank Language/Runtime, wrapped segments.
-    let cont = |status: &str| expected_row("", "", status, "");
+    assert!(report.contains(&md_row(["go", "go", "installed", "go version go1.22"])));
+    assert!(report.contains(&md_row(["nim", "nim", "not installed", "-"])));
+    assert!(report.contains(&md_row(["toml", "-", DATA_FORMAT_MARKER, "-"])));
     assert!(
-        report.contains(&cont("installed;")),
-        "rust cont 1: {report}"
-    );
-    assert!(report.contains(&cont("rustc:")), "rust cont 2: {report}");
-    assert!(
-        report.contains(&cont("installed")),
-        "rust/nim last seg: {report}"
-    );
-    assert!(report.contains(&cont("format -")), "toml cont 1: {report}");
-    assert!(report.contains(&cont("runtime")), "toml cont 2: {report}");
-    assert!(report.contains(&cont("n/a)")), "toml cont 3: {report}");
-    assert!(
-        report.ends_with("\n2/3 application runtimes installed.\n```\n"),
+        report.ends_with("\n2/3 application runtimes installed.\n"),
         "summary line wrong: {report}"
     );
-    // Pipe lines: header(1) + rust(4) + go(1) + nim(2) + toml(4).
-    let row_lines = report.lines().filter(|l| l.starts_with('|')).count();
-    assert_eq!(row_lines, 12, "wrapped row grid lines: {report}");
-}
-
-/// FR-017 word-wrap: a version cell wider than the 50-char column wraps
-/// onto continuation grid lines (blank Language/Runtime/Status cells) and
-/// the Language/Runtime columns keep clipping, so no version text is lost.
-#[test]
-fn render_markdown_report_version_cell_word_wraps() {
-    let rows = vec![ReportRow {
-        id: "python",
-        class: LanguageClass::Application,
-        probes: vec![CommandProbe {
-            command: "python3",
-            installed: true,
-            version: Some(
-                "Python 3.12.4 (main, Jun  6 2024, long tail text that exceeds fifty)".to_string(),
-            ),
-        }],
-    }];
-    let report = render_markdown_report(&rows);
-    let grid_lines: Vec<&str> = report.lines().filter(|l| l.starts_with('|')).collect();
-    // Header + 1 data row wrapping to 2 lines = 3 pipe lines total
-    // (borders are `+-` lines, not pipe lines).
-    assert_eq!(
-        grid_lines.len(),
-        3,
-        "wrapped row spans 2 grid lines: {report}"
-    );
-    // First line carries the row id and the first wrapped segment.
-    assert!(
-        grid_lines[1].contains("python     ") && grid_lines[1].contains("Python 3.12.4 (main,"),
-        "first wrapped line: {}",
-        grid_lines[1]
-    );
-    // Continuation line: blank Language/Runtime/Status, remainder text.
-    assert!(
-        grid_lines[2].contains("that exceeds fifty)"),
-        "continuation line carries the wrap remainder: {}",
-        grid_lines[2]
-    );
-    let blank_prefix = "|            |            |            |";
-    assert!(
-        grid_lines[2].starts_with(blank_prefix),
-        "continuation line blanks the first three columns: {}",
-        grid_lines[2]
-    );
-    // Borders = data rows + 2 (2 borders above/below header + one row
-    // border after each row group).
-    let borders = report
-        .lines()
-        .filter(|l| l.trim_start().starts_with("+-"))
-        .count();
-    assert_eq!(borders, 3, "one border per row group plus 2: {report}");
-}
-
-/// Long unbroken version tokens hard-split across wrap lines so every
-/// line still fits the 50-char column.
-#[test]
-fn render_markdown_report_version_cell_hard_splits_long_tokens() {
-    let long_token = "v".repeat(80);
-    let rows = vec![ReportRow {
-        id: "zig",
-        class: LanguageClass::Application,
-        probes: vec![CommandProbe {
-            command: "zig",
-            installed: true,
-            version: Some(long_token.clone()),
-        }],
-    }];
-    let report = render_markdown_report(&rows);
-    let grid_lines: Vec<&str> = report.lines().filter(|l| l.starts_with('|')).collect();
-    assert_eq!(
-        grid_lines.len(),
-        3,
-        "80-char token wraps to 2 lines: {report}"
-    );
-    assert!(
-        grid_lines[1].contains(&long_token[..50]) && grid_lines[2].contains(&long_token[50..]),
-        "token hard-splits at the column boundary: {report}"
-    );
-    // Every grid line stays 93 columns wide.
-    for line in grid_lines {
-        assert_eq!(line.chars().count(), 93, "grid line width: {line}");
-    }
-}
-
-/// A report with zero application rows renders the `0/0` summary, and a
-/// data-format-only table never shows presence/version columns.
-#[test]
-fn render_markdown_report_empty_and_data_only() {
-    // Build expected grid lines from the fixed column widths.
-    let row = |widths: [usize; 4], cells: [&str; 4]| {
-        grid_line([
-            (widths[0], cells[0]),
-            (widths[1], cells[1]),
-            (widths[2], cells[2]),
-            (widths[3], cells[3]),
-        ])
-    };
-
-    let report = render_markdown_report(&[]);
-    assert!(report.starts_with("From: /toolchain list\n\n```\n"));
-    // Empty rows: headers pad inside the fixed 10/10/10/50 columns.
-    assert!(
-        report.contains(&row(
-            [10, 10, 10, 50],
-            ["Language", "Runtime", "Status", "Version"]
-        )),
-        "fixed-width header row, got: {report}"
-    );
-    assert!(report.ends_with("\n0/0 application runtimes installed.\n```\n"));
-
-    let data_only = render_markdown_report(&[ReportRow {
-        id: "yaml",
-        class: LanguageClass::DataFormat,
-        probes: Vec::new(),
-    }]);
-    // The 27-char data-format marker word-wraps in the Status column.
-    assert!(
-        data_only.contains(&row([10, 10, 10, 50], ["yaml", "-", "(data", "-"])),
-        "data-format row first line, got: {data_only}"
-    );
-    assert!(
-        data_only.contains(&row([10, 10, 10, 50], ["", "", "format -", ""])),
-        "data-format marker wrap line 1, got: {data_only}"
-    );
-    assert!(
-        data_only.contains(&row([10, 10, 10, 50], ["", "", "runtime", ""])),
-        "data-format marker wrap line 2, got: {data_only}"
-    );
-    assert!(
-        data_only.contains(&row([10, 10, 10, 50], ["", "", "n/a)", ""])),
-        "data-format marker wrap line 3, got: {data_only}"
-    );
-    assert!(data_only.ends_with("\n0/0 application runtimes installed.\n```\n"));
-}
-
-/// Version text containing pipes or line breaks must not break the
-/// table grid (FR-009 single-line rendering via `cell`).
-#[test]
-fn render_markdown_report_sanitizes_version_text() {
-    let rows = vec![ReportRow {
-        id: "r",
-        class: LanguageClass::Application,
-        probes: vec![CommandProbe {
-            command: "R",
-            installed: true,
-            version: Some("R version | 4.3\nwith newline\ttab".to_string()),
-        }],
-    }];
-    let report = render_markdown_report(&rows);
-    assert!(report.contains(r"R version \| 4.3 with newline tab"));
-    assert!(report.ends_with("\n1/1 application runtimes installed.\n```\n"));
+    // Header + delimiter + one line per report row.
+    let table_lines = report.lines().filter(|l| l.starts_with('|')).count();
+    assert_eq!(table_lines, 2 + rows.len(), "one line per row: {report}");
 }
 
 /// Row order is preserved in the rendered table (NFR-002 determinism).
@@ -601,91 +421,77 @@ fn render_markdown_report_preserves_row_order() {
         },
     ];
     let report = render_markdown_report(&rows);
-    let python_pos = report.find("| python ").expect("python row");
-    let json_pos = report.find("| json ").expect("json row");
-    let zig_pos = report.find("| zig ").expect("zig row");
+    let python_pos = report.find("| python |").expect("python row");
+    let json_pos = report.find("| json |").expect("json row");
+    let zig_pos = report.find("| zig |").expect("zig row");
     assert!(python_pos < json_pos && json_pos < zig_pos, "order kept");
 }
 
-/// FR-017: the Language, Runtime, Status, and Version columns are fixed
-/// at 10/10/10/50 characters; Language/Runtime over-wide content clips to
-/// the column width, Status and Version word-wrap (FR-017).
+/// A report with zero application rows renders the `0/0` summary, and a
+/// data-format-only table shows the FR-005 marker in place of presence and
+/// version.
 #[test]
-fn render_markdown_report_uses_fixed_column_widths() {
-    let rows = vec![ReportRow {
-        id: "rust",
-        class: LanguageClass::Application,
-        probes: vec![CommandProbe {
-            command: "cargo",
-            installed: true,
-            version: Some("cargo 1.85.0".to_string()),
-        }],
-    }];
-    let report = render_markdown_report(&rows);
-    let widths: Vec<usize> = report
-        .lines()
-        .find(|l| l.starts_with("+--"))
-        .expect("border row")
-        .split('+')
-        .filter(|s| !s.is_empty())
-        .map(|seg| seg.len() - 2)
-        .collect();
-    assert_eq!(widths, vec![10, 10, 10, 50], "FR-017 widths: {report}");
-    // A deliberately over-wide id clips to the 10-char Language column.
-    let over = render_markdown_report(&[ReportRow {
-        id: "verylonglanguageid",
-        class: LanguageClass::Application,
-        probes: vec![CommandProbe {
-            command: "cargo",
-            installed: true,
-            version: Some("cargo 1.85.0".to_string()),
-        }],
+fn render_markdown_report_empty_and_data_only() {
+    let report = render_markdown_report(&[]);
+    assert!(
+        report.starts_with("From: /toolchain list\n\n| Language | Runtime | Status | Version |\n")
+    );
+    assert!(report.ends_with("\n0/0 application runtimes installed.\n"));
+
+    let data_only = render_markdown_report(&[ReportRow {
+        id: "yaml",
+        class: LanguageClass::DataFormat,
+        probes: Vec::new(),
     }]);
-    assert!(over.contains("| verylongla |"), "clip to 10: {over}");
+    assert!(
+        data_only.contains(&md_row(["yaml", "-", DATA_FORMAT_MARKER, "-"])),
+        "data-format row, got: {data_only}"
+    );
+    assert!(data_only.ends_with("\n0/0 application runtimes installed.\n"));
 }
 
-/// FR-017: a status cell wider than the 10-char column word-wraps onto
-/// continuation grid lines (blank Language/Runtime cells) so no status
-/// text is clipped away.
+/// Version text containing pipes or line breaks must not split the table row
+/// (FR-009 single-line rendering via `cell`).
 #[test]
-fn render_markdown_report_status_cell_word_wraps() {
+fn render_markdown_report_sanitizes_version_text() {
     let rows = vec![ReportRow {
-        id: "nim",
+        id: "r",
         class: LanguageClass::Application,
         probes: vec![CommandProbe {
-            command: "nim",
-            installed: false,
-            version: None,
+            command: "R",
+            installed: true,
+            version: Some("R version | 4.3\nwith newline\ttab".to_string()),
         }],
     }];
     let report = render_markdown_report(&rows);
-    let grid_lines: Vec<&str> = report.lines().filter(|l| l.starts_with('|')).collect();
-    // Header + 1 data row wrapping to 2 lines = 3 pipe lines total
-    // (borders are `+-` lines, not pipe lines).
-    assert_eq!(
-        grid_lines.len(),
-        3,
-        "wrapped row spans 2 grid lines: {report}"
-    );
-    // First line carries the row id/runtime and the first wrap segment.
+    assert!(report.contains(r"R version \| 4.3 with newline tab"));
+    assert!(report.ends_with("\n1/1 application runtimes installed.\n"));
+    // Only the three table lines exist: a `|` inside a cell never starts a row.
+    assert_eq!(report.lines().filter(|l| l.starts_with('|')).count(), 3);
+}
+
+/// Each report row is exactly one Markdown line, so a long version string
+/// cannot wrap onto a continuation line and break the table.
+#[test]
+fn render_markdown_report_rows_are_single_lines() {
+    let long_version = "v".repeat(80);
+    let rows = vec![ReportRow {
+        id: "zig",
+        class: LanguageClass::Application,
+        probes: vec![CommandProbe {
+            command: "zig",
+            installed: true,
+            version: Some(long_version.clone()),
+        }],
+    }];
+    let report = render_markdown_report(&rows);
+    let table_lines: Vec<&str> = report.lines().filter(|l| l.starts_with('|')).collect();
+    assert_eq!(table_lines.len(), 3, "header, delimiter, one row: {report}");
     assert!(
-        grid_lines[1].contains("| nim        | nim        | not        |"),
-        "first wrapped line: {}",
-        grid_lines[1]
+        table_lines[2].contains(&long_version),
+        "the version cell keeps the whole value: {}",
+        table_lines[2]
     );
-    // Continuation line: blank Language/Runtime, remainder in Status.
-    assert!(
-        grid_lines[2].contains("|            |            | installed  |"),
-        "continuation line carries the wrap remainder: {}",
-        grid_lines[2]
-    );
-    // Borders = data rows + 2 (2 borders above/below header + one row
-    // border after each row group).
-    let borders = report
-        .lines()
-        .filter(|l| l.trim_start().starts_with("+-"))
-        .count();
-    assert_eq!(borders, 3, "one border per row group plus 2: {report}");
 }
 
 /// JSON report contains the FR-015 schema: `languages` array with

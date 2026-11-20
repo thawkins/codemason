@@ -32,7 +32,7 @@ fn last_message_text(app: &codemason_app_core::app::App) -> String {
 }
 
 /// Normalise a markdown report for comparison: trim each line, drop blanks,
-/// and fold the `-` list bullet to the `*` form `render_markdown_to_ascii`
+/// and fold the `-` list bullet to the `*` form `prepare_transcript_text`
 /// emits, so the tool's raw markdown and the slash command's rendered markdown
 /// can be compared label-for-label.
 fn normalise(text: &str) -> BTreeSet<String> {

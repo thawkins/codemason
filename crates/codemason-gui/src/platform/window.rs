@@ -74,6 +74,13 @@ const DEFAULT_SIZE: [f32; 2] = [1200.0, 800.0];
 /// The smallest window craft-window's placement keeps, in points.
 const MIN_SIZE: [f32; 2] = [480.0, 320.0];
 
+/// The smallest interface scale a saved window may restore (egui's own
+/// minimum for `Context::set_zoom_factor`'s useful range).
+pub const ZOOM_MIN: f32 = 0.2;
+
+/// The largest interface scale a saved window may restore.
+pub const ZOOM_MAX: f32 = 5.0;
+
 /// Where the window geometry is saved: [`WINDOW_FILE`] in the codemason
 /// config directory, beside the dock layout file.
 ///
@@ -216,7 +223,8 @@ impl WindowGeometry {
     ///
     /// * `info` - the root viewport's info.
     /// * `zoom` - the egui zoom factor (`Context::zoom_factor`): sizes are
-    ///   saved at zoom 1.
+    ///   saved at zoom 1, and the factor itself is kept so the interface
+    ///   scale survives a restart ([`Self::saved_zoom`]).
     pub fn record(&mut self, info: &egui::ViewportInfo, zoom: f32) {
         if info.minimized == Some(true) {
             return;
@@ -234,7 +242,6 @@ impl WindowGeometry {
                 return;
             };
             let mut normal = Placement::new((inner.size() * zoom).into(), scale);
-            normal.zoom = zoom;
             if let Some(outer) = info.outer_rect {
                 let px = outer.min.to_vec2() * zoom * scale;
                 normal.position_px = Some([px.x.round() as i32, px.y.round() as i32]);
@@ -242,10 +249,33 @@ impl WindowGeometry {
             }
             placement = normal;
         }
+        // Recorded whether or not the window is maximized: the scale is the
+        // user's interface setting, not part of the rect.
+        placement.zoom = zoom;
         placement.maximized = maximized;
         placement.fullscreen = fullscreen;
         self.store.set(MAIN, &placement);
         self.last = Some(placement);
+    }
+
+    /// The interface scale saved with the geometry: the zoom factor the
+    /// window last ran at, `1.0` when nothing usable is saved.
+    ///
+    /// The status bar's slider and Ctrl+Plus / Ctrl+Minus set egui's zoom
+    /// factor at run time, and eframe does not persist it, so without this
+    /// the scale was back to 100% on the next start.
+    ///
+    /// # Returns
+    ///
+    /// The saved zoom factor, clamped to the range egui accepts.
+    #[must_use]
+    pub fn saved_zoom(&self) -> f32 {
+        let zoom = self.saved().map(|p| p.zoom).unwrap_or(1.0);
+        if zoom.is_finite() {
+            zoom.clamp(ZOOM_MIN, ZOOM_MAX)
+        } else {
+            1.0
+        }
     }
 
     /// Record this frame's window state ([`Self::record`]) and write a

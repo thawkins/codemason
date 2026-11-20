@@ -181,7 +181,9 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
 /// `App::close_agents_window`, `App::close_teams_window`). The log, profile,
 /// tasks and memory panels are hidden by their toggle chord, which the
 /// caller sends through `App::handle_key` exactly as the keyboard shortcut
-/// does: this function returns it. The Context panel has no keymap command
+/// does: this function returns it. The Diff pane has no toggle chord (the
+/// pane's own `Close diff` button hides it as well), so it is hidden by its
+/// flag here. The Context panel has no keymap command
 /// (its `Alt+C` reaches app-core as a plain key), so its chord is returned
 /// as that key press.
 ///

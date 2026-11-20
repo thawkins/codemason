@@ -203,9 +203,14 @@ running, the status text, the selected provider and model with a health
 indicator for the provider (reachable, health check in progress, or
 unreachable / key missing), the thinking level, the agent, and how much of the
 model's context window the last request used. Warnings appear in it only while
-they apply (quota from 80%, a non-default backend, `AUTO`, `YOLO`, code-index
+they apply (quota from 80%, a non-default backend, `AUTO`, code-index
 activity). The `Details` button at its end opens a popup with the version,
-project, branch, backend, and the on/off state of every service.
+project, branch, backend, and a chip for every service (GCF, CDX, LOG, EDIT,
+TELE, AUTO, YOLO). A chip shows a green check while its service is on and a red cross while it is off;
+click it to turn the service on or off (it runs the same `/<command> on|off`
+the slash command does). The `AUTO` chip in the bar itself turns autopilot
+off with one click, and the `YOLO` chip left of the zoom slider is always
+there, so YOLO mode can be turned on or off from the bar (as `Alt+Y` does).
 
 A new session starts with an empty Messages pane that shows three starter
 actions; clicking one fills the prompt.
@@ -221,9 +226,15 @@ appears under a "Thinking" row that is open while the reply streams;
 `/thinking-display show` keeps it open and `/thinking-display hide` removes it.
 
 Edits show their diff under the call; click **Open diff** to review a
-message's changed files in the Diff pane. Click in the pane, then use `]` and
-`[` for the next and previous hunk, `n` and `p` for the next and previous file,
-`v` to switch between unified and split, and `m` to mark a file reviewed.
+message's changed files in the Diff pane. Its row of buttons steps through the
+files and the hunks and switches the layout and the reviewed mark; a button
+with nothing that way (the first hunk, the last file) is greyed out, and a
+readout at the right of the row says which hunk and which file you are on.
+Click in the pane and the same moves have keys: `]` and `[` for the next and
+previous hunk, `n` and `p` for the next and previous file, `v` to switch
+between unified and split, and `m` to mark a file reviewed. Every button names
+its key when you hover it. The pane's **Close diff** button, at the right of
+its header, closes it; the dock tab's own Close does too.
 
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
@@ -329,7 +340,8 @@ it applies a default 1800-second (`--max-time`) limit — a stray keystroke cann
 start an unbounded run. Use `/autopilot on` with no flags when you want a run
 with no time limit. Pressing `Alt+O` again stops the run.
 
-The status bar shows an `AUTO` indicator that is on while autopilot runs.
+The status bar shows an `AUTO` chip while autopilot runs; clicking it runs
+`/autopilot off`.
 
 ---
 
@@ -352,6 +364,10 @@ preserved rather than being swallowed.
 Click in the **Prompt** pane at the bottom and type your prompt.
 
 Press **`Enter`** to send.
+
+The **minus** button at the left end of the prompt row closes every expanded
+block in the transcript at once: the folded tool-call rows and the `Thinking`
+rows. Blocks you open afterwards stay open.
 
 ### Multi-line prompts
 

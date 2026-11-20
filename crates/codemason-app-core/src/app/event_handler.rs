@@ -3716,8 +3716,8 @@ impl App {
             // A deck run has a fixed stage list rather than an append-only log;
             // rendering it through the session tracker would print an empty
             // "Topic:" header and no stages at all.
-            Some(deck) => self.render_markdown_to_ascii(&deck.render(&progress.name)),
-            None => self.render_markdown_to_ascii(&progress.render()),
+            Some(deck) => self.prepare_transcript_text(&deck.render(&progress.name)),
+            None => self.prepare_transcript_text(&progress.render()),
         };
         // Must match the first line emitted by `ResearchProgress::render`
         // ("[research] Research Progress - `{name}`") so the existing
@@ -3772,7 +3772,7 @@ impl App {
     /// assistant message when possible (and starting a new Text part after a
     /// tool call so ordering is preserved).
     pub fn append_assistant_text(&mut self, text: &str) {
-        let rendered = self.render_markdown_to_ascii(text);
+        let rendered = self.prepare_transcript_text(text);
         if !self.session.force_new_message {
             if let Some(last) = self.session.messages.last_mut()
                 && last.role == Role::Assistant

@@ -2,13 +2,84 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: a **Collapse all** button at the left end of the prompt row (Material inline icon button, `material::icon_button::icon_button_inline`, 18 points so the prompt's row keeps its own height). It closes every open block in the transcript in one click: the folded activity rows and the `Thinking` rows. `messages::collapse_all` bumps a collapse epoch and each disclosure row keeps its open choice with the epoch it was settled in, so a click closes the rows on screen and the rows scrolled out of view alike, while a row first drawn after the click (the `Thinking` row of a reply that starts streaming later) still opens as before. The button sits before the queue counter, so neither shifts the other when a prompt is queued.
+- Added: `material::chip::chip_dense` (a 20-point chip, one text line high) and `ChipKind::Status` (a green check while on, a red cross while off, so the chip keeps one width; a caution status chip is filled with `error_container` while on).
+
 ### Changed
 
 - Changed: Sessions panel rows are restyled. Each session row shows its title, a coloured attention dot while it needs a look (amber waiting, accent running, red failed, blue unread), then two aligned columns on the right: a pull-request icon with the session's request count, shown on every row with `0` when it has none (grey none, blue past, green while one is bound, amber while Auto-fix waits on you), and an icon for the execution backend the session runs on (monitor for the local computer, slatted container for Docker, three boxes for Podman, cloud for a remote system). The relative age, branch and request details move to the row's tooltip and accessible description. The open or cursor row sits on a rounded selection fill, multi-selected rows carry an accent bar on their left edge, project headings are small and muted with the disclosure triangle after the name, and rows are taller. A session's backend is its own stored `execution_backend`, else the global one from the config (`Storage::session_backends`, `sessions_sidebar_state::backend_of`).
+- Changed: **slash-command reports are Markdown tables, and the transcript keeps
+  them as Markdown.** A reply that starts `From: /` is now stored as Markdown
+  source instead of being run through the `markdown -> HTML -> html2text` pass,
+  which flattened every table into a hand-drawn ASCII grid before any viewer
+  saw the `|`. The GUI's viewer lays the cells out itself, so those reports are
+  real tables that size their columns to their content; the one-shot CLI prints
+  the same text, where a `|`-table still reads as its source lines. The reports
+  converted are `/tools list`, `/toolchain list`, `/mcp` (both the server list
+  and the config/discovery report), `/skills` and `/skill list`, `/plugins
+  list`, `/triggers list`, `/team show` and `/team status`, `/router`, `/help`,
+  `/editlog show`, `/startup` and the config dump/report family.
+  `codemason_types::mdtable::cell` escapes every cell (a `|` becomes `\|`, a
+  newline or tab becomes a space), so a captured value - a version string, a
+  failure reason, a shell endpoint - cannot split its row, and a table is always
+  surrounded by blank lines so Markdown reads it as a table and not as a
+  paragraph.
+- Changed: the **Diff pane's toolbar** is one row of Material icon buttons and a
+  position readout, where it was six 11-point text buttons. The pane is about
+  **270 points wide** in the default layout, so `Previous file`, `Next file`,
+  `Previous hunk`, `Next hunk`, `Split` and `Reviewed` did not fit on one line:
+  they wrapped, and the last two landed on a row of their own, moving the diff
+  down a line that the reader's own window width decided. They are six 32-point
+  `material::icon_button::icon_button_dense` buttons in one row that fits, split
+  by a rule into the two groups they always were (step through the file, change
+  how it is shown), each naming its key in its hover text.
+- Changed: the Diff pane **says where you are**. `file 1 of 2` was the whole
+  readout, so a file with four hunks gave no sign that `]` had moved to the
+  second, third or fourth; the row now reads `hunk 2/4  file 1/2` at its right
+  end, and each part is left out when there is nothing to count against (one
+  file of one file says nothing, a one-hunk file has no hunk count).
+- Changed: the Diff pane's **step buttons are disabled at the ends**. `[` at the
+  first hunk, `p` at the first file and `n` at the last used to be live buttons
+  that did nothing when pressed; they are greyed out now, with `Previous hunk
+  ([): none that way` on hover, so a dead end looks like one before it is
+  pressed rather than like a press that failed.
+- Changed: the Diff pane's **key legend is gone**. `] [ hunk * n p file * v
+  layout * m reviewed (click the pane first)` was a ragged `*`-separated line
+  under the toolbar, giving a line of its own to the reader on every frame to
+  say something they need once. The keys are in the buttons' hover text now and
+  the pane is 14 points shorter.
+- Changed: the **MCP startup report** is a Markdown table, one row per server,
+  with `Server`, `Transport`, `Result` and `Detail` columns, where it was two
+  `[mcp]` lines per server. `Starting <id> (<transport>)` followed by
+  `Connected ... via <transport>`, so a run with four servers put eight lines in
+  the message window to say four things, and the second line of each pair
+  repeated the transport the first already named. The table says the transport
+  once, states the outcome once, and gives `Detail` the field that was otherwise
+  a separate sentence or missing altogether: the tool count for a connected
+  server, the failure reason for a failed one, and the command that fixes a
+  disabled (`` `/mcp connect <id>` ``) or unauthenticated (`` `/mcp` ``) one.
+  Every cell is escaped, so a `|` or a newline in a failure reason stays in its
+  own cell instead of splitting the row, and the report is surrounded by blank
+  lines so it renders as a table rather than as `|`-separated source.
+- Changed: the Diff pane's **header is one line**, whatever the path's length.
+  The path wrapped, so a set of files gave the header a different height for
+  each one and the toolbar under it jumped as the reader stepped through them;
+  it is truncated with an ellipsis and its whole text on hover, and the counts
+  and readout keep their room.
+- Changed: every service indicator in the GUI status bar and its `Details` popup (GCF, CDX, LOG, EDIT, TELE, AUTO, YOLO) is a dense Material status chip that turns its service on or off: a green check while the service is on and a red cross while it is off, and a click runs the service's own `/<command> on|off` (`/gcf`, `/codeindex`, `/alog`, `/editlog`, `/telemetry`, `/autopilot`, `/yolo`), so the change persists exactly as the slash command does. The `<NAME> [ok]` / `<NAME> [x]` text tags are gone. `AUTO` and `YOLO` use a caution tone (`error_container`); in the bar, the `AUTO` chip turns autopilot off with one click, and YOLO is the always-visible toggle left of the zoom slider (which calls `App::toggle_yolo`, as `Alt+Y` does), so the summary has no YOLO chip of its own. The `Details` popup stays open on a chip click (its button has a fixed id, so the AUTO and YOLO chips appearing before it do not close it), wraps its chips in a narrow window, and the bar is always one chip high so it no longer changes height when YOLO or autopilot turns on. A chip click keeps the prompt's draft, and the dense chips never take the keyboard focus, so Enter still goes to the prompt.
 
 ### Fixed
 
-- Fixed: `test_files::test_open_project_dialog_registers_the_folder_as_a_project` failed when the project name was long enough to wrap the `registered at` message before the path; the test now skips that whitespace.
+- Fixed: the Diff pane's empty state covered its own close button. `No diff
+  open. Click Open diff under an edit in the transcript.` is 342 points wide
+  and the pane is 270, and it was drawn inside the header beside the button:
+  it ran past the pane's edge and took the presses meant for the cross, so a
+  pane shown with nothing in it could not be closed at all. The header now
+  reads `No diff open` and the sentence gets a line of its own, where it wraps.
+- Fixed: the Diff pane has a **Close diff** button. It had no visible way out: the pane could only be closed from the dock tab's context menu or a middle click, so a reader who opened a diff was stuck with it. The cross sits at the right of the pane's header (a Material icon button, `material::icon_button`), takes its place before the file's path so the path wraps in the width left over, and hides the pane by clearing `App::diff_pane.shown`, as the dock's own Close does. It is drawn even when the pane has no file to show, so a pane shown with nothing in it can still be closed, and the files it held stay, so opening a diff again shows them.
+- Fixed: `test_open_project_dialog_registers_the_folder_as_a_project` failed in checkouts with a long path, because the transcript wraps `registered at` and the path onto two lines; the test now accepts any whitespace there.
 
 ## [1.0.171] - 2026-11-20
 

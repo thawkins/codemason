@@ -125,40 +125,37 @@ async fn test_tools_list_reports_the_fr030_total_and_every_name() {
         numbers[0]
     );
 
-    // Read every data row of every tool table in the message. The message window
-    // renders markdown to ASCII, so a ```text fence survives only as a leading
-    // backtick on the heading row and as a lone "`" line at the close. A tool table
-    // is the block under a heading that names all three columns - the family
-    // visibility table above it has only two, so the heading is what distinguishes
-    // them.
+    // Read every data row of the tool table. The reply is Markdown source: a
+    // header row naming all three columns, a `| --- |` delimiter row, then one
+    // line per tool. The family visibility table above it has only two
+    // columns, so the header row is what distinguishes them.
     let lines: Vec<&str> = rendered.lines().collect();
+    let header_index = lines
+        .iter()
+        .position(|line| {
+            let lower = line.to_lowercase();
+            line.trim_start().starts_with('|')
+                && lower.contains("tool")
+                && lower.contains("source")
+                && lower.contains("description")
+        })
+        .unwrap_or_else(|| panic!("FR-030: `/tools list` has no tool table header: {rendered}"));
+    // Skip the header row and its delimiter row.
     let mut listed: Vec<String> = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        let is_heading = lines[index].contains("name")
-            && lines[index].contains("source")
-            && lines[index].contains("description");
-        if !is_heading {
-            index += 1;
-            continue;
+    for line in &lines[header_index + 2..] {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            break;
         }
-        // Skip the heading and its underline.
-        index += 2;
-        while index < lines.len() {
-            let trimmed = lines[index].trim();
-            if trimmed.is_empty() || trimmed == "`" {
-                break;
-            }
-            let name = lines[index].split_whitespace().next().unwrap_or_default();
-            assert!(
-                !name.is_empty(),
-                "FR-030: `/tools list` rendered a row with no tool name: {:?}",
-                lines[index]
-            );
-            listed.push(name.to_string());
-            index += 1;
-        }
-        index += 1;
+        // `| name | source | description |` - the name is the first cell,
+        // un-escaped by `mdtable::cell` only for the `|`/newline characters, so
+        // a leading backtick or a trailing space cannot appear here.
+        let name = trimmed.split('|').nth(1).unwrap_or_default().trim();
+        assert!(
+            !name.is_empty(),
+            "FR-030: `/tools list` rendered a row with no tool name: {line:?}"
+        );
+        listed.push(name.to_string());
     }
 
     assert_eq!(

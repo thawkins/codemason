@@ -35,6 +35,8 @@ pub use self::md_worker::MdWorker;
 pub mod md_worker;
 
 mod connector;
+/// Markdown table construction for slash-command reports.
+pub use codemason_types::mdtable;
 mod model_favorites;
 pub use self::model_favorites::{
     FAVORITE_MODELS_KEY, RECENT_MODELS_KEY, RECENT_MODELS_MAX, RecentModel,

@@ -196,30 +196,34 @@ impl App {
         None
     }
 
-    /// Render a markdown string to ASCII for the chat log, preserving research
-    /// slash-command preformatted blocks and passing through plain runtime text
-    /// unchanged. Otherwise runs the markdown->HTML->text pipeline and normalizes
-    /// ASCII tables.
-    pub fn render_markdown_to_ascii(&mut self, text: &str) -> String {
-        if let Some(bypassed) = Self::bypass_research_text(text) {
-            return bypassed;
+    /// Prepare a message for the transcript, preserving research slash-command
+    /// preformatted blocks and storing every other reply as written.
+    ///
+    /// A `From: /` reply is kept as **Markdown source**, not flattened: the GUI
+    /// lays a message out with a CommonMark viewer, which is the only place a
+    /// slash-command table (`| Server | Transport | ... |`) can become a real
+    /// table, and running the text through the `html2text` pass would bake the
+    /// columns into fixed-width padding before any viewer saw the `|`. The
+    /// one-shot CLI prints this same text, so a table it cannot lay out still
+    /// reads as its `|` source lines.
+    ///
+    /// A reply that is *already* preformatted (a research code block, the
+    /// research progress log) is extracted here instead: those blocks carry
+    /// column layout that Markdown would reflow.
+    pub fn prepare_transcript_text(&mut self, text: &str) -> String {
+        match Self::bypass_research_text(text) {
+            Some(bypassed) => bypassed,
+            None => sanitize_for_display(text),
         }
-        // Only convert markdown-like slash output; preserve plain runtime text.
-        if !text.starts_with("From: /") {
-            return sanitize_for_display(text);
-        }
-
-        self.render_markdown_pipeline(text)
     }
 
     /// Render a markdown string unconditionally through the markdown->HTML->text
     /// pipeline.
     ///
-    /// Unlike [`render_markdown_to_ascii`], this does NOT require a `From: /`
-    /// prefix.  Use this for standalone messages that contain markdown formatting
-    /// (e.g. `agent_complete` summaries with headers, bullet points, bold text)
-    /// so they are rendered with proper visual structure instead of appearing
-    /// as a wall of plain text.
+    /// Use this for standalone messages that must arrive as pre-drawn text
+    /// rather than Markdown source (e.g. a summary whose shape a code block
+    /// already fixes). Slash-command replies are NOT rendered this way - see
+    /// [`prepare_transcript_text`].
     ///
     /// Research code blocks and research progress lines are still bypassed.
     pub fn render_markdown_unconditionally(&mut self, text: &str) -> String {
@@ -2051,44 +2055,29 @@ impl App {
     /// tool from the model, so the listing and the tool definitions the agent
     /// sends are the same set.
     pub(crate) fn render_tool_list(&self) -> String {
-        // The message window's markdown pipeline joins a heading line onto the
-        // `From: /tools` line (paragraph soft breaks do not survive html2text),
-        // so the blank line after the header keeps `Tools (N total):` on a line
-        // of its own. The table below follows the same rule.
         let defs = self.session_processor.tool_registry.definitions();
         if defs.is_empty() {
             return String::from("From: /tools\n\nNo tools are registered.\n");
         }
-        let mut output = String::from("From: /tools\n\n");
-        output.push_str(&format!("Tools ({} total):\n\n", defs.len()));
-        output.push_str(&format!(
-            "```text\n{:<56} {:<24} description\n{:<56} {:<24} -----------\n",
-            "name", "source", "----", "------"
-        ));
-        for def in defs.iter() {
-            // Name (56) + spacer + source (24) + spacer = 82 columns of the
-            // message window's 118 inner columns; the description is
-            // hard-truncated to 30 so no row can reach the right border.
-            output.push_str(&self.tool_row(
-                &self.session_processor.tool_registry,
-                &def.name,
-                &def.description,
-            ));
-        }
-        output.push_str("```\n");
-        output
-    }
-
-    /// Render one `/tools` table row: name (56), source (24), description (30).
-    fn tool_row(
-        &self,
-        registry: &codemason_agent::tool::ToolRegistry,
-        name: &str,
-        description: &str,
-    ) -> String {
-        let desc = codemason_types::truncate_bytes_no_ellipsis(description, 30);
-        let source = self.tool_source(registry, name);
-        format!("{name:<56} {source:<24} {desc}\n")
+        // A Markdown table, so the descriptions line up in the GUI's Markdown
+        // viewer instead of running together as one paragraph.
+        let rows: Vec<Vec<String>> = defs
+            .iter()
+            .map(|def| {
+                vec![
+                    codemason_types::mdtable::cell(&def.name),
+                    codemason_types::mdtable::cell(
+                        &self.tool_source(&self.session_processor.tool_registry, &def.name),
+                    ),
+                    codemason_types::mdtable::cell(&def.description),
+                ]
+            })
+            .collect();
+        format!(
+            "From: /tools\n\nTools ({} total):\n\n{}",
+            defs.len(),
+            codemason_types::mdtable::table(&["Tool", "Source", "Description"], rows)
+        )
     }
 
     /// Resolve where a registered tool is provided from, for the `/tools`

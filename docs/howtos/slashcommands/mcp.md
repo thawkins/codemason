@@ -99,12 +99,19 @@ Bare form (`From: /mcp`, `MCP Servers:`):
   `/mcp discover` to scan for available servers and then adding them to the
   `mcp` section of `codemason.json` to activate them; enabled plugins that declare
   an `mcpServers` section are bridged automatically.
-- Otherwise one line per server: the server id padded to a fixed width, its
-  `enabled yes/no` state, and a status glyph (rendered as an emoji in the
-  terminal - described here as connected, disabled, needs auth, or failed with
-  the error text), followed by `    tools: <n>` (the number of tools the server
-  advertises, also printed for a server with none).
+- Otherwise a Markdown table with one row per server and the columns
+  `Server`, `Enabled`, `Status`, `Transport`, `Endpoint` and `Tools`: the
+  `Enabled` column is `yes`/`no` from the persisted enable ledger, `Status` is
+  one of connected, disabled, needs auth, or failed with the error text,
+  `Transport` is the declared wire protocol, `Endpoint` is the full launch
+  invocation for a stdio server or its URL for `sse`/`http`, and `Tools` is the
+  number the server advertises (printed even when it is zero). Every cell is
+  escaped, so an endpoint carrying a pipe stays in its own cell.
 - A summary line: `<connected>/<total> server(s) connected`.
+- A `Defined in:` block naming the file each server is declared in (keyed by id
+  rather than added as a seventh column, which would overflow the table).
+- A `Managed by:` block for bridged servers, naming the plugin or connector that
+  owns the definition.
 - A footer listing the subcommands:
   `/mcp config`, `/mcp discover`, `/mcp connect <id>`, `/mcp disconnect <id>`.
 

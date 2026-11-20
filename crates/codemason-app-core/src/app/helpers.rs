@@ -172,9 +172,12 @@ pub(crate) fn parse_alog_run_id_yes(
     let run_id = parts.iter().find(|p| **p != "--yes").copied();
 
     let Some(run_id) = run_id else {
+        // The placeholder is backticked: the transcript is Markdown, so a bare
+        // `<run-id>` reads as an HTML tag and a viewer that honours inline HTML
+        // mangles it. Code spans keep it literal text.
         append(&format!(
             "From: /alog {subcmd}\n\n\
-             \u{26a0} Missing <run-id> argument.\n\n\
+             \u{26a0} Missing `<run-id>` argument.\n\n\
              Usage: `/alog {subcmd} <run-id> --yes`"
         ));
         return None;

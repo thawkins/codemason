@@ -10,7 +10,9 @@ use codemason_agent::message::{Message, MessagePart, Role, ToolCallState, ToolCa
 use codemason_app_core::app::App;
 use codemason_app_core::transcript_prefs::{ThinkingDisplay, Verbosity};
 use codemason_gui::palette::palette_for;
-use codemason_gui::panels::messages::{ACTIVITY_RUNNING_LABEL, MessagesView, THINKING_LABEL};
+use codemason_gui::panels::messages::{
+    ACTIVITY_RUNNING_LABEL, MessagesView, THINKING_LABEL, collapse_all,
+};
 use egui::accesskit::Role as A11yRole;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -257,4 +259,72 @@ async fn test_reasoning_only_groups_follow_the_thinking_display() {
             .is_none()
     );
     harness.get_by_label("Answer.");
+}
+
+#[tokio::test]
+async fn test_collapse_all_closes_every_open_row() {
+    let mut app = support::make_app();
+    app.session.messages = vec![
+        reply(vec![
+            call("read", "c1", ToolCallStatus::Completed),
+            call("Bash", "c2", ToolCallStatus::Completed),
+        ]),
+        reply(vec![call("Grep", "c3", ToolCallStatus::Completed)]),
+    ];
+    let mut harness = harness(app);
+    harness.run();
+    let first = "Read 1 file, ran 1 command";
+    let second = "Ran 1 search";
+    for label in [first, second] {
+        harness
+            .get_by_role_and_label(A11yRole::Button, label)
+            .click();
+        harness.run();
+    }
+    assert_eq!(expanded(&harness, first), Some(true));
+    assert_eq!(expanded(&harness, second), Some(true));
+
+    collapse_all(&harness.ctx);
+    harness.run();
+    assert_eq!(expanded(&harness, first), Some(false));
+    assert_eq!(expanded(&harness, second), Some(false));
+}
+
+#[tokio::test]
+async fn test_collapse_all_leaves_a_row_opened_afterwards_open() {
+    let mut app = support::make_app();
+    app.session.messages = vec![reply(vec![call("read", "c1", ToolCallStatus::Completed)])];
+    let mut harness = harness(app);
+    harness.run();
+    let label = "Read 1 file";
+    collapse_all(&harness.ctx);
+    harness.run();
+    assert_eq!(expanded(&harness, label), Some(false));
+
+    // A row opened after the collapse-all stays open.
+    harness
+        .get_by_role_and_label(A11yRole::Button, label)
+        .click();
+    harness.run();
+    assert_eq!(expanded(&harness, label), Some(true));
+}
+
+#[tokio::test]
+async fn test_collapse_all_closes_thinking_rows() {
+    let mut app = support::make_app();
+    app.transcript_prefs.verbosity = Verbosity::High;
+    app.session.messages = vec![thinking_reply()];
+    let mut harness = harness(app);
+    harness.run();
+    // Collapsed by default once the reply is complete.
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
+    harness
+        .get_by_role_and_label(A11yRole::Button, THINKING_LABEL)
+        .click();
+    harness.run();
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
+
+    collapse_all(&harness.ctx);
+    harness.run();
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
 }

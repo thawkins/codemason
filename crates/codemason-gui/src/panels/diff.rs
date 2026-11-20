@@ -7,12 +7,24 @@
 //! (`App::diff_pane`, [`diff_pane_ui`]) on that file.
 //!
 //! The Diff pane shows one file at a time, unified or split (old on the
-//! left, new on the right), with buttons for the previous and next hunk and
-//! file, the layout and the reviewed mark. A file marked reviewed is drawn
-//! collapsed to its header. While the pane holds the keyboard focus (a click
-//! in it), `]` and `[` move between hunks, `n` and `p` between files, `v`
-//! switches the layout and `m` toggles the reviewed mark
-//! ([`take_pane_keys`]); everywhere else those keys type as usual.
+//! left, new on the right). Its header is the file's path, its added and
+//! removed counts, and a [`CLOSE_DIFF`] button that hides the pane
+//! (`App::diff_pane.shown`, as the dock's own Close does); one row of
+//! 32-point icon buttons under it steps through the files and the hunks and
+//! switches the layout and the reviewed mark, with a readout of where the
+//! reader is at its right end. A file marked reviewed is drawn collapsed to
+//! its header. While the pane holds the keyboard focus (a click in it), `]`
+//! and `[` move between hunks, `n` and `p` between files, `v` switches the
+//! layout and `m` toggles the reviewed mark ([`take_pane_keys`]); everywhere
+//! else those keys type as usual.
+//!
+//! The pane is narrow (the default layout gives it the right column, about
+//! 270 points), so it is laid out to stay narrow: the header is one line
+//! whatever the path's length, the controls are icon buttons that fit that
+//! width in one row, and nothing is drawn beside the header that the path
+//! would then be squeezed out of. The keys are named in the buttons' hover
+//! text rather than in a legend line of their own, which cost height on
+//! every frame to say something the reader needs once.
 //!
 //! Lines are drawn in the theme's `diff.*` colours: added and removed rows
 //! on their backgrounds, line numbers and hunk headers in
@@ -22,9 +34,13 @@
 //! state), [`crate::palette`] and [`crate::metrics`].
 
 use codemason_app_core::app::App;
-use codemason_app_core::diff_view::{DiffHunk, DiffLayout, DiffLine, DiffLineKind, FileDiff};
-use egui::{Id, RichText, Role, Sense, WidgetInfo};
+use codemason_app_core::diff_view::{
+    DiffHunk, DiffLayout, DiffLine, DiffLineKind, DiffPaneState, FileDiff,
+};
+use egui::{Id, RichText, Role, Sense, Stroke, Vec2, WidgetInfo};
 
+use crate::icons::Icon;
+use crate::material::icon_button::{DENSE_SIZE, IconButtonKind, icon_button_dense};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 
@@ -47,6 +63,15 @@ pub const SPLIT: &str = "Split";
 /// See [`PREV_HUNK`].
 pub const MARK_REVIEWED: &str = "Reviewed";
 
+/// The Diff pane's close button: it hides the pane.
+pub const CLOSE_DIFF: &str = "Close diff";
+
+/// The Diff pane's header when it has no file to show.
+pub const NO_DIFF_OPEN: &str = "No diff open";
+
+/// What an empty Diff pane says to do about it.
+pub const NO_DIFF_HINT: &str = "Click Open diff under an edit in the transcript.";
+
 /// What a file marked reviewed shows instead of its hunks.
 pub const REVIEWED_NOTE: &str = "Marked reviewed; press m or Reviewed to show it again";
 
@@ -68,6 +93,100 @@ pub fn pane_focus_id() -> Id {
 /// take an Enter meant for the prompt.
 fn button(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).size(text_size::SMALL)).sense(Sense::CLICK)
+}
+
+/// One of the pane's four step buttons: its icon, whether there is anything
+/// that way, and its name and key in the hover text.
+///
+/// A button with nothing that way is drawn disabled rather than live: a
+/// press at the first hunk must not look like a press that did nothing. Its
+/// hover text still shows, which [`egui::Response::on_disabled_hover_text`]
+/// is for, so the reader learns why the button is out.
+///
+/// # Returns
+///
+/// Whether the button was pressed.
+fn nav(ui: &mut egui::Ui, palette: &Palette, active: bool, icon: Icon, label: &str) -> bool {
+    let key = match label {
+        PREV_FILE => "p",
+        NEXT_FILE => "n",
+        PREV_HUNK => "[",
+        NEXT_HUNK => "]",
+        _ => "",
+    };
+    if active {
+        icon_button_dense(ui, palette, IconButtonKind::Standard, icon, label, None)
+            .on_hover_text(format!("{label} ({key})"))
+            .clicked()
+    } else {
+        ui.add_enabled_ui(false, |ui| {
+            icon_button_dense(ui, palette, IconButtonKind::Standard, icon, label, None)
+        })
+        .inner
+        .on_disabled_hover_text(format!("{label} ({key}): none that way"))
+        .clicked()
+    }
+}
+
+/// A vertical rule between two groups of a toolbar row, one text line high.
+fn divider(ui: &mut egui::Ui, palette: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, text_size::BODY), Sense::hover());
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        Stroke::new(1.0, palette.border),
+    );
+}
+
+/// Where the reader is: the hunk of the file, and the file of the set.
+///
+/// The pane used to say only `file 2 of 5`, so a file with four hunks gave
+/// no sign that a press of `]` had moved to hunks two, three or four. Each
+/// part is left out when there is nothing to count against: one file of one
+/// file says nothing, and the path gets its width back instead. The counts
+/// are written `1/3` rather than `1 of 3` because the pane is narrow and the
+/// reader already knows what the number is counting.
+fn position(ui: &mut egui::Ui, pane: &DiffPaneState, hunks: usize, palette: &Palette) {
+    let mut parts = Vec::new();
+    if hunks > 1 {
+        parts.push(format!("hunk {}/{}", pane.hunk.min(hunks - 1) + 1, hunks));
+    }
+    if pane.files.len() > 1 {
+        parts.push(format!("file {}/{}", pane.selected + 1, pane.files.len()));
+    }
+    if parts.is_empty() {
+        return;
+    }
+    ui.label(
+        RichText::new(parts.join("  "))
+            .size(text_size::SMALL)
+            .color(palette.muted),
+    );
+}
+
+/// `+a -r`, or `+a` and [`WHOLE_FILE_NOTE`]'s short form, as small text: the
+/// header's own line, beside its path rather than a line of its own.
+///
+/// The two counts are one layout job, not two labels, so they keep their
+/// order wherever the header lays them out (a right-to-left row would read
+/// `-r +a` if they were separate items) and the pair can never be split
+/// across the header's width.
+fn pane_counts(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) {
+    let font = egui::FontId::proportional(text_size::SMALL);
+    let mut job = egui::text::LayoutJob::default();
+    let mut push = |text: &str, colour: egui::Color32| {
+        job.append(text, 0.0, egui::TextFormat::simple(font.clone(), colour));
+    };
+    push(&format!("+{}", diff.added), palette.diff_added);
+    if diff.whole_file {
+        push(" whole file", palette.muted);
+    } else {
+        push(&format!(" -{}", diff.removed), palette.diff_removed);
+    }
+    let response = ui.add(egui::Label::new(job));
+    if diff.whole_file {
+        response.on_hover_text(WHOLE_FILE_NOTE);
+    }
 }
 
 /// What a whole-file write shows instead of a removed count: the file's
@@ -282,11 +401,10 @@ pub fn full_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) {
 pub const TRUNCATED_NOTE: &str = "The diff is cut short; it is too long to show whole.";
 
 /// What a Diff pane key does to the pane state.
-type PaneAction = fn(&mut codemason_app_core::diff_view::DiffPaneState);
+type PaneAction = fn(&mut DiffPaneState);
 
 /// The action of a Diff pane key, if `key` is one.
 fn pane_key_action(key: egui::Key) -> Option<PaneAction> {
-    use codemason_app_core::diff_view::DiffPaneState;
     Some(match key {
         egui::Key::CloseBracket => DiffPaneState::next_hunk,
         egui::Key::OpenBracket => DiffPaneState::prev_hunk,
@@ -357,55 +475,134 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     }
     focus.widget_info(|| WidgetInfo::labeled(Role::Pane, true, DIFF_PANE_LABEL));
     let pane = &mut app.diff_pane;
+    let hunks = pane.current().map_or(0, |file| file.hunks.len());
+    // Laid out from the right first: the close button and the counts take
+    // their width, and the path is what gives way. Hiding the pane is the
+    // dock's own Close (its tab's context menu, or a middle click) done here,
+    // where the reader can see it.
+    let mut closed = false;
+    let (_, ()) = egui::Sides::new().shrink_left().height(DENSE_SIZE).show(
+        ui,
+        |ui| {
+            let Some(file) = pane.files.get(pane.selected) else {
+                ui.label(
+                    RichText::new(NO_DIFF_OPEN)
+                        .size(text_size::SMALL)
+                        .color(palette.muted),
+                );
+                return;
+            };
+            // Whatever the path does not fit in is truncated with an
+            // ellipsis and its whole text in the hover, so the header is one
+            // line for every file: a wrapped path would give the header a
+            // different height per file and make the toolbar under it jump as
+            // the reader stepped through a set.
+            ui.add(
+                egui::Label::new(RichText::new(&file.path).monospace().strong())
+                    .truncate()
+                    .sense(Sense::hover()),
+            )
+            .on_hover_text(&file.path);
+        },
+        |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                closed = icon_button_dense(
+                    ui,
+                    palette,
+                    IconButtonKind::Standard,
+                    Icon::Cross,
+                    CLOSE_DIFF,
+                    None,
+                )
+                .clicked();
+                if let Some(file) = pane.files.get(pane.selected) {
+                    pane_counts(ui, file, palette);
+                }
+            });
+        },
+    );
+    if closed {
+        pane.shown = false;
+        return;
+    }
     let Some(file) = pane.files.get(pane.selected).cloned() else {
-        ui.weak("No diff open. Click Open diff under an edit in the transcript.");
+        // On a line of its own, where it wraps to the pane's width: beside
+        // the header's close button it would have been laid out past the
+        // pane's edge and covered the button.
+        ui.label(
+            RichText::new(NO_DIFF_HINT)
+                .size(text_size::SMALL)
+                .color(palette.muted),
+        );
         return;
     };
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(&file.path).monospace().strong());
-        counts(ui, &file, palette);
-        ui.label(
-            RichText::new(format!(
-                "file {} of {}",
-                pane.selected + 1,
-                pane.files.len()
-            ))
-            .color(palette.muted),
-        );
-    });
-    ui.horizontal_wrapped(|ui| {
-        if ui.add(button(PREV_FILE)).clicked() {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = space::XS;
+        if nav(ui, palette, pane.selected > 0, Icon::ChevronLeft, PREV_FILE) {
             pane.prev_file();
         }
-        if ui.add(button(NEXT_FILE)).clicked() {
+        if nav(
+            ui,
+            palette,
+            pane.selected + 1 < pane.files.len(),
+            Icon::ChevronRight,
+            NEXT_FILE,
+        ) {
             pane.next_file();
         }
-        if ui.add(button(PREV_HUNK)).clicked() {
+        if nav(ui, palette, pane.hunk > 0, Icon::ArrowUpward, PREV_HUNK) {
             pane.prev_hunk();
         }
-        if ui.add(button(NEXT_HUNK)).clicked() {
+        if nav(
+            ui,
+            palette,
+            pane.hunk + 1 < hunks,
+            Icon::ArrowDownward,
+            NEXT_HUNK,
+        ) {
             pane.next_hunk();
         }
+        // Stepping through the file, and changing how it is shown: two
+        // groups, so a press meant for the next hunk is not a press on the
+        // layout.
+        divider(ui, palette);
         let split = pane.layout == DiffLayout::Split;
-        if ui.add(button(SPLIT).selected(split)).clicked() {
+        let toggled = icon_button_dense(
+            ui,
+            palette,
+            IconButtonKind::Standard,
+            Icon::VerticalSplit,
+            SPLIT,
+            Some(split),
+        );
+        if toggled.clicked() {
             pane.toggle_layout();
         }
         let reviewed = pane.is_reviewed(&file);
-        if ui.add(button(MARK_REVIEWED).selected(reviewed)).clicked() {
+        let mark = icon_button_dense(
+            ui,
+            palette,
+            IconButtonKind::Standard,
+            Icon::Check,
+            MARK_REVIEWED,
+            Some(reviewed),
+        );
+        if mark.clicked() {
             pane.toggle_reviewed();
         }
+        // At the far right of the row: what the four step buttons are
+        // stepping through, read after the press rather than before it, and
+        // out of the header's narrower width.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            position(ui, pane, hunks, palette);
+        });
     });
-    ui.weak("] [ hunk * n p file * v layout * m reviewed (click the pane first)");
-    ui.add_space(space::XS);
     if pane.is_reviewed(&file) {
         ui.label(RichText::new(REVIEWED_NOTE).color(palette.muted));
         return;
     }
     if file.truncated {
-        ui.label(
-            RichText::new("The diff is cut short; it is too long to show whole.")
-                .color(palette.warning),
-        );
+        ui.label(RichText::new(TRUNCATED_NOTE).color(palette.warning));
     }
     let hunk_index = pane.hunk.min(file.hunks.len().saturating_sub(1));
     let layout = pane.layout;

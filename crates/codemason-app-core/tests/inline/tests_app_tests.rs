@@ -412,19 +412,19 @@ pub(crate) fn test_try_extract_research_code_block_returns_none_for_non_slash_te
 }
 
 #[test]
-pub(crate) fn test_render_markdown_to_ascii_bypasses_research_code_blocks() {
+pub(crate) fn test_prepare_transcript_text_bypasses_research_code_blocks() {
     let mut app = test_app();
     let text = "From: /research show\n\n```\nResearch item: x\n```";
-    let rendered = app.render_markdown_to_ascii(text);
+    let rendered = app.prepare_transcript_text(text);
     assert!(rendered.contains("Research item: x"));
     assert!(!rendered.contains("From: /research show\nFrom:"));
 }
 
 #[test]
-pub(crate) fn test_render_markdown_to_ascii_preserves_skills_table_lines() {
+pub(crate) fn test_prepare_transcript_text_preserves_skills_table_lines() {
     let mut app = test_app();
     let text = "From: /skills\nRegistered Skills:\n\n```\n/simplify\n  scope: project  access: both\n  Reviews recently changed files\n\n/debug\n  scope: personal  access: both\n  Troubleshoots current session\n\n2 skill(s) registered\n```\n";
-    let rendered = app.render_markdown_to_ascii(text);
+    let rendered = app.prepare_transcript_text(text);
     // Each skill line must survive the markdown pipeline intact.
     assert!(rendered.contains("\n/simplify"));
     assert!(rendered.contains("\n/debug"));
@@ -436,7 +436,7 @@ pub(crate) fn test_render_markdown_to_ascii_preserves_skills_table_lines() {
 }
 
 #[test]
-pub(crate) fn test_render_markdown_to_ascii_preserves_websearch_help_lines() {
+pub(crate) fn test_prepare_transcript_text_preserves_websearch_help_lines() {
     let mut app = test_app();
     let text = "From: /websearch\n\
         Web search engine diagnostics.\n\n\
@@ -447,7 +447,7 @@ pub(crate) fn test_render_markdown_to_ascii_preserves_websearch_help_lines() {
           - run a live diagnostic query on each configured engine and report counts\n\n\
         * `/websearch help`\n\
           - show this help";
-    let rendered = app.render_markdown_to_ascii(text);
+    let rendered = app.prepare_transcript_text(text);
     // The markdown renderer collapses list items to single lines; the key
     // requirement is that each command appears on its own rendered line.
     assert!(
@@ -469,14 +469,14 @@ pub(crate) fn test_render_markdown_to_ascii_preserves_websearch_help_lines() {
 }
 
 #[test]
-pub(crate) fn test_render_markdown_to_ascii_preserves_startup_table_lines() {
+pub(crate) fn test_prepare_transcript_text_preserves_startup_table_lines() {
     use codemason_agent::StartupTimings;
     let mut app = test_app();
     let mut timings = StartupTimings::new();
     timings.record("CLI parse", std::time::Duration::from_millis(5));
     timings.record("Config load", std::time::Duration::from_millis(12));
     let text = timings.format_report();
-    let rendered = app.render_markdown_to_ascii(&text);
+    let rendered = app.prepare_transcript_text(&text);
     // The table header and each stage row must survive on their own lines.
     assert!(
         rendered.contains("Stage"),
@@ -506,10 +506,10 @@ pub(crate) fn test_render_markdown_to_ascii_preserves_startup_table_lines() {
 }
 
 #[test]
-pub(crate) fn test_render_markdown_to_ascii_preserves_help_command_lines() {
+pub(crate) fn test_prepare_transcript_text_preserves_help_command_lines() {
     let mut app = test_app();
     let text = "From: /help\nAvailable commands:\n\n```\n  /about            Show info about codemason\n  /quit             Exit the TUI\n\nSkills:\n  /simplify         Reviews recently changed files\n  /debug            Troubleshoots current session\n```\n";
-    let rendered = app.render_markdown_to_ascii(text);
+    let rendered = app.prepare_transcript_text(text);
     // Each command must survive the markdown pipeline intact.
     assert!(rendered.contains("\n  /about"));
     assert!(rendered.contains("\n  /quit"));

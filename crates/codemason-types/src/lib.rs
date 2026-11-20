@@ -26,6 +26,8 @@ pub mod guard;
 pub mod html;
 pub mod id;
 pub mod llm;
+/// Markdown table construction, so a report lines up in a Markdown window.
+pub mod mdtable;
 pub mod message;
 pub mod panic_guard;
 pub mod permission;
