@@ -1483,6 +1483,18 @@ impl App {
                     // focused teammate's output view can be read while the user
                     // keeps talking to the primary agent; a teammate is reached
                     // only through `/team message <name> <text>`.
+                    // A running sub-agent takes the message into its current
+                    // run, so it is neither queued nor held for compaction.
+                    if self
+                        .session
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|id| self.active_subagent_task(id).is_some())
+                    {
+                        let image_paths = std::mem::take(&mut self.session.pending_attachments);
+                        self.dispatch_user_message(text, image_paths);
+                        return;
+                    }
                     // Block sending if no provider/model is configured
                     if self.configured_provider.is_none() {
                         self.status =

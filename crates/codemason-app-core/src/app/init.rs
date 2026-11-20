@@ -415,6 +415,8 @@ impl App {
             last_step_per_session: HashMap::new(),
             substep_counter_per_session: HashMap::new(),
             active_tasks: Vec::new(),
+            subagent_parents: HashMap::new(),
+            finished_subagent_views: Vec::new(),
             agents_history: VecDeque::new(),
             agents_history_cap: app_config.effective_agents_completed_history(),
             tui_event_lag: Arc::new(std::sync::atomic::AtomicU64::new(0)),

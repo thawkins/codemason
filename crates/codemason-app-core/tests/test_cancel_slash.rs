@@ -327,3 +327,30 @@ async fn cancel_help_and_the_empty_prefix_guard_are_unchanged() {
         "[warn] Please provide a task ID prefix: /cancel <id>"
     );
 }
+
+/// Enter in a focused running sub-agent goes to that agent's inbox, even
+/// while the view is busy: it is not parked in the input queue until the run
+/// ends. (No agent loop runs here, so the inbox refuses it and says so.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enter_in_a_running_subagent_targets_its_inbox_not_the_queue() {
+    use crate::term_events::CrosstermAppExt;
+    use crate::term_events::{KeyCode, KeyEvent, KeyModifiers};
+    let (mut harness, _manager) = app_with_registry();
+    let app = &mut harness.3;
+    let task = task_entry("t1", "explore", TaskStatus::Running);
+    app.session.session_id = Some(task.child_session_id.clone());
+    app.active_tasks.push(task);
+    app.session.is_processing = true;
+    app.session.input = "also check the README".to_string();
+    app.session.input_cursor = app.session.input.chars().count();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await;
+
+    assert_eq!(app.input_queue_len(), 0, "the message was queued");
+    assert!(
+        app.status.contains("no running sub-agent loop"),
+        "status: {}",
+        app.status
+    );
+}

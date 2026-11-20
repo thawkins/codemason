@@ -2569,6 +2569,10 @@ impl SessionProcessor {
         // confirmed under (by the next provider report) before auto-compaction
         // re-arms within this turn.
         let mut rearm_below_threshold: Option<usize> = None;
+        // A sub-agent running here can now take messages from the user.
+        if let Some(manager) = self.agent_manager.get() {
+            manager.open_inbox(session_id);
+        }
         loop {
             // T-008 (FR-010, FR-013, FR-014, FR-017): the stop-flag guard.
             // No stage of this iteration may run once the loop's stop flag is
@@ -2606,6 +2610,11 @@ impl SessionProcessor {
             // call or tool execution in progress when the request lands
             // finishes first.
             self.wait_while_suspended(session_id, &cancel_flag).await;
+            // Messages the user typed into this running sub-agent's session
+            // join the conversation here, between steps, where the tool
+            // results of the previous step are already in place.
+            self.deliver_user_inbox(session_id, &mut chat_messages)
+                .await;
             if let Some(tracker) = loop_tracker.as_mut() {
                 if self
                     .begin_loop_step(session_id, &turn, total_start, tracker)
@@ -2901,6 +2910,22 @@ impl SessionProcessor {
             // No tool calls - the loop ends here. The agent's text response
             // is the final answer for this turn.
             if llm_result.tool_calls.is_empty() {
+                // The user wrote to this sub-agent while it was answering:
+                // keep the answer, then continue so the next step reads the
+                // message instead of ending the run without it.
+                if self
+                    .agent_manager
+                    .get()
+                    .is_some_and(|m| m.has_inbox(session_id))
+                {
+                    if !llm_result.text_buffer.is_empty() {
+                        Arc::make_mut(&mut chat_messages).push(ChatMessage {
+                            role: "assistant".to_string(),
+                            content: ChatContent::Text(llm_result.text_buffer.clone()),
+                        });
+                    }
+                    continue;
+                }
                 // Sub-agent premature-termination guard: when a sub-agent that
                 // was actively calling tools (step > 1 implies prior tool-use
                 // steps, otherwise the loop would have broken earlier) produces
@@ -4363,6 +4388,35 @@ impl SessionProcessor {
     /// Replace a sub-agent's short narration with a one-shot nudge asking
     /// for its findings report: drop the narration from `assistant_parts`,
     /// echo it into the history, and append the nudge as a user turn.
+    /// Deliver the user messages queued for this sub-agent session
+    /// ([`crate::task::AgentManager::send_to_session`]): each one is appended
+    /// to the in-flight conversation and stored as a user message so the
+    /// transcript keeps it. Sessions not run by the agent manager have no
+    /// inbox and are a no-op.
+    async fn deliver_user_inbox(
+        &self,
+        session_id: &str,
+        chat_messages: &mut std::sync::Arc<Vec<ChatMessage>>,
+    ) {
+        let Some(manager) = self.agent_manager.get() else {
+            return;
+        };
+        for text in manager.take_inbox(session_id) {
+            Arc::make_mut(chat_messages).push(ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text(text.clone()),
+            });
+            let msg = Message::user_text(session_id, &text);
+            if let Err(e) = self.storage_op(move |s| s.create_message(&msg)).await {
+                tracing::warn!(session_id, error = %e, "sub-agent inbox message not stored");
+            }
+            tracing::info!(
+                session_id,
+                "delivered a user message to the running sub-agent"
+            );
+        }
+    }
+
     fn inject_subagent_summary_nudge(
         &self,
         session_id: &str,
