@@ -1301,22 +1301,40 @@ impl AgentManager {
             .map(|flag| Arc::clone(flag.value()))
     }
 
+    /// Open the inbox of the sub-agent running in `child_session_id`. Called
+    /// by the agent loop when it starts, so only children whose turns run
+    /// through that loop (not ACP- or remote-backed ones) accept messages.
+    /// Sessions not spawned by this manager are ignored.
+    pub fn open_inbox(&self, child_session_id: &str) {
+        if self.suspend_flags.contains_key(child_session_id) {
+            self.inboxes
+                .entry(child_session_id.to_string())
+                .or_default();
+        }
+    }
+
     /// Queue a user message for the running sub-agent whose child session is
     /// `child_session_id`; the agent loop delivers it at its next inter-step
     /// safe point (or before it would end the turn).
     ///
     /// # Errors
     ///
-    /// Fails when no running or suspended sub-agent owns that session.
+    /// Fails when no sub-agent loop is running in that session (none was
+    /// spawned there, it has finished, or its backend has no agent loop).
     pub fn send_to_session(&self, child_session_id: &str, text: &str) -> anyhow::Result<()> {
-        if !self.suspend_flags.contains_key(child_session_id) {
-            anyhow::bail!("no running sub-agent for session '{child_session_id}'");
-        }
-        self.inboxes
-            .entry(child_session_id.to_string())
-            .or_default()
-            .push(text.to_string());
+        let Some(mut queued) = self.inboxes.get_mut(child_session_id) else {
+            anyhow::bail!("no running sub-agent loop accepts messages in '{child_session_id}'");
+        };
+        queued.push(text.to_string());
         Ok(())
+    }
+
+    /// The cancel flag of the running task `task_id`, which stops its turn
+    /// when set; `None` once the task has finished.
+    pub fn cancel_flag_for_task(&self, task_id: &str) -> Option<Arc<AtomicBool>> {
+        self.cancel_flags
+            .get(task_id)
+            .map(|flag| Arc::clone(flag.value()))
     }
 
     /// Whether user messages are waiting for the sub-agent in
@@ -1331,8 +1349,8 @@ impl AgentManager {
     /// `child_session_id`, oldest first; empty for sessions with none.
     pub fn take_inbox(&self, child_session_id: &str) -> Vec<String> {
         self.inboxes
-            .remove(child_session_id)
-            .map(|(_, queued)| queued)
+            .get_mut(child_session_id)
+            .map(|mut queued| std::mem::take(&mut *queued))
             .unwrap_or_default()
     }
 

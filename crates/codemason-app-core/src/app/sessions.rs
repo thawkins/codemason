@@ -244,6 +244,47 @@ impl App {
         if let Some(session_id) = finished_reply {
             self.auto_title(&session_id);
         }
+        self.close_finished_subagent_views();
+    }
+
+    /// Closes the parked views of sub-agents that finished since the last
+    /// call. A focused one stays open until the user moves away from it.
+    pub(crate) fn close_finished_subagent_views(&mut self) {
+        for id in std::mem::take(&mut self.finished_subagent_views) {
+            // A focused one that never saw its run end is idle now.
+            if self.session.session_id.as_deref() == Some(id.as_str()) {
+                self.session.is_processing = false;
+                self.session.cancel_flag = None;
+            }
+            if let Some(index) = self.background.position(&id) {
+                self.background.remove(index);
+                self.sidebar.dirty = true;
+            }
+        }
+    }
+
+    /// Marks the focused view busy when it is a running sub-agent and gives
+    /// it the task's cancel flag, so a view opened mid-run shows the agent
+    /// working and Esc/Ctrl+X stop it.
+    fn bind_focused_subagent(&mut self) {
+        let Some(task_id) = self
+            .session
+            .session_id
+            .as_deref()
+            .and_then(|id| self.active_subagent_task(id))
+            .map(|task| task.id.clone())
+        else {
+            return;
+        };
+        let flag = self
+            .session_processor
+            .agent_manager
+            .get()
+            .and_then(|m| m.cancel_flag_for_task(&task_id));
+        if let Some(flag) = flag {
+            self.session.is_processing = true;
+            self.session.cancel_flag = Some(flag);
+        }
     }
 
     /// Titles an untitled open session from its first prompt (FR-07).
@@ -796,6 +837,7 @@ impl App {
             return Err(e.to_string());
         }
         self.park_session(previous);
+        self.bind_focused_subagent();
         self.after_focus_change();
         Ok(())
     }

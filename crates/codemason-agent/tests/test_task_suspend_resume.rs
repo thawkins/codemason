@@ -737,8 +737,12 @@ async fn message_sent_to_a_running_subagent_reaches_its_next_step() -> Result<()
     .await;
 
     const NOTE: &str = "also check the README please";
-    mgr.send_to_session(&child_sid, NOTE)
-        .expect("a running sub-agent accepts messages");
+    // The inbox opens once the agent loop has started.
+    poll_until(
+        || mgr.send_to_session(&child_sid, NOTE).ok(),
+        "the running sub-agent to accept a message",
+    )
+    .await;
     assert!(mgr.has_inbox(&child_sid));
     mgr.resume_task(&task_id).await.expect("resume");
 

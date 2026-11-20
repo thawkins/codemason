@@ -2569,6 +2569,10 @@ impl SessionProcessor {
         // confirmed under (by the next provider report) before auto-compaction
         // re-arms within this turn.
         let mut rearm_below_threshold: Option<usize> = None;
+        // A sub-agent running here can now take messages from the user.
+        if let Some(manager) = self.agent_manager.get() {
+            manager.open_inbox(session_id);
+        }
         loop {
             // T-008 (FR-010, FR-013, FR-014, FR-017): the stop-flag guard.
             // No stage of this iteration may run once the loop's stop flag is

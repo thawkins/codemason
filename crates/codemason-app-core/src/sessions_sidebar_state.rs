@@ -655,6 +655,27 @@ fn push_section(rows: &mut Vec<SidebarRow>, app: &App, section: &SectionData<'_>
     }
 }
 
+/// The row a running sub-agent is listed under: its parent session, or,
+/// when that parent is a sub-agent that has finished, the nearest ancestor
+/// that is still listed (a running sub-agent or a top-level session).
+fn listed_parent<'a>(app: &'a App, task: &'a codemason_agent::task::TaskEntry) -> &'a str {
+    let mut parent = task.parent_session_id.as_str();
+    for _ in 0..MAX_SUBAGENT_DEPTH {
+        if app
+            .active_tasks
+            .iter()
+            .any(|t| t.child_session_id == parent)
+        {
+            break;
+        }
+        match app.subagent_parents.get(parent) {
+            Some(up) => parent = up,
+            None => break,
+        }
+    }
+    parent
+}
+
 /// Deepest sub-agent nesting listed; guards against a parent cycle.
 const MAX_SUBAGENT_DEPTH: usize = 8;
 
@@ -667,7 +688,7 @@ fn push_subagents(rows: &mut Vec<SidebarRow>, app: &App, parent: &str, depth: us
     for task in app
         .active_tasks
         .iter()
-        .filter(|task| task.parent_session_id == parent)
+        .filter(|task| listed_parent(app, task) == parent)
     {
         rows.push(SidebarRow::SubAgent {
             id: task.child_session_id.clone(),

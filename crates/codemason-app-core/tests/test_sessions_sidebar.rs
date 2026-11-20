@@ -461,3 +461,28 @@ async fn test_sessions_sidebar_subagent_row_focuses_its_session() {
     app.switch_to_session(&a).expect("back to the parent");
     assert!(app.background.position("child-1").is_none());
 }
+
+#[tokio::test]
+async fn test_sessions_sidebar_running_grandchild_outlives_its_finished_parent() {
+    use codemason_app_core::sessions_sidebar_state::{SidebarRow, build_rows};
+    let (mut app, a, _b) = app_with_sidebar().await;
+    codemason_app_core::sessions_sidebar_state::refresh_if_dirty(&mut app);
+    let grandchild = running_subagent(&app, "child-1", "child-2");
+    let _child = running_subagent(&app, &a, "child-1");
+    // The child's task has finished; only the grandchild still runs.
+    app.subagent_parents
+        .insert("child-1".to_string(), a.clone());
+    app.subagent_parents
+        .insert("child-2".to_string(), "child-1".to_string());
+    app.active_tasks.push(grandchild);
+
+    let rows = build_rows(&app);
+    let parent_at = rows
+        .iter()
+        .position(|r| matches!(r, SidebarRow::Session { id, .. } if *id == a))
+        .expect("parent row");
+    assert!(
+        matches!(&rows[parent_at + 1], SidebarRow::SubAgent { id, depth: 1, .. } if id == "child-2"),
+        "the grandchild is not listed under the root session: {rows:?}"
+    );
+}

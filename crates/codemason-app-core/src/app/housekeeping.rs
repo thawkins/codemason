@@ -122,6 +122,7 @@ impl App {
             // Re-sync the Agents panel with the task registry after a broadcast
             // lag burst (dropped SubagentStart/Complete events).
             self.poll_active_tasks_reconcile();
+            self.close_finished_subagent_views();
 
             // The App's wall-clock timers, shared with the GUI: statuses go
             // to "ready" after a grace period, the run-cost banner dismisses

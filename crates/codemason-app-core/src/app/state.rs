@@ -3802,6 +3802,15 @@ pub struct App {
     pub sid_to_display_name: HashMap<String, String>,
     /// Active background sub-agent tasks (F14).
     pub active_tasks: Vec<codemason_agent::task::TaskEntry>,
+    /// Parent session of every sub-agent child session spawned while any
+    /// sub-agent is running, so the Sessions tree can hang a running
+    /// grandchild under its nearest listed ancestor after its own parent
+    /// task has finished. Cleared once no sub-agent runs.
+    pub subagent_parents: HashMap<String, String>,
+    /// Child sessions of sub-agents that finished since the last cleanup;
+    /// their parked views are closed by `close_finished_subagent_views`,
+    /// outside any background view swap.
+    pub(crate) finished_subagent_views: Vec<String>,
     /// Bounded history of recently finished sub-agent tasks, newest first
     /// (spec `agentssetup` FR-021, FR-028, FR-036).
     ///

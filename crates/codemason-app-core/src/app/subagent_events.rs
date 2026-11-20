@@ -85,6 +85,8 @@ impl App {
             return false;
         }
 
+        self.subagent_parents
+            .insert(child_session_id.to_string(), session_id.to_string());
         self.active_tasks.push(TaskEntry {
             id: task_id.to_string(),
             parent_session_id: session_id.to_string(),
@@ -233,11 +235,13 @@ impl App {
     /// "keep nothing" rather than indexing an empty deque.
     fn record_completed_task(&mut self, entry: &TaskEntry) {
         // The sessions tree lists a sub-agent only while it runs, so a
-        // finished one's parked view is closed too (a focused one stays until
+        // finished one's parked view is closed too - later, since this can run
+        // while a background view is swapped in (a focused one stays until
         // the user moves away from it).
-        if let Some(index) = self.background.position(&entry.child_session_id) {
-            self.background.remove(index);
-            self.sidebar.dirty = true;
+        self.finished_subagent_views
+            .push(entry.child_session_id.clone());
+        if self.active_tasks.is_empty() {
+            self.subagent_parents.clear();
         }
         if self.agents_history_cap == 0 {
             return;
