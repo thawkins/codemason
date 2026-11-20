@@ -321,6 +321,62 @@ fn test_window_rect_roundtrips() {
 }
 
 #[test]
+fn test_interface_scale_roundtrips() {
+    let path = scratch("zoom").join("gui-window.json");
+    assert_eq!(
+        WindowGeometry::open(&path).saved_zoom(),
+        1.0,
+        "a first launch opens at 100%"
+    );
+
+    // The slider sets egui's zoom factor; the geometry records it.
+    let mut geometry = WindowGeometry::open(&path);
+    geometry.record(&normal_info([120.0, 80.0], [900.0, 640.0], 1.0), 1.5);
+    geometry.save();
+    assert_eq!(WindowGeometry::open(&path).saved_zoom(), 1.5);
+
+    // The rect is saved in points at zoom 1 (`inner points * zoom`), so a
+    // 150% session records 1350x960 and reopens at the same physical size
+    // rather than shrinking a little on every launch.
+    assert_eq!(
+        opened_with(&path).inner_size,
+        Some(egui::vec2(1350.0, 960.0))
+    );
+}
+
+#[test]
+fn test_interface_scale_survives_a_maximized_window() {
+    let path = scratch("zoom-maximized").join("gui-window.json");
+    let mut geometry = WindowGeometry::open(&path);
+    geometry.record(&normal_info([50.0, 40.0], [800.0, 600.0], 1.0), 0.8);
+    let mut maximized = normal_info([0.0, 0.0], [1920.0, 1050.0], 1.0);
+    maximized.maximized = Some(true);
+    geometry.record(&maximized, 0.8);
+    geometry.save();
+    assert_eq!(
+        WindowGeometry::open(&path).saved_zoom(),
+        0.8,
+        "the scale is the user's setting, not part of the restored rect"
+    );
+}
+
+#[test]
+fn test_interface_scale_outside_the_range_falls_back() {
+    let path = scratch("zoom-clamped").join("gui-window.json");
+    std::fs::write(
+        &path,
+        r#"{"schema_version":1,"windows":{"main":{"normal":{"pos":[0,0],"size":[800,600]},"zoom":40.0}}}"#,
+    )
+    .expect("write geometry");
+    let zoom = WindowGeometry::open(&path).saved_zoom();
+    assert!(
+        (codemason_gui::platform::window::ZOOM_MIN..=codemason_gui::platform::window::ZOOM_MAX)
+            .contains(&zoom),
+        "a saved zoom outside the range is clamped: {zoom}"
+    );
+}
+
+#[test]
 fn test_saved_maximized_window_reopens_maximized() {
     let path = scratch("maximized").join("gui-window.json");
     let mut geometry = WindowGeometry::open(&path);
