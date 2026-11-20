@@ -607,7 +607,6 @@ fn theme_picker_rig() -> (
     UnboundedSender<Event>,
     Harness<'static, Shell>,
 ) {
-    support::scratch_config_target();
     rig(|app| {
         app.themes = codemason_app_core::theme_tokens::ThemeCatalog::builtin();
         app.theme = codemason_app_core::theme_tokens::ThemeSelection::System;
@@ -628,6 +627,7 @@ fn theme_visuals(name: &str) -> egui::Visuals {
 
 #[test]
 fn test_theme_picker_previews_on_click_and_cancel_restores() {
+    let _config = support::scratch_config_target();
     let (_rt, _events, mut harness) = theme_picker_rig();
     harness.run();
     assert!(dialog_shown(&harness, THEME_TITLE));
@@ -656,6 +656,7 @@ fn test_theme_picker_previews_on_click_and_cancel_restores() {
 
 #[test]
 fn test_theme_picker_keys_preview_and_apply_keeps_the_theme() {
+    let _config = support::scratch_config_target();
     let (_rt, _events, mut harness) = theme_picker_rig();
     harness.run();
 

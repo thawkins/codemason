@@ -9,7 +9,6 @@ mod support;
 /// An App whose theme catalog is the built-in one and whose theme is
 /// `system`, whatever theme files the developer's machine has.
 fn make_app() -> codemason_app_core::app::App {
-    support::scratch_config_target();
     let mut app = support::make_app();
     app.themes = ThemeCatalog::builtin();
     app.theme = ThemeSelection::System;
@@ -39,6 +38,7 @@ fn named(name: &str) -> ThemeSelection {
 
 #[test]
 fn test_theme_registered_in_slash_commands() {
+    let _config = crate::scratch_config_target();
     let def = codemason_app_core::app::SLASH_COMMANDS
         .iter()
         .find(|cmd| cmd.trigger == "theme")
@@ -48,6 +48,7 @@ fn test_theme_registered_in_slash_commands() {
 
 #[tokio::test]
 async fn test_theme_switches_and_reports() {
+    let _config = crate::scratch_config_target();
     let mut app = make_app();
 
     app.execute_slash_command("/theme high-contrast").await;
@@ -76,6 +77,7 @@ async fn test_theme_switches_and_reports() {
 
 #[tokio::test]
 async fn test_theme_help_and_unknown_name() {
+    let _config = crate::scratch_config_target();
     let mut app = make_app();
 
     app.execute_slash_command("/theme help").await;
@@ -94,6 +96,7 @@ async fn test_theme_help_and_unknown_name() {
 
 #[tokio::test]
 async fn test_theme_picker_previews_applies_and_cancels() {
+    let _config = crate::scratch_config_target();
     let mut app = make_app();
     app.execute_slash_command("/theme").await;
     let picker = app
@@ -134,6 +137,7 @@ async fn test_theme_picker_previews_applies_and_cancels() {
 
 #[tokio::test]
 async fn test_theme_takes_the_whole_argument_as_the_name() {
+    let _config = crate::scratch_config_target();
     let mut app = make_app();
     app.themes.insert(
         codemason_app_core::theme_tokens::ThemeTokens::from_json(
@@ -149,6 +153,7 @@ async fn test_theme_takes_the_whole_argument_as_the_name() {
 
 #[tokio::test]
 async fn test_theme_picker_rows_select_catalog_names_not_aliases() {
+    let _config = crate::scratch_config_target();
     let mut app = make_app();
     // A user theme whose name is also the `dark` alias.
     app.themes.insert(
@@ -172,6 +177,7 @@ async fn test_theme_picker_rows_select_catalog_names_not_aliases() {
 
 #[test]
 fn test_theme_config_key_parses_and_merges() {
+    let _config = crate::scratch_config_target();
     let base: codemason_config::Config =
         serde_json::from_str(r#"{ "theme": "high-contrast" }"#).expect("parse");
     assert_eq!(base.theme.as_deref(), Some("high-contrast"));
@@ -196,6 +202,7 @@ fn test_theme_config_key_parses_and_merges() {
 
 #[test]
 fn test_new_app_starts_in_the_startup_theme() {
+    let _config = crate::scratch_config_target();
     // No launch configuration named a theme in this process, so a new App
     // follows the system, whatever the developer's own config file says.
     assert_eq!(codemason_app_core::theme_tokens::startup(), None);
@@ -213,15 +220,16 @@ fn saved_theme(path: &std::path::Path) -> Option<String> {
 /// the file are kept.
 #[tokio::test]
 async fn test_theme_command_persists_choice() {
+    let config = crate::scratch_config_target();
+    let target = config.path();
     let mut app = make_app();
-    let target = support::scratch_config_target();
     std::fs::create_dir_all(target.parent().expect("parent")).expect("dir");
-    std::fs::write(&target, r#"{"username":"kept"}"#).expect("seed config");
+    std::fs::write(target, r#"{"username":"kept"}"#).expect("seed config");
 
     app.execute_slash_command("/theme nord").await;
 
-    assert_eq!(saved_theme(&target).as_deref(), Some("nord"));
-    let raw = std::fs::read_to_string(&target).expect("config");
+    assert_eq!(saved_theme(target).as_deref(), Some("nord"));
+    let raw = std::fs::read_to_string(target).expect("config");
     assert!(raw.contains("\"username\": \"kept\""), "{raw}");
     assert_eq!(app.status, "theme: nord");
 }
@@ -229,28 +237,30 @@ async fn test_theme_command_persists_choice() {
 /// Enter in the picker saves the previewed theme; Esc saves nothing.
 #[tokio::test]
 async fn test_theme_picker_enter_persists_and_esc_does_not() {
+    let config = crate::scratch_config_target();
+    let target = config.path();
     let mut app = make_app();
-    let target = support::scratch_config_target();
 
     app.execute_slash_command("/theme").await;
     press(&mut app, Key::Down).await;
     press(&mut app, Key::Esc).await;
-    assert_eq!(saved_theme(&target), None, "Esc must not save");
+    assert_eq!(saved_theme(target), None, "Esc must not save");
 
     app.execute_slash_command("/theme").await;
     press(&mut app, Key::Down).await;
     let previewed = app.theme.display_name().to_string();
     press(&mut app, Key::Enter).await;
-    assert_eq!(saved_theme(&target), Some(previewed));
+    assert_eq!(saved_theme(target), Some(previewed));
 }
 
 /// Choosing a theme from the command palette saves it too.
 #[tokio::test]
 async fn test_theme_palette_choice_persists() {
+    let config = crate::scratch_config_target();
+    let target = config.path();
     let mut app = make_app();
-    let target = support::scratch_config_target();
 
     app.run_palette_entry("theme:high-contrast").await;
 
-    assert_eq!(saved_theme(&target).as_deref(), Some("high-contrast"));
+    assert_eq!(saved_theme(target).as_deref(), Some("high-contrast"));
 }

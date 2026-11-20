@@ -228,7 +228,7 @@ fn test_theme_system_follows_the_systems_light_setting() {
 /// `/theme high-contrast` changes the visuals the window is drawn with.
 #[tokio::test]
 async fn test_theme_command_changes_the_palette() {
-    support::scratch_config_target();
+    let _config = support::scratch_config_target();
     let mut app = support::make_app();
     app.themes = ThemeCatalog::builtin();
     app.theme = ThemeSelection::System;
