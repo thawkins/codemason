@@ -427,7 +427,9 @@ impl Shell {
     /// holds the keyboard only the built-in items run (Quit still asks the
     /// window to close). Without attached sources the clicks are dropped.
     fn run_native_menu(&mut self, ctx: &egui::Context) {
-        let modal = dialogs::locks_prompt(&self.app) || self.close.is_asking();
+        let modal = dialogs::locks_prompt(&self.app)
+            || self.close.is_asking()
+            || dialogs::about::is_open(ctx);
         let Some((native, layout)) = self.native_menu.as_mut() else {
             return;
         };
@@ -454,6 +456,7 @@ impl Shell {
                         .runtime
                         .block_on(self.app.execute_slash_command(line));
                 }
+                Some(MenuAction::About) => dialogs::about::open(ctx),
                 None => tracing::debug!(?command, "menu command without an action"),
             }
             ctx.request_repaint();
@@ -571,6 +574,7 @@ impl Shell {
         }
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx(), &palette);
+        dialogs::about::show(ui.ctx(), &palette);
         self.close.show(ui.ctx(), &mut self.app);
         if matches!(self.frame, craft_window::policy::Frame::Integrated(_)) {
             crate::title_bar::resize_edges(ui.ctx());
@@ -709,6 +713,10 @@ impl Shell {
                     crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
                 })
                 .map(MenuAction::Key),
+            RibbonAction::Menu(MenuAction::About) => {
+                dialogs::about::open(ctx);
+                return;
+            }
             RibbonAction::Menu(menu_action) => Some(menu_action),
         };
         let (Some(menu_action), Some(sources)) = (key, self.sources.as_ref()) else {
@@ -724,6 +732,8 @@ impl Shell {
                     .runtime
                     .block_on(self.app.execute_slash_command(line));
             }
+            // Opened above, before the runtime is needed.
+            MenuAction::About => dialogs::about::open(ctx),
         }
         ctx.request_repaint();
     }
@@ -1007,9 +1017,9 @@ impl Shell {
         clipboard::attach_pasted_images(ui.ctx(), &mut self.app);
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
-        // While the quit confirmation asks, keys stay with it (Esc cancels
-        // the dialog, not the turn).
-        if !self.close.is_asking() {
+        // While the quit confirmation or the About dialog is up, keys stay
+        // with it (Esc closes the dialog, not the turn).
+        if !self.close.is_asking() && !dialogs::about::is_open(ui.ctx()) {
             self.route_keys(ui.ctx(), focus);
         }
         // `/quit` (or any other path that stops the app) closes the window,

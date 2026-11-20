@@ -181,10 +181,7 @@ pub const TABS: &[RibbonTab] = &[
             },
             RibbonGroup {
                 label: "Application",
-                items: &[
-                    slash("About", Icon::Info, "/about"),
-                    slash("Quit", Icon::Quit, "/quit"),
-                ],
+                items: &[slash("Quit", Icon::Quit, "/quit")],
             },
         ],
     },
@@ -265,6 +262,17 @@ pub const TABS: &[RibbonTab] = &[
                 slash("Stats", Icon::Stats, "/stats"),
                 slash("Doctor", Icon::Doctor, "/doctor"),
             ],
+        }],
+    },
+    RibbonTab {
+        label: "Help",
+        groups: &[RibbonGroup {
+            label: "Help",
+            items: &[RibbonItem {
+                label: "About",
+                icon: Icon::Info,
+                action: RibbonAction::Menu(MenuAction::About),
+            }],
         }],
     },
 ];
