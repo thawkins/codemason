@@ -5,6 +5,7 @@
 ### Added
 
 - Added: a **Collapse all** button at the left end of the prompt row (Material inline icon button, `material::icon_button::icon_button_inline`, 18 points so the prompt's row keeps its own height). It closes every open block in the transcript in one click: the folded activity rows and the `Thinking` rows. `messages::collapse_all` bumps a collapse epoch and each disclosure row keeps its open choice with the epoch it was settled in, so a click closes the rows on screen and the rows scrolled out of view alike, while a row first drawn after the click (the `Thinking` row of a reply that starts streaming later) still opens as before. The button sits before the queue counter, so neither shifts the other when a prompt is queued.
+- Added: `material::chip::chip_dense` (a 20-point chip, one text line high) and `ChipKind::Status` (a green check while on, a red cross while off, so the chip keeps one width; a caution status chip is filled with `error_container` while on).
 
 ### Changed
 
@@ -66,6 +67,7 @@
   each one and the toolbar under it jumped as the reader stepped through them;
   it is truncated with an ellipsis and its whole text on hover, and the counts
   and readout keep their room.
+- Changed: every service indicator in the GUI status bar and its `Details` popup (GCF, CDX, LOG, EDIT, TELE, AUTO, YOLO) is a dense Material status chip that turns its service on or off: a green check while the service is on and a red cross while it is off, and a click runs the service's own `/<command> on|off` (`/gcf`, `/codeindex`, `/alog`, `/editlog`, `/telemetry`, `/autopilot`, `/yolo`), so the change persists exactly as the slash command does. The `<NAME> [ok]` / `<NAME> [x]` text tags are gone. `AUTO` and `YOLO` use a caution tone (`error_container`); in the bar, the `AUTO` chip turns autopilot off with one click, and YOLO is the always-visible toggle left of the zoom slider (which calls `App::toggle_yolo`, as `Alt+Y` does), so the summary has no YOLO chip of its own. The `Details` popup stays open on a chip click (its button has a fixed id, so the AUTO and YOLO chips appearing before it do not close it), wraps its chips in a narrow window, and the bar is always one chip high so it no longer changes height when YOLO or autopilot turns on. A chip click keeps the prompt's draft, and the dense chips never take the keyboard focus, so Enter still goes to the prompt.
 
 ### Fixed
 
@@ -76,6 +78,7 @@
   pane shown with nothing in it could not be closed at all. The header now
   reads `No diff open` and the sentence gets a line of its own, where it wraps.
 - Fixed: the Diff pane has a **Close diff** button. It had no visible way out: the pane could only be closed from the dock tab's context menu or a middle click, so a reader who opened a diff was stuck with it. The cross sits at the right of the pane's header (a Material icon button, `material::icon_button`), takes its place before the file's path so the path wraps in the width left over, and hides the pane by clearing `App::diff_pane.shown`, as the dock's own Close does. It is drawn even when the pane has no file to show, so a pane shown with nothing in it can still be closed, and the files it held stay, so opening a diff again shows them.
+- Fixed: `test_open_project_dialog_registers_the_folder_as_a_project` failed in checkouts with a long path, because the transcript wraps `registered at` and the path onto two lines; the test now accepts any whitespace there.
 
 ## [1.0.171] - 2026-11-20
 

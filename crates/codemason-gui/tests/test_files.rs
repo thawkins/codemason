@@ -222,9 +222,12 @@ fn test_open_project_dialog_registers_the_folder_as_a_project() {
     // `/project add` registers the checkout the folder belongs to (here
     // the enclosing workspace repository), as it does for a typed path.
     let text = transcript(harness.state().app());
+    // The transcript wraps a long path onto its own line, so any whitespace
+    // may sit between "at" and the backtick.
     let registered = text
-        .split_once("registered at `")
-        .and_then(|(_, rest)| rest.split_once('`'))
+        .split_once("registered at")
+        .and_then(|(_, rest)| rest.trim_start().strip_prefix('`'))
+        .and_then(|rest| rest.split_once('`'))
         .map(|(path, _)| PathBuf::from(path))
         .unwrap_or_else(|| panic!("no project was registered: {text}"));
     assert!(
