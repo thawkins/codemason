@@ -19,7 +19,41 @@ mod support;
 
 /// Render a command's raw output text the way the message window shows it.
 fn rendered(app: &mut App, text: &str) -> String {
-    app.render_markdown_to_ascii(text)
+    app.prepare_transcript_text(text)
+}
+
+/// Split one Markdown table row into its trimmed cells.
+///
+/// A cell may carry an escaped `\|` (a pipe inside a code span or an
+/// alternation such as `--github \| --gitlab`); only an unescaped `|`
+/// separates cells. The leading and trailing pipes produce no cell.
+fn split_row_cells(row: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for ch in row.chars() {
+        if escaped {
+            // Keep the backslash: the cell text is compared as written.
+            current.push('\\');
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '|' => {
+                cells.push(current.trim().to_string());
+                current = String::new();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() {
+        cells.push(current.trim().to_string());
+    }
+    // The row starts and ends with a pipe, so the first entry is empty.
+    cells.retain(|cell| !cell.is_empty());
+    cells
 }
 #[test]
 fn test_govcreate_valid_invocation_reports_via_nfr005_builders() {
@@ -191,129 +225,54 @@ fn test_spec_help_govcreate_row_keeps_positionals_in_command_column() {
     // Regression test for the table-cell misalignment: the renderer used to
     // drop the trailing backtick from the long `/spec govcreate ...` code span,
     // which under-sized the command column and pushed `content-ref` /
-    // `target-folder` into the Description column.  The fix in
-    // `md_worker::preprocess_markdown_tables` appends a wrapping-safe space
-    // inside the code span so the column stays aligned.
+    // `target-folder` into the Description column. The reply is now Markdown
+    // source rather than a pre-drawn grid, so the whole row is one line and
+    // each positional must stay inside its own `|`-delimited cell.
     let mut app = make_app();
     let body = rendered(&mut app, codemason_specs::SpecCommand::build_help_message());
 
-    // The header row of the rendered ASCII table must have exactly three
-    // columns.
+    // The header row of the table must have exactly three columns.
     let header = body
         .lines()
         .find(|l| l.contains("Command") && l.contains("Arguments"))
         .unwrap_or_else(|| panic!("help table header: {body}"));
     assert_eq!(header.matches('|').count(), 4, "three columns: {header}");
 
-    // Identify the govcreate row (the multi-line block that mentions
-    // "govcreate"). The row runs from the line carrying the govcreate command
-    // span to the closing border; continuation lines are cell data, so the
-    // only reliable terminator is the `+-...-+` border.
-    let mut in_row = false;
-    let mut row_text = String::new();
-    for line in body.lines() {
-        if !in_row && line.contains("/spec govcreate") {
-            in_row = true;
-        }
-        if in_row {
-            row_text.push_str(line);
-            row_text.push('\n');
-        }
-        if in_row && line.starts_with("+-") && line.ends_with('+') {
-            break;
-        }
+    // The govcreate row is the one line that carries the command span.
+    let row = body
+        .lines()
+        .find(|l| l.starts_with('|') && l.contains("/spec govcreate"))
+        .unwrap_or_else(|| panic!("govcreate row: {body}"));
+
+    // A Markdown row is `| command | arguments | description |`. A cell may
+    // itself carry a `\|` (the `--github \| --gitlab` alternation), so split on
+    // unescaped pipes only.
+    let cells = split_row_cells(row);
+    assert_eq!(cells.len(), 3, "a row has three cells: {row} -> {cells:?}");
+    let command_cell = cells[0].as_str();
+    let arguments_cell = cells[1].as_str();
+    let description_cell = cells[2].as_str();
+
+    for positional in ["<specid>", "<content-ref>", "<target-folder>"] {
+        assert!(
+            command_cell.contains(positional),
+            "{positional} stays in the command column: {row}"
+        );
     }
+    // The misalignment pushed the *usage* out of the command cell. The
+    // description legitimately names a placeholder in prose (it explains
+    // `<target-folder>/specs/<specid>/`), so what must not appear there is the
+    // positional sequence itself.
     assert!(
-        row_text.contains("/spec govcreate"),
-        "row extracted: {row_text}"
-    );
-
-    // The command column wraps over several lines; the first line carries
-    // `/spec govcreate` and a continuation line carries `<specid>`, while the
-    // arguments column starts with `required`. The remaining positionals
-    // appear on the continuation lines of the same cell.
-    //
-    // Continuations are located by cell content rather than row position: a
-    // table row may be followed by blank or non-cell lines, so "line 2" is not
-    // reliably a cell line.
-    let command_cell = |line: &str| -> String {
-        line.split('|')
-            .nth(1)
-            .map(|cell| cell.trim().to_string())
-            .unwrap_or_default()
-    };
-    let arguments_cell = |line: &str| -> String {
-        line.split('|')
-            .nth(2)
-            .map(|cell| cell.trim().to_string())
-            .unwrap_or_default()
-    };
-    let description_cell = |line: &str| -> String {
-        line.split('|')
-            .nth(3)
-            .map(|cell| cell.trim().to_string())
-            .unwrap_or_default()
-    };
-    let row_lines: Vec<&str> = row_text.lines().filter(|l| l.starts_with('|')).collect();
-    let first_data_line = row_lines
-        .first()
-        .copied()
-        .unwrap_or_else(|| panic!("first govcreate row line: {row_text}"));
-    let specid_line = row_lines
-        .iter()
-        .copied()
-        .find(|l| command_cell(l).contains("<specid>"))
-        .unwrap_or_else(|| panic!("specid continuation line: {row_text}"));
-    assert!(
-        command_cell(first_data_line).contains("/spec govcreate"),
-        "command column starts the code span: {first_data_line}"
+        !description_cell.contains("<specid> <content-ref> <target-folder>"),
+        "the positional sequence must not bleed into the Description column: {row}"
     );
     assert!(
-        command_cell(specid_line).contains("<specid>"),
-        "specid stays in the command column: {specid_line}"
+        arguments_cell.starts_with("required"),
+        "arguments column starts with required: {row}"
     );
     assert!(
-        arguments_cell(first_data_line).starts_with("required"),
-        "arguments column starts with required: {first_data_line}"
-    );
-    assert!(
-        !description_cell(first_data_line).contains("specid")
-            && !description_cell(first_data_line).contains("content-ref")
-            && !description_cell(first_data_line).contains("target-folder"),
-        "positionals must not bleed into the Description column: {first_data_line}"
-    );
-
-    // The two remaining positionals appear on the continuation lines of the
-    // command column; they must still not appear in the Description column.
-    let second = row_text
-        .lines()
-        .find(|l| {
-            l.starts_with('|') && !l.contains("/spec govcreate") && l.contains("<content-ref>")
-        })
-        .unwrap_or_else(|| panic!("content-ref continuation line: {row_text}"));
-    let cells2: Vec<&str> = second.split('|').skip(1).collect();
-    assert!(
-        cells2[0].trim().contains("<content-ref>"),
-        "content-ref stays in the command column: {second}"
-    );
-    assert!(
-        !cells2[2].trim().contains("content-ref"),
-        "content-ref out of the Description column: {second}"
-    );
-    let third = row_text
-        .lines()
-        .find(|l| {
-            l.starts_with('|') && l.contains("<target-folder>") && !l.contains("<content-ref>")
-        })
-        .unwrap_or_else(|| panic!("target-folder line: {row_text}"));
-    let cells3: Vec<&str> = third.split('|').skip(1).collect();
-    assert!(
-        cells3[0].trim().contains("<target-folder>"),
-        "target-folder stays in the command column: {third}"
-    );
-    let desc3 = cells3[2].trim();
-    assert!(
-        !desc3.contains("`target-folder`"),
-        "description must not carry the positional token text: {third}"
+        !arguments_cell.contains("<specid>"),
+        "the command positionals stay out of the Arguments column: {row}"
     );
 }

@@ -821,57 +821,6 @@ pub struct ReportRow {
 /// Marker rendered in the Status column of data-format rows (FR-005).
 pub const DATA_FORMAT_MARKER: &str = "(data format - runtime n/a)";
 
-/// Fixed column widths (characters) of the `/toolchain list` ASCII table
-/// (FR-017): Language, Runtime, Status, and Version. Language and Runtime
-/// cells wider than their column are clipped; the Status and Version columns
-/// word-wrap onto continuation grid lines instead.
-pub const TABLE_COLUMN_WIDTHS: [usize; 4] = [10, 10, 10, 50];
-
-/// Word-wrap one cell to `width` characters, returning at least one line.
-///
-/// Greedy wrap on word boundaries; a single word longer than the column is
-/// hard-split across lines so every returned line fits the column width.
-fn wrap_cell(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![text.to_string()];
-    }
-    // Hard-split over-long words first, then greedily pack whole words.
-    let mut words: Vec<String> = Vec::new();
-    for word in text.split(' ').filter(|w| !w.is_empty()) {
-        if word.chars().count() <= width {
-            words.push(word.to_string());
-        } else {
-            for chunk in word.chars().collect::<Vec<_>>().chunks(width) {
-                words.push(chunk.iter().collect());
-            }
-        }
-    }
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for word in words {
-        if current.is_empty() {
-            current = word;
-        } else if current.chars().count() + 1 + word.chars().count() <= width {
-            current.push(' ');
-            current.push_str(&word);
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current = word;
-        }
-    }
-    lines.push(current);
-    lines
-}
-
-/// Sanitize a table cell: collapse line breaks to spaces and escape pipes so
-/// captured version text (FR-008) cannot break the markdown table (FR-009).
-fn cell(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('|', "\\|")
-}
-
 /// Compute the (runtime, status, version) cell triple for one report row.
 ///
 /// Shared by the markdown and JSON renderers so both surfaces render probe
@@ -950,7 +899,7 @@ fn installed_summary(rows: &[ReportRow]) -> (usize, usize) {
     (installed, application)
 }
 
-/// Render the `/toolchain list` report as a pre-formatted ASCII table (FR-009).
+/// Render the `/toolchain list` report as a Markdown table (FR-009).
 ///
 /// The message is prefixed `From: /toolchain list`, followed by the
 /// Language / Runtime / Status / Version table (rows in the given order) and
@@ -961,91 +910,28 @@ fn installed_summary(rows: &[ReportRow]) -> (usize, usize) {
 /// with a `-` version (FR-010); rows with multiple runtime commands list the
 /// per-command status (FR-006).
 ///
-/// The grid is emitted directly (markdown-table-free) inside a fenced block so
-/// the TUI markdown pipeline's `From: /` code-block bypass deposits it
-/// verbatim; column widths are then exact: the Language, Runtime, Status, and
-/// Version columns are fixed at the [`TABLE_COLUMN_WIDTHS`] widths (FR-017).
-/// Language and Runtime cells wider than their column are clipped; the Status
-/// and Version columns word-wrap onto continuation grid lines (Language and
-/// Runtime cells render blank on every continuation line, and the Status cell
-/// is blank on Version-only continuation lines), so no cell text is lost.
+/// A Markdown table is the one layout that survives both frontends: the GUI's
+/// Markdown viewer sizes the columns itself, and the plain-text renderer's
+/// html2text pass draws the same table as an ASCII grid. Every cell is escaped
+/// by [`mdtable`](codemason_types::mdtable), so a captured version string
+/// (FR-008) carrying a `|` or a line break cannot split its row.
 #[must_use]
 pub fn render_markdown_report(rows: &[ReportRow]) -> String {
-    const HEADERS: [&str; 4] = ["Language", "Runtime", "Status", "Version"];
-    let fields: Vec<[String; 4]> = rows
+    let table_rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
             let (runtime, status, version) = report_fields(row);
-            [cell(row.id), cell(&runtime), cell(&status), cell(&version)]
+            // Cells go in raw: `mdtable` escapes the pipes and line breaks a
+            // captured version string can carry (FR-009).
+            vec![row.id.to_string(), runtime, status, version]
         })
         .collect();
-    // Fixed columns (FR-017): 10/10/10/50; Language/Runtime cells are
-    // clipped, the Status and Version columns word-wrap onto continuation
-    // lines.
-    let widths = TABLE_COLUMN_WIDTHS;
-    let border = {
-        let mut out = String::from("+");
-        for width in &widths {
-            out.push_str(&"-".repeat(*width + 2));
-            out.push('+');
-        }
-        out
-    };
-    // Renders one grid row as 1..n grid lines: the Status and Version cells
-    // word-wrap at word boundaries and the taller of the two sets the row
-    // height; Language/Runtime appear only on the first line, and every line
-    // is padded to the exact fixed column widths.
-    let render_row = |cells: &[String; 4]| -> Vec<String> {
-        let status_lines = wrap_cell(&cells[2], widths[2]);
-        let version_lines = wrap_cell(&cells[3], widths[3]);
-        (0..status_lines.len().max(version_lines.len()))
-            .map(|line_idx| {
-                let mut line = String::from("|");
-                for (idx, width) in widths.iter().enumerate() {
-                    let segment: String = match idx {
-                        0 | 1 if line_idx == 0 => cells[idx].chars().take(*width).collect(),
-                        2 => status_lines.get(line_idx).cloned().unwrap_or_default(),
-                        3 => version_lines.get(line_idx).cloned().unwrap_or_default(),
-                        _ => String::new(),
-                    };
-                    let pad = width.saturating_sub(segment.chars().count());
-                    line.push(' ');
-                    line.push_str(&segment);
-                    line.push_str(&" ".repeat(pad));
-                    line.push(' ');
-                    line.push('|');
-                }
-                line
-            })
-            .collect()
-    };
-    let mut grid = String::new();
-    grid.push_str(&border);
-    grid.push('\n');
-    for line in render_row(&HEADERS.map(str::to_string)) {
-        grid.push_str(&line);
-        grid.push('\n');
-    }
-    grid.push_str(&border);
-    grid.push('\n');
-    for row_fields in &fields {
-        // One border after the LAST line of each (possibly multi-line) row
-        // keeps the grid well-formed and borders = data rows + 2.
-        for line in render_row(row_fields) {
-            grid.push_str(&line);
-            grid.push('\n');
-        }
-        grid.push_str(&border);
-        grid.push('\n');
-    }
     let (installed, application) = installed_summary(rows);
-    // Fenced-block form: the `From: /` + bare-fence shape triggers the TUI
-    // markdown pipeline's code-block bypass, which deposits the block verbatim
-    // instead of re-flowing it through `html2text` (which would squeeze the
-    // columns back to content-proportional widths). The summary line lives
-    // inside the block because the bypass drops post-fence text.
+    // The blank line before the summary is required: Markdown reads a line
+    // directly after a table as one more table row.
     format!(
-        "From: /toolchain list\n\n```\n{grid}{installed}/{application} application runtimes installed.\n```\n"
+        "From: /toolchain list\n\n{}\n{installed}/{application} application runtimes installed.\n",
+        codemason_types::mdtable::table(&["Language", "Runtime", "Status", "Version"], table_rows)
     )
 }
 

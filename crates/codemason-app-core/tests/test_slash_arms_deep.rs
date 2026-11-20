@@ -160,9 +160,21 @@ async fn team_show_all_covers_global_scope_and_broken_team() {
     app.execute_slash_command("/team show").await;
     assert_eq!(app.status, "team: show all");
     let text = last_message(&app);
-    assert!(text.contains("global-team"), "text: {text}");
-    assert!(text.contains("scope:global"), "text: {text}");
-    assert!(text.contains("failed to load"), "text: {text}");
+    // One table row per team, so the scope lives in the row's own Scope cell
+    // rather than in a `scope:global` annotation line.
+    let global_row = text
+        .lines()
+        .find(|line| line.starts_with("| global-team |"))
+        .unwrap_or_else(|| panic!("global-team row: {text}"));
+    assert!(global_row.contains("global"), "Scope cell: {global_row}");
+    let broken_row = text
+        .lines()
+        .find(|line| line.starts_with("| broken-team |"))
+        .unwrap_or_else(|| panic!("broken-team row: {text}"));
+    assert!(
+        broken_row.contains("failed to load"),
+        "a team whose config.json is unreadable reports the failure: {broken_row}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

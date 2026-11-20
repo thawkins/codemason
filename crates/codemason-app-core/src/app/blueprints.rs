@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use codemason_types::mdtable;
 use codemason_types::strutil::truncate_bytes;
 
 /// Information about an installed team blueprint.
@@ -161,7 +162,14 @@ pub fn render_blueprint_detail(
                         .and_then(|v| v.as_str())
                         .unwrap_or("-");
                     let prompt_short = truncate_bytes(prompt, 77);
-                    output.push_str(&format!("| `{}` | {} | {} |\n", tname, atype, prompt_short));
+                    // `mdtable::cell` keeps a `|` or a newline in a manifest
+                    // value from splitting the row.
+                    output.push_str(&format!(
+                        "| `{}` | {} | {} |\n",
+                        mdtable::cell(tname),
+                        mdtable::cell(atype),
+                        mdtable::cell(&prompt_short)
+                    ));
                 }
                 output.push('\n');
             }
@@ -188,7 +196,11 @@ pub fn render_blueprint_detail(
                         .or_else(|| item.get("args").and_then(|a| a.get("description")))
                         .and_then(|v| v.as_str())
                         .unwrap_or("-");
-                    output.push_str(&format!("| {} | {} |\n", title, desc));
+                    output.push_str(&format!(
+                        "| {} | {} |\n",
+                        mdtable::cell(title),
+                        mdtable::cell(&desc)
+                    ));
                 }
                 output.push('\n');
             }
@@ -221,7 +233,11 @@ pub fn render_blueprint_list(blueprints: &[BlueprintInfo], command_label: &str) 
         let desc = blueprint_description(&bp.path);
         output.push_str(&format!(
             "| `{}` | {} | {} | {} | {} |\n",
-            bp.name, bp.scope, teammate_count, task_count, desc
+            mdtable::cell(&bp.name),
+            mdtable::cell(&bp.scope),
+            teammate_count,
+            task_count,
+            mdtable::cell(&desc)
         ));
     }
     output

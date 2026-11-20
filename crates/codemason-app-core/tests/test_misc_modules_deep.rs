@@ -265,7 +265,7 @@ fn toolchain_build_report_rows_walks_every_scanner_language() {
 }
 
 #[test]
-fn toolchain_render_markdown_report_shapes_the_grid_and_summary() {
+fn toolchain_render_markdown_report_shapes_the_table_and_summary() {
     let rows = vec![
         report_row(
             "rust",
@@ -279,18 +279,16 @@ fn toolchain_render_markdown_report_shapes_the_grid_and_summary() {
         report_row("json", LanguageClass::DataFormat, Vec::new()),
     ];
     let report = toolchain::render_markdown_report(&rows);
-    assert!(report.starts_with("From: /toolchain list"));
-    assert!(report.contains("Language"));
-    assert!(report.contains("Runtime"));
-    assert!(report.contains("Status"));
-    assert!(report.contains("Version"));
     assert!(report.contains("cargo 1.85.0"));
-    // The Status column is 10 wide, so the data-format marker word-wraps onto
-    // its own grid lines.
-    assert!(report.contains("runtime"));
-    assert!(report.contains("n/a)"));
+    // A Markdown table: a header row, a delimiter row, then one line per row.
+    assert!(
+        report.starts_with("From: /toolchain list\n\n| Language | Runtime | Status | Version |\n")
+    );
+    assert!(report.contains("\n| --- | --- | --- | --- |\n"));
+    // The data-format marker sits whole in its own cell (no column wrapping).
+    assert!(report.contains(toolchain::DATA_FORMAT_MARKER));
     assert!(report.contains("1/1 application runtimes installed."));
-    assert!(report.ends_with("```\n"));
+    assert!(report.ends_with(" installed.\n"));
 }
 
 #[test]
@@ -344,10 +342,10 @@ fn toolchain_render_markdown_report_wraps_a_very_long_version() {
         }],
     )];
     let report = toolchain::render_markdown_report(&rows);
-    // The version column is 50 wide, so a 180-char token must be hard-split
-    // across several grid lines rather than emitted on one.
-    assert!(!report.contains(&"x".repeat(60)));
-    assert!(report.contains(&"x".repeat(50)));
+    // One row per report line: the whole version stays in its own cell, which
+    // the viewer sizes itself, rather than being cut at a fixed column width.
+    assert!(report.contains(&"x".repeat(180)));
+    assert_eq!(report.lines().filter(|l| l.starts_with('|')).count(), 3);
 }
 
 #[test]
@@ -2365,10 +2363,11 @@ async fn slash_alog_export_validates_the_run_id() {
     let (_env, temp) = enter_project_pair();
 
     // A missing run id and a missing `--yes` both surface the usage block
-    // through `helpers::parse_alog_run_id_yes`.
+    // through `helpers::parse_alog_run_id_yes`. The reply is Markdown source,
+    // so the placeholder is a code span (`<run-id>`), not a bare tag.
     let (app, text) = run_slash("/alog export").await;
     assert!(app.status.starts_with("alog"), "got {}", app.status);
-    assert!(text.contains("Missing argument"), "got {text}");
+    assert!(text.contains("Missing `<run-id>` argument"), "got {text}");
 
     let (app, text) = run_slash("/alog export run-alpha").await;
     assert!(app.status.starts_with("alog"), "got {}", app.status);

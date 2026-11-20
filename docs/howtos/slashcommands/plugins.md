@@ -117,14 +117,16 @@ Unload without deleting files:
 ## Output
 
 Reports are prefixed with a `From: /plugins <sub>` attribution line. `list`
-renders a fixed-width table with one count column per contribution kind
+renders a Markdown table with one count column per contribution kind
 (`Tools`, `Commands`, `Skills`, `Agents`, `Hooks`) plus two MCP columns - `MCP`
 (the number of MCP servers the plugin declares) and `MCP Tools` (the total tools
 those servers advertise, summed from the live MCP client; `?` when a server has
 not connected, never `0`):
 
 ```
-| ID |Name |Version |Dialect |State    |Tools|Commands|Skills|Agents|Hooks|MCP|MCP Tools|
+| ID | Name | Version | Dialect | State | Tools | Commands | Skills | Agents | Hooks | MCP | MCP Tools |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
 ```
 
 followed by `Contributions:`, `Unsupported capabilities:`, and `Errors:`

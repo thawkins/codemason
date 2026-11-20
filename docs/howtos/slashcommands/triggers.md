@@ -71,7 +71,7 @@ Prints the usage table.
 
 ## Output
 
-`list` prints the fixed-width rule table, or the empty-state note that rules
+`list` prints the Markdown rule table, or the empty-state note that rules
 are created by natural language. `enable`/`disable`/`remove` confirm the
 change for the given ID prefix. `status` prints the runtime metrics table.
 `help` prints the usage table; unknown subcommands print a warning line.

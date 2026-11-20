@@ -264,9 +264,15 @@ impl App {
         output.push_str("| --- | --- | --- | --- |\n");
         for suite in codemason_bench::all_suites() {
             let languages = suite.languages.join(", ");
+            // A suite description is registry text; escape it so a `|` in one
+            // cannot split its row.
             output.push_str(&format!(
                 "| `{}` ({}) | {} | `{}` | {} |\n",
-                suite.id, suite.display_name, suite.description, suite.default_language, languages
+                crate::app::mdtable::cell(&suite.id),
+                crate::app::mdtable::cell(&suite.display_name),
+                crate::app::mdtable::cell(&suite.description),
+                crate::app::mdtable::cell(&suite.default_language),
+                crate::app::mdtable::cell(&languages)
             ));
         }
 
@@ -291,7 +297,11 @@ impl App {
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            output.push_str(&format!("| `{}` | {} |\n", profile.id, suites));
+            output.push_str(&format!(
+                "| `{}` | {} |\n",
+                crate::app::mdtable::cell(&profile.id),
+                crate::app::mdtable::cell(&suites)
+            ));
         }
 
         output
@@ -351,7 +361,9 @@ impl App {
             };
             output.push_str(&format!(
                 "| `{}` | `{}` | {} |\n",
-                profile.id, suites, notes
+                crate::app::mdtable::cell(&profile.id),
+                crate::app::mdtable::cell(&suites),
+                crate::app::mdtable::cell(&notes)
             ));
         }
         output

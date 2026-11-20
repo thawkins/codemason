@@ -77,18 +77,22 @@ Unknown subcommand prints the usage correction:
 
 ### Table form
 
-A fixed-width table (constant 93-column width) with 10/10/10/50 character
-columns:
+A Markdown table with four columns — **Language**, **Runtime**, **Status**,
+**Version** — preceded by a blank line (Markdown starts a table only after one):
 
-| Column | Width | Overflow |
-| ------ | ----- | -------- |
-| Language | 10 | clipped |
-| Runtime | 10 | clipped |
-| Status | 10 | word-wrapped |
-| Version | 50 | word-wrapped |
+| Column | Content |
+| ------ | ------- |
+| Language | the language id from `SUPPORTED_LANGUAGES` |
+| Runtime | the runtime command(s) `-` for a data format |
+| Status | `installed` / `not installed` per command, or `(data format - runtime n/a)` |
+| Version | the version line(s) captured, or `-` |
 
-Wrapped rows continue on grid lines, so multi-word statuses and long versions
-remain readable inside the fixed grid.
+The table is emitted as Markdown source, so the GUI's viewer sizes the columns
+itself and a long version stays whole in its own cell instead of being clipped
+or wrapped into a fixed grid. Each cell is escaped (`|` becomes `\|`, a newline
+becomes a space), so a captured version string carrying a pipe cannot split its
+row. The `<n>/<m> application runtimes installed.` summary follows on its own
+line, separated by a blank line so Markdown does not read it as another row.
 
 ### JSON form
 
@@ -108,6 +112,5 @@ report as not found.
 ## Related
 
 - Toolchain manual: `docs/howtos/toolchain.md`.
-- README v1.0.95 notes the fixed-width `/toolchain list` table columns.
 - `/new` scaffolding detects the runtime stack it needs; `/doctor` and
   `/update` cover other environment checks.

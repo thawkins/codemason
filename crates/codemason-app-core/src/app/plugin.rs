@@ -176,21 +176,37 @@ fn render_mcp_tool_report(app: &crate::app::App) -> String {
         );
         return out;
     }
+    // One row per (server, tool) pair, so the bridged tool name lines up beside
+    // the server's own name in the GUI's Markdown viewer.
+    let mut rows: Vec<Vec<String>> = Vec::new();
     for server in &app.mcp_servers {
-        out.push_str(&format!(
-            "  {:<24} {:<12} {} tool(s)\n",
-            server.id,
-            server.status,
-            server.tools.len()
-        ));
+        let tools = crate::text_utils::pluralize(server.tools.len(), "tool", "tools");
+        if server.tools.is_empty() {
+            rows.push(vec![
+                crate::app::mdtable::cell(&server.id),
+                crate::app::mdtable::cell(&server.status.to_string()),
+                String::new(),
+                String::new(),
+                tools,
+            ]);
+            continue;
+        }
         for tool in &server.tools {
-            out.push_str(&format!(
-                "      {} -> {}\n",
-                tool.name,
-                crate::app::slash::mcp_codemason_tool_name(&server.id, &tool.name)
-            ));
+            rows.push(vec![
+                crate::app::mdtable::cell(&server.id),
+                crate::app::mdtable::cell(&server.status.to_string()),
+                crate::app::mdtable::cell(&tool.name),
+                crate::app::mdtable::cell(&crate::app::slash::mcp_codemason_tool_name(
+                    &server.id, &tool.name,
+                )),
+                tools.clone(),
+            ]);
         }
     }
+    out.push_str(&crate::app::mdtable::table(
+        &["Server", "Status", "Tool", "Bridged name", "Tools"],
+        rows,
+    ));
     let connected = app
         .mcp_servers
         .iter()

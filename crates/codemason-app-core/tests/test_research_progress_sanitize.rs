@@ -84,14 +84,14 @@ fn test_encode_progress_event_sanitizes_fetch_failed() {
 }
 
 // =========================================================================
-// render_markdown_to_ascii bypasses HTML pipeline for research progress
+// prepare_transcript_text bypasses HTML pipeline for research progress
 // =========================================================================
 
 #[test]
-fn test_render_markdown_to_ascii_bypasses_research_progress() {
+fn test_prepare_transcript_text_bypasses_research_progress() {
     let mut app = support::make_app();
     let input = "[research] Research Progress - `run`\nTopic: topic\n\n  [ok] web     - captured https://example.com - Title";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     assert_eq!(
         output, input,
         "research progress text should pass through unchanged: {output}"
@@ -99,10 +99,10 @@ fn test_render_markdown_to_ascii_bypasses_research_progress() {
 }
 
 #[test]
-fn test_render_markdown_to_ascii_sanitizes_passthrough_text() {
+fn test_prepare_transcript_text_sanitizes_passthrough_text() {
     let mut app = support::make_app();
     let input = "plain text with \x1b[31mANSI\x1b[0m and \x00control";
-    let output = app.render_markdown_to_ascii(input);
+    let output = app.prepare_transcript_text(input);
     assert!(!output.contains('\u{1b}'));
     assert!(!output.contains('\u{0}'));
     assert!(output.contains("plain text with ANSI and control"));

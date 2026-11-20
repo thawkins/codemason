@@ -4454,9 +4454,12 @@ impl App {
     ///
     /// Emitted after the background connect loop settles every server (the
     /// empty-id `McpStatusChanged { status: "initialized" }` sentinel), so the
-    /// user sees one line per server codemason attempted to start and, for the ones
-    /// that came up, a second line confirming the handshake. A server switched
-    /// off in the enable-state ledger is reported as skipped rather than started.
+    /// user sees one row per server codemason attempted to start: its
+    /// transport, the outcome, and the detail that explains the outcome (the
+    /// failure reason, the tool count, or the command that fixes it). The table
+    /// is Markdown, so the GUI draws it as a table rather than as a wall of
+    /// `|`-separated source. A server switched off in the enable-state ledger
+    /// is reported as `disabled` rather than as started.
     ///
     /// Idempotent: [`Self::mcp_startup_reported`] latches the one-shot. The
     /// sentinel can arrive more than once (a live `/mcp enable` restarts a server
@@ -4477,62 +4480,75 @@ impl App {
         let Ok(guard) = client.try_read() else {
             return;
         };
-        let mut lines = String::new();
+        // One Markdown table row per server, so the GUI lays the report out as
+        // a table instead of as a run of `|`-separated source. The leading
+        // blank line keeps a preceding reply from being glued onto the header
+        // (Markdown only starts a table after a blank line).
+        let mut rows = String::new();
         for server in guard.servers() {
-            // The transport label rides on every line so the report names the
-            // wire protocol (stdio / sse / http) for each server.
+            // The transport names the wire protocol (stdio / sse / http); the
+            // detail column carries whatever explains the result, so a failure
+            // reason or an actionable next step is never lost.
             let transport = &server.config.type_;
-            let id = &server.id;
-            match &server.status {
-                codemason_agent::mcp::McpStatus::Connected => {
-                    let _ = write!(lines, "\n[mcp] Starting mcp server {id} ({transport})"); // INTENTIONAL: write to a String buffer is infallible
-                    let _ = write!(
-                        // INTENTIONAL: write to a String buffer is infallible
-                        lines,
-                        "\n[mcp] Connected to mcp server {id} via {transport}"
-                    );
-                }
-                codemason_agent::mcp::McpStatus::Disabled => {
-                    let _ = write!(
-                        // INTENTIONAL: write to a String buffer is infallible
-                        lines,
-                        "\n[mcp] Skipping mcp server {id} ({transport}, disabled)"
-                    );
-                }
-                codemason_agent::mcp::McpStatus::Failed { error } => {
-                    let _ = write!(lines, "\n[mcp] Starting mcp server {id} ({transport})"); // INTENTIONAL: write to a String buffer is infallible
-                    let _ = write!(
-                        // INTENTIONAL: write to a String buffer is infallible
-                        lines,
-                        "\n[mcp] Failed to connect to mcp server {id} via {transport}: {error}"
-                    );
-                }
+            let (result, detail) = match &server.status {
+                codemason_agent::mcp::McpStatus::Connected => (
+                    "connected",
+                    crate::text_utils::pluralize(server.tools.len(), "tool", "tools"),
+                ),
+                codemason_agent::mcp::McpStatus::Disabled => (
+                    "disabled",
+                    format!("`/mcp connect {}` to enable", server.id),
+                ),
+                codemason_agent::mcp::McpStatus::Failed { error } => ("failed", error.clone()),
                 codemason_agent::mcp::McpStatus::NeedsAuth => {
-                    let _ = write!(lines, "\n[mcp] Starting mcp server {id} ({transport})"); // INTENTIONAL: write to a String buffer is infallible
-                    let _ = write!(
-                        // INTENTIONAL: write to a String buffer is infallible
-                        lines,
-                        "\n[mcp] mcp server {id} ({transport}) needs authentication"
-                    );
+                    ("needs auth", "`/mcp` to authenticate".to_string())
                 }
-            }
+            };
+            let _ = writeln!(
+                // INTENTIONAL: write to a String buffer is infallible
+                rows,
+                "| {} | {} | {} | {} |",
+                Self::markdown_cell(&server.id),
+                Self::markdown_cell(&transport.to_string()),
+                result,
+                Self::markdown_cell(&detail)
+            );
         }
         // Drop the read guard before mutating `self` (the guard borrows the
         // shared client, which the append below would otherwise conflict with).
         drop(guard);
-        if !lines.is_empty() {
-            // A trailing blank line separates the startup report from whatever
-            // the stream prints next. Two newlines are needed: `str::lines()`
-            // drops a single trailing terminator, so one `\n` would add no row
-            // at all and only `\n\n` yields the empty final row that renders as
-            // the blank line.
-            lines.push_str("\n\n");
+        if !rows.is_empty() {
+            // The header goes in last so an empty report stays empty: the
+            // latch turns on a non-empty report, not on a table of headings
+            // with nothing under it. The leading blank line keeps a preceding
+            // reply from being glued onto the header (Markdown starts a table
+            // only after a blank line), and the trailing pair separates the
+            // report from whatever the stream prints next: `str::lines()`
+            // drops a single trailing terminator, so only `\n\n` leaves the
+            // empty final row that renders as the blank line.
+            let lines = format!(
+                "\n\nMCP servers\n\n| Server | Transport | Result | Detail |\n\
+                 | --- | --- | --- | --- |\n{rows}\n"
+            );
             self.append_assistant_text(&lines);
             // Latch only a non-empty report: a run with no configured server
             // leaves the latch clear so a server added mid-session is still
             // reported by the next sentinel.
             self.mcp_startup_reported = true;
         }
+    }
+
+    /// Escape one Markdown table cell, so a `|` in a server id or a failure
+    /// reason cannot break the row into extra columns.
+    ///
+    /// A newline is folded to a space for the same reason: a table row is one
+    /// line, and a reason that arrived with a line break in it would otherwise
+    /// end the row early.
+    fn markdown_cell(value: &str) -> String {
+        value
+            .replace('|', "\\|")
+            .replace(['\n', '\r'], " ")
+            .replace('\t', " ")
     }
 
     /// Whether every MCP server the shared client knows about is terminal.

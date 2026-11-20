@@ -326,9 +326,15 @@ impl App {
                 } else {
                     task.depends_on.join(", ")
                 };
+                // A title and the dependency list are free text (a joined list
+                // may carry a `|`), so both go through `mdtable::cell`.
                 output.push_str(&format!(
                     "| {} | {} | {} | {} | {} |\n",
-                    task.id, task.title, status_icon, assigned, deps
+                    crate::app::mdtable::cell(&task.id),
+                    crate::app::mdtable::cell(&task.title),
+                    status_icon,
+                    crate::app::mdtable::cell(assigned),
+                    crate::app::mdtable::cell(&deps)
                 ));
             }
         } else {
@@ -340,7 +346,9 @@ impl App {
                 };
                 output.push_str(&format!(
                     "| {} | {} | [wait] | - | {} |\n",
-                    st.id, st.title, deps
+                    crate::app::mdtable::cell(&st.id),
+                    crate::app::mdtable::cell(&st.title),
+                    crate::app::mdtable::cell(&deps)
                 ));
             }
         }
@@ -757,7 +765,12 @@ impl App {
                         team::TaskStatus::Cancelled => "[err]",
                         _ => "[warn]",
                     };
-                    output.push_str(&format!("| {} | {} | {} |\n", task.id, task.title, icon));
+                    output.push_str(&format!(
+                        "| {} | {} | {} |\n",
+                        task.id,
+                        codemason_types::mdtable::cell(&task.title),
+                        icon
+                    ));
                 }
                 output.push('\n');
             }

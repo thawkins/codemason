@@ -591,7 +591,7 @@ plain `codemason plugins ...` header and `## /plugins` becomes
 ### 7.5 Output shape
 
 Reports are prefixed with a `From: /plugins <sub>` attribution line. `list`
-renders a fixed-width table with a count column per contribution kind (tools,
+renders a Markdown table with a count column per contribution kind (tools,
 commands, skills, agents, hooks):
 
 ```

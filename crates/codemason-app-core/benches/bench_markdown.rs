@@ -1,7 +1,7 @@
 //! Criterion benchmarks for markdown rendering and ASCII table normalization.
 //!
 //! Covers:
-//! - `render_markdown_to_ascii` with varying input sizes (1 KB, 10 KB, 100 KB)
+//! - `prepare_transcript_text` with varying input sizes (1 KB, 10 KB, 100 KB)
 //! - `normalize_ascii_tables` with varying table sizes
 
 #![allow(missing_docs)]
@@ -55,7 +55,7 @@ fn generate_table(rows: usize) -> String {
 fn bench_render_markdown(c: &mut Criterion) {
     let mut app = support::make_app();
 
-    let mut group = c.benchmark_group("render_markdown_to_ascii");
+    let mut group = c.benchmark_group("prepare_transcript_text");
     for &size in &[1_000, 10_000, 100_000] {
         let md = generate_markdown(size);
         let label = format!("{:.0}KB", size as f64 / 1000.0);
@@ -64,15 +64,15 @@ fn bench_render_markdown(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("uncached", &label), &md, |b, input| {
             b.iter(|| {
                 app.md_render_cache.clear();
-                app.render_markdown_to_ascii(input)
+                app.prepare_transcript_text(input)
             });
         });
 
         // Cached: pre-populate cache, then measure cache-hit cost.
         app.md_render_cache.clear();
-        app.render_markdown_to_ascii(&md);
+        app.prepare_transcript_text(&md);
         group.bench_with_input(BenchmarkId::new("cached", &label), &md, |b, input| {
-            b.iter(|| app.render_markdown_to_ascii(input));
+            b.iter(|| app.prepare_transcript_text(input));
         });
     }
     group.finish();

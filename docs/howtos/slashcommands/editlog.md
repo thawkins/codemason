@@ -81,7 +81,7 @@ Prints the table above.
 
 `on`/`off` confirm the state change; a failed persist is reported as a
 `[warn]` line. `status` prints enabled/disabled plus the directory. `show`
-prints a fixed-width per-tool stats table with success percentages and the
+prints a per-tool stats table with success percentages and the
 failure reasons seen. `analyse` prints a breakdown of failed `old_str`
 characteristics, per-tool ratios, top combinations, and examples. `clear`
 prints how many entries were emptied.

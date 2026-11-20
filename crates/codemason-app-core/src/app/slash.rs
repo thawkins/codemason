@@ -752,8 +752,9 @@ where
 pub(super) fn render_mcp_config(
     locations: &[codemason_agent::mcp::McpDiscoveryLocation],
 ) -> String {
-    // Escape a markdown table cell (a raw `|` would split the row).
-    let cell = |value: &str| value.replace('|', "\\|");
+    // A raw `|` would split the row; `mdtable::cell` also folds a newline or a
+    // tab into a space, which a label or a command line can carry.
+    let cell = crate::app::mdtable::cell;
     let mut out = String::from("From: /mcp config\nWhere codemason looks for MCP servers:\n\n");
     out.push_str("| Location | Path | Servers |\n|---|---|---|\n");
     let total: usize = locations.iter().map(|l| l.servers.len()).sum();
@@ -1586,11 +1587,17 @@ impl App {
         let health = codemason_telemetry::export_health::export_health();
         let consecutive = health.consecutive_failures();
         if consecutive > 0 || health.total_failures() > 0 {
-            out.push_str(&format!(
-                "| Export health | {} consecutive failure(s), {} total |\n\n",
-                consecutive,
-                health.total_failures()
+            out.push_str(&crate::app::mdtable::table(
+                &["Export health", "Value"],
+                vec![
+                    vec!["Consecutive failures".to_string(), consecutive.to_string()],
+                    vec![
+                        "Total failures".to_string(),
+                        health.total_failures().to_string(),
+                    ],
+                ],
             ));
+            out.push('\n');
         }
 
         let usage: [(&str, &str, &str, String); 9] = [
@@ -2235,10 +2242,10 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                         for run in &runs {
                             text.push_str(&format!(
                                 "| `{}` | {} | {} | {} | {} |\n",
-                                run.id,
-                                run.trigger,
+                                crate::app::mdtable::cell(&run.id),
+                                crate::app::mdtable::cell(run.trigger.as_str()),
                                 run.outcome.map_or("running", |o| o.as_str()),
-                                run.backend,
+                                crate::app::mdtable::cell(&run.backend),
                                 run.started_at.to_rfc3339(),
                             ));
                         }
@@ -2322,10 +2329,10 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                         .unwrap_or_else(|| "-".to_string());
                     text.push_str(&format!(
                         "| `{}` | {} | {} | {} | {} | {} |\n",
-                        def.id,
-                        def.trigger.label(),
-                        def.trigger.schedule().unwrap_or("-"),
-                        def.backend_label(),
+                        crate::app::mdtable::cell(&def.id),
+                        crate::app::mdtable::cell(&def.trigger.label()),
+                        crate::app::mdtable::cell(def.trigger.schedule().unwrap_or("-")),
+                        crate::app::mdtable::cell(&def.backend_label()),
                         next_due,
                         if service.is_running(&def.id) {
                             "yes"
@@ -4028,28 +4035,34 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
         tools.sort();
 
         let mut output = "From: /editlog show\n\n".to_string();
-        output.push_str("| Tool | Count | Success | Failure | Success % |\n");
-        output.push_str("|---|---|---|---:|---:|\n");
-        for tool in &tools {
-            let total = stats.tool_counts[*tool];
-            let success = stats.success_for(tool);
-            let failure = stats.failure_for(tool);
-            let pct = stats.success_pct_for(tool);
-            output.push_str(&format!(
-                "| {} | {} | {} | {} | {:.1}% |\n",
-                tool, total, success, failure, pct
-            ));
-        }
+        // Cells go through `mdtable`, so a tool name or a failure reason that
+        // carries a `|` stays in its own cell instead of splitting the row.
+        let rows: Vec<Vec<String>> = tools
+            .iter()
+            .map(|tool| {
+                vec![
+                    crate::app::mdtable::cell(tool),
+                    stats.tool_counts[*tool].to_string(),
+                    stats.success_for(tool).to_string(),
+                    stats.failure_for(tool).to_string(),
+                    format!("{:.1}%", stats.success_pct_for(tool)),
+                ]
+            })
+            .collect();
+        output.push_str(&crate::app::mdtable::table(
+            &["Tool", "Count", "Success", "Failure", "Success %"],
+            rows,
+        ));
 
         if !stats.failure_reasons.is_empty() {
             output.push_str("\n**Failure reasons**\n\n");
-            output.push_str("| Reason | Count |\n");
-            output.push_str("|---|---:|\n");
             let mut reasons: Vec<(&String, &usize)> = stats.failure_reasons.iter().collect();
             reasons.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-            for (reason, count) in reasons {
-                output.push_str(&format!("| {} | {} |\n", reason, count));
-            }
+            let rows: Vec<Vec<String>> = reasons
+                .into_iter()
+                .map(|(reason, count)| vec![crate::app::mdtable::cell(reason), count.to_string()])
+                .collect();
+            output.push_str(&crate::app::mdtable::table(&["Reason", "Count"], rows));
         }
 
         self.append_assistant_text(&output);
@@ -4100,7 +4113,10 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 let ratio = analysis.failure_success_ratio_pct_for(tool);
                 output.push_str(&format!(
                     "| {} | {} | {} | {:.1}% |\n",
-                    tool, success, failure, ratio
+                    crate::app::mdtable::cell(tool),
+                    success,
+                    failure,
+                    ratio
                 ));
             }
             output.push('\n');
@@ -4114,7 +4130,12 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             output.push_str("|---|---|---:|\n");
             for (risk, count) in &by_freq {
                 let pct = (*count as f64 / analysis.failure_count as f64) * 100.0;
-                output.push_str(&format!("| {} | {} | {:.1}% |\n", risk.label(), count, pct));
+                output.push_str(&format!(
+                    "| {} | {} | {:.1}% |\n",
+                    crate::app::mdtable::cell(risk.label()),
+                    count,
+                    pct
+                ));
             }
         }
 
@@ -4126,8 +4147,10 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 analysis.combination_counts.iter().collect();
             combos.sort_by(|a, b| b.1.cmp(a.1));
             for (combo, count) in combos.iter().take(10) {
-                let labels: Vec<String> =
-                    combo.iter().map(|r| format!("`{}`", r.label())).collect();
+                let labels: Vec<String> = combo
+                    .iter()
+                    .map(|r| format!("`{}`", crate::app::mdtable::cell(r.label())))
+                    .collect();
                 output.push_str(&format!("| {} | {} |\n", labels.join(" + "), count));
             }
         }
@@ -4789,20 +4812,22 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 let mut output =
                     String::from("From: /config show\n\n[dir] **Application Paths**\n\n");
 
-                output.push_str(&format!(
-                    "| {:<24} | {}\n",
-                    "Working directory",
-                    cwd.display()
-                ));
-                output.push_str(&format!(
-                    "| {:<24} | {}\n",
-                    "Data directory",
-                    data_dir.display()
-                ));
-                output.push_str(&format!(
-                    "| {:<24} | {}\n",
-                    "Config directory",
-                    config_dir.display()
+                output.push_str(&crate::app::mdtable::table(
+                    &["Path", "Value"],
+                    vec![
+                        vec![
+                            "Working directory".to_string(),
+                            crate::app::mdtable::cell(&cwd.display().to_string()),
+                        ],
+                        vec![
+                            "Data directory".to_string(),
+                            crate::app::mdtable::cell(&data_dir.display().to_string()),
+                        ],
+                        vec![
+                            "Config directory".to_string(),
+                            crate::app::mdtable::cell(&config_dir.display().to_string()),
+                        ],
+                    ],
                 ));
 
                 output.push_str("\n[file] **Config Files**\n\n");
@@ -4810,32 +4835,40 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 let project_exists = project_config.exists();
                 let global_exists = global_config.exists();
 
-                output.push_str(&format!(
-                    "| {:<24} | {} {}\n",
-                    "Project config",
-                    project_config.display(),
-                    if project_exists { "[ok]" } else { "[x]" }
-                ));
-                output.push_str(&format!(
-                    "| {:<24} | {} {}\n",
-                    "Global config",
-                    global_config.display(),
-                    if global_exists { "[ok]" } else { "[x]" }
-                ));
-                if let Some(ref env_path) = env_config {
-                    let env_exists = std::path::PathBuf::from(env_path).exists();
-                    output.push_str(&format!(
-                        "| {:<24} | {} {}\n",
-                        "Env (CODEMASON_CONFIG)",
-                        env_path,
-                        if env_exists { "[ok]" } else { "[x]" }
-                    ));
-                } else {
-                    output.push_str(&format!(
-                        "| {:<24} | {}\n",
-                        "Env (CODEMASON_CONFIG)", "(not set)"
-                    ));
-                }
+                let mut rows = vec![
+                    vec![
+                        "Project config".to_string(),
+                        crate::app::mdtable::cell(&format!(
+                            "{} {}",
+                            project_config.display(),
+                            if project_exists { "[ok]" } else { "[x]" }
+                        )),
+                    ],
+                    vec![
+                        "Global config".to_string(),
+                        crate::app::mdtable::cell(&format!(
+                            "{} {}",
+                            global_config.display(),
+                            if global_exists { "[ok]" } else { "[x]" }
+                        )),
+                    ],
+                ];
+                rows.push(vec![
+                    "Env (CODEMASON_CONFIG)".to_string(),
+                    match &env_config {
+                        Some(env_path) => crate::app::mdtable::cell(&format!(
+                            "{} {}",
+                            env_path,
+                            if std::path::PathBuf::from(env_path).exists() {
+                                "[ok]"
+                            } else {
+                                "[x]"
+                            }
+                        )),
+                        None => "(not set)".to_string(),
+                    },
+                ]);
+                output.push_str(&crate::app::mdtable::table(&["Source", "File"], rows));
 
                 // -- Resolved configuration values with provenance -----------
                 // Reload the merged config and, for each top-level key, report
@@ -4948,11 +4981,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                         if let serde_json::Value::Object(map) = &merged_json {
                             let mut keys: Vec<&String> = map.keys().collect();
                             keys.sort();
-                            output.push_str(&format!(
-                                "| {:<30} | {:<30} | value |\n",
-                                "key", "source"
-                            ));
-                            output.push_str("|---|---|---|\n");
+                            let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
                             for key in keys {
                                 let mut value = map.get(key).cloned().unwrap_or_default();
                                 // SEC: value-scan the whole subtree so a
@@ -4984,10 +5013,16 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                                 } else {
                                     source
                                 };
-                                output.push_str(&format!(
-                                    "| {key:<30} | {source_label:<30} | `{rendered}`\n"
-                                ));
+                                rows.push(vec![
+                                    format!("`{}`", crate::app::mdtable::cell(key)),
+                                    crate::app::mdtable::cell(source_label),
+                                    format!("`{}`", crate::app::mdtable::cell(&rendered)),
+                                ]);
                             }
+                            output.push_str(&crate::app::mdtable::table(
+                                &["Key", "Source", "Value"],
+                                rows,
+                            ));
                         } else {
                             output.push_str("(could not serialise merged config)\n");
                         }
@@ -4999,76 +5034,91 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
 
                 // Storage database
                 output.push_str(&format!(
-                    "\n[disk] **Storage**\n\n| {:<24} | {}\n",
-                    "Database",
-                    self.db_path.display()
+                    "\n[disk] **Storage**\n\n{}",
+                    crate::app::mdtable::table(
+                        &["Database", "Path"],
+                        vec![vec![
+                            "SQLite".to_string(),
+                            crate::app::mdtable::cell(&self.db_path.display().to_string()),
+                        ]],
+                    )
                 ));
 
                 // Code index
                 let codeindex_dir = cwd.join(".codemason").join("codeindex");
                 output.push_str("\n[search] **Code Index**\n\n");
-                output.push_str(&format!(
-                    "| {:<24} | {} {}\n",
-                    "Index directory",
-                    codeindex_dir.display(),
-                    if codeindex_dir.exists() {
-                        "[ok]"
-                    } else {
-                        "[x]"
-                    }
+                output.push_str(&crate::app::mdtable::table(
+                    &["Directory", "Status"],
+                    vec![vec![
+                        crate::app::mdtable::cell(&codeindex_dir.display().to_string()),
+                        if codeindex_dir.exists() {
+                            "[ok] present"
+                        } else {
+                            "[x] missing"
+                        }
+                        .to_string(),
+                    ]],
                 ));
 
                 // Memory
                 let memory_dir = cwd.join(".codemason").join("memory");
                 let global_memory = codemason_config::user_dirs::global_memory_dir();
                 output.push_str("\n[brain] **Memory**\n\n");
-                output.push_str(&format!(
-                    "| {:<24} | {} {}\n",
-                    "Project memory",
-                    memory_dir.display(),
-                    if memory_dir.exists() { "[ok]" } else { "[x]" }
+                let presence = |exists: bool| {
+                    if exists {
+                        "[ok] present"
+                    } else {
+                        "[x] missing"
+                    }
+                    .to_string()
+                };
+                let mut rows = vec![vec![
+                    "Project memory".to_string(),
+                    crate::app::mdtable::cell(&memory_dir.display().to_string()),
+                    presence(memory_dir.exists()),
+                ]];
+                rows.push(match &global_memory {
+                    Some(dir) => vec![
+                        "Global memory".to_string(),
+                        crate::app::mdtable::cell(&dir.display().to_string()),
+                        presence(dir.exists()),
+                    ],
+                    None => vec![
+                        "Global memory".to_string(),
+                        "(unavailable)".to_string(),
+                        "[x] missing".to_string(),
+                    ],
+                });
+                output.push_str(&crate::app::mdtable::table(
+                    &["Store", "Directory", "Status"],
+                    rows,
                 ));
-                match &global_memory {
-                    Some(dir) => {
-                        output.push_str(&format!(
-                            "| {:<24} | {} {}\n",
-                            "Global memory",
-                            dir.display(),
-                            if dir.exists() { "[ok]" } else { "[x]" }
-                        ));
-                    }
-                    None => {
-                        output.push_str("| Global memory            | (unavailable) [x]\n");
-                    }
-                }
 
                 // Agents
                 let project_agents = cwd.join(".codemason").join("agents");
                 let global_agents = codemason_config::user_dirs::global_agents_dir();
                 output.push_str("\n[agent] **Custom Agents**\n\n");
-                output.push_str(&format!(
-                    "| {:<24} | {} {}\n",
-                    "Project agents",
-                    project_agents.display(),
-                    if project_agents.exists() {
-                        "[ok]"
-                    } else {
-                        "[x]"
-                    }
+                let mut rows = vec![vec![
+                    "Project agents".to_string(),
+                    crate::app::mdtable::cell(&project_agents.display().to_string()),
+                    presence(project_agents.exists()),
+                ]];
+                rows.push(match &global_agents {
+                    Some(dir) => vec![
+                        "Global agents".to_string(),
+                        crate::app::mdtable::cell(&dir.display().to_string()),
+                        presence(dir.exists()),
+                    ],
+                    None => vec![
+                        "Global agents".to_string(),
+                        "(unavailable)".to_string(),
+                        "[x] missing".to_string(),
+                    ],
+                });
+                output.push_str(&crate::app::mdtable::table(
+                    &["Directory", "Path", "Status"],
+                    rows,
                 ));
-                match &global_agents {
-                    Some(dir) => {
-                        output.push_str(&format!(
-                            "| {:<24} | {} {}\n",
-                            "Global agents",
-                            dir.display(),
-                            if dir.exists() { "[ok]" } else { "[x]" }
-                        ));
-                    }
-                    None => {
-                        output.push_str("| Global agents            | (unavailable) [x]\n");
-                    }
-                }
 
                 self.append_assistant_text(&output);
                 self.status = "config: show".to_string();
@@ -5773,13 +5823,21 @@ Be concise but comprehensive. This will be injected into future agent sessions a
         help_lines.push_str(&codemason_config::i18n::t(
             codemason_config::i18n::MessageKey::HelpHeader,
         ));
-        help_lines.push_str("\n\n```\n");
+        // Each group is its own Markdown table, so a command and its
+        // description line up in the GUI's Markdown viewer.
+        let mut rows: Vec<Vec<String>> =
+            Vec::with_capacity(SLASH_COMMANDS.len() + self.user_commands.len());
         for cmd_def in SLASH_COMMANDS {
-            help_lines.push_str(&format!(
-                "  /{:<18} {}\n",
-                cmd_def.trigger, cmd_def.description
-            ));
+            rows.push(vec![
+                format!("`/{}`", crate::app::mdtable::cell(cmd_def.trigger)),
+                crate::app::mdtable::cell(cmd_def.description),
+            ]);
         }
+        help_lines.push_str("\n\n");
+        help_lines.push_str(&crate::app::mdtable::table(
+            &["Command", "Description"],
+            rows,
+        ));
 
         // Append user-invocable skills
         let working_dir = self.cwd_path.clone();
@@ -5789,47 +5847,71 @@ Be concise but comprehensive. This will be injected into future agent sessions a
         let registry = codemason_agent::skill::SkillRegistry::load(&working_dir, &skill_dirs);
         let skills = registry.list_user_invocable();
         if !skills.is_empty() {
-            help_lines.push_str("\nSkills:\n");
-            for skill in &skills {
-                let desc = skill.description.as_deref().unwrap_or("(no description)");
-                let hint = skill
-                    .argument_hint
-                    .as_deref()
-                    .map(|h| format!(" {h}"))
-                    .unwrap_or_default();
-                help_lines.push_str(&format!(
-                    "  /{:<18} {}\n",
-                    format!("{}{}", skill.name, hint),
-                    desc
-                ));
-            }
+            let rows: Vec<Vec<String>> = skills
+                .iter()
+                .map(|skill| {
+                    let desc = skill.description.as_deref().unwrap_or("(no description)");
+                    let hint = skill
+                        .argument_hint
+                        .as_deref()
+                        .map(|h| format!(" {h}"))
+                        .unwrap_or_default();
+                    vec![
+                        format!(
+                            "`/{}`",
+                            crate::app::mdtable::cell(&format!("{}{}", skill.name, hint))
+                        ),
+                        crate::app::mdtable::cell(desc),
+                    ]
+                })
+                .collect();
+            help_lines.push_str("\nSkills:\n\n");
+            help_lines.push_str(&crate::app::mdtable::table(&["Skill", "Description"], rows));
         }
         // Append user-defined commands (`commands/*.md`).
         if !self.user_commands.is_empty() {
-            help_lines.push_str("\nUser commands:\n");
-            for user_cmd in &self.user_commands {
-                help_lines.push_str(&format!(
-                    "  /{:<18} {}\n",
-                    user_cmd.name, user_cmd.description
-                ));
-            }
+            let rows: Vec<Vec<String>> = self
+                .user_commands
+                .iter()
+                .map(|user_cmd| {
+                    vec![
+                        format!("`/{}`", crate::app::mdtable::cell(&user_cmd.name)),
+                        crate::app::mdtable::cell(&user_cmd.description),
+                    ]
+                })
+                .collect();
+            help_lines.push_str("\nUser commands:\n\n");
+            help_lines.push_str(&crate::app::mdtable::table(
+                &["Command", "Description"],
+                rows,
+            ));
         }
         // Append plugin-contributed commands (spec `plugins` FR-031).
         if !self.plugin_commands.is_empty() {
-            help_lines.push_str("\nPlugin commands:\n");
-            for plugin_cmd in &self.plugin_commands {
-                let desc = if plugin_cmd.description.is_empty() {
-                    format!("(plugin {})", plugin_cmd.plugin_id)
-                } else {
-                    format!(
-                        "{} (plugin {})",
-                        plugin_cmd.description, plugin_cmd.plugin_id
-                    )
-                };
-                help_lines.push_str(&format!("  /{:<18} {}\n", plugin_cmd.trigger, desc));
-            }
+            let rows: Vec<Vec<String>> = self
+                .plugin_commands
+                .iter()
+                .map(|plugin_cmd| {
+                    let desc = if plugin_cmd.description.is_empty() {
+                        format!("(plugin {})", plugin_cmd.plugin_id)
+                    } else {
+                        format!(
+                            "{} (plugin {})",
+                            plugin_cmd.description, plugin_cmd.plugin_id
+                        )
+                    };
+                    vec![
+                        format!("`/{}`", crate::app::mdtable::cell(&plugin_cmd.trigger)),
+                        crate::app::mdtable::cell(&desc),
+                    ]
+                })
+                .collect();
+            help_lines.push_str("\nPlugin commands:\n\n");
+            help_lines.push_str(&crate::app::mdtable::table(
+                &["Command", "Description"],
+                rows,
+            ));
         }
-        help_lines.push_str("```\n");
         self.append_assistant_text(&help_lines);
 
         self.status = "help".to_string();
@@ -6815,7 +6897,7 @@ Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
                                 s.config.url.clone().unwrap_or_default()
                             }
                         };
-                        let cell = |value: &str| value.replace('|', "\\|");
+                        let cell = crate::app::mdtable::cell;
                         out.push_str(&format!(
                             "| {} | {} | {} | {} | {} | {} |\n",
                             cell(&s.id),
@@ -7077,22 +7159,34 @@ than assumed.
             if self.session.team_members.is_empty() {
                 output.push_str("  (no teammates yet - use team_spawn tool or /team create)\n");
             } else {
-                for m in &self.session.team_members {
-                    // FR-033: the status word comes from the
-                    // canonical mapping, never from a Debug
-                    // spelling of the variant name.
-                    let status = status_label(m.status);
-                    let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
-                    let model_str = m
-                        .model_override
-                        .as_ref()
-                        .map(|mr| format!("{}/{}", mr.provider_id, mr.model_id))
-                        .unwrap_or_else(|| "(inherited)".to_string());
-                    output.push_str(&format!(
-                        "  └ {:<18} {:<10} model:{:<30} task:{}\n",
-                        m.name, status, model_str, task
-                    ));
-                }
+                // A Markdown table keeps every member's row on its own line in
+                // the GUI's Markdown viewer.
+                let rows: Vec<Vec<String>> = self
+                    .session
+                    .team_members
+                    .iter()
+                    .map(|m| {
+                        // FR-033: the status word comes from the
+                        // canonical mapping, never from a Debug
+                        // spelling of the variant name.
+                        let model_str = m
+                            .model_override
+                            .as_ref()
+                            .map(|mr| format!("{}/{}", mr.provider_id, mr.model_id))
+                            .unwrap_or_else(|| "(inherited)".to_string());
+                        vec![
+                            crate::app::mdtable::cell(&m.name),
+                            crate::app::mdtable::cell(status_label(m.status)),
+                            crate::app::mdtable::cell(&model_str),
+                            crate::app::mdtable::cell(m.current_task_id.as_deref().unwrap_or("-")),
+                        ]
+                    })
+                    .collect();
+                output.push('\n');
+                output.push_str(&crate::app::mdtable::table(
+                    &["Teammate", "Status", "Model", "Task"],
+                    rows,
+                ));
             }
             output.push_str(&format!(
                 "\n{} teammate(s)\n",
@@ -7326,33 +7420,53 @@ than assumed.
                 self.status = "team: show all (0)".to_string();
             } else {
                 output.push_str("## Registered teams\n\n");
+                // One Markdown table row per team, with the scope and path that
+                // used to be a second indented line under each entry.
+                let mut rows: Vec<Vec<String>> = Vec::new();
                 for (name, dir, is_project_local) in teams {
+                    let scope = if is_project_local {
+                        "project"
+                    } else {
+                        "global"
+                    };
+                    let path = dir.display().to_string();
                     match TeamStore::load(&dir) {
                         Ok(store) => {
                             let team = store.config;
-                            let scope = if is_project_local {
-                                "project"
-                            } else {
-                                "global"
-                            };
-                            output.push_str(&format!(
-                                "  * {:<18} {:<10} lead:{} teammates:{}\n",
-                                team.name,
-                                format!("{:?}", team.status).to_lowercase(),
-                                team.lead_session_id,
-                                team.members.len()
-                            ));
-                            output.push_str(&format!(
-                                "    scope:{} path:{}\n",
-                                scope,
-                                dir.display()
-                            ));
+                            rows.push(vec![
+                                crate::app::mdtable::cell(&team.name),
+                                crate::app::mdtable::cell(
+                                    &format!("{:?}", team.status).to_lowercase(),
+                                ),
+                                crate::app::mdtable::cell(scope),
+                                crate::app::mdtable::cell(&team.lead_session_id),
+                                team.members.len().to_string(),
+                                crate::app::mdtable::cell(&path),
+                            ]);
                         }
                         Err(e) => {
-                            output.push_str(&format!("  * {} (failed to load: {})\n", name, e));
+                            rows.push(vec![
+                                crate::app::mdtable::cell(&name),
+                                crate::app::mdtable::cell(&format!("failed to load: {e}")),
+                                crate::app::mdtable::cell(scope),
+                                "-".to_string(),
+                                "-".to_string(),
+                                crate::app::mdtable::cell(&path),
+                            ]);
                         }
                     }
                 }
+                output.push_str(&crate::app::mdtable::table(
+                    &[
+                        "Team",
+                        "Status",
+                        "Scope",
+                        "Lead session",
+                        "Teammates",
+                        "Path",
+                    ],
+                    rows,
+                ));
                 self.status = "team: show all".to_string();
             }
             self.append_assistant_text(&output);
@@ -7373,16 +7487,27 @@ than assumed.
                 if team.members.is_empty() {
                     output.push_str("  (no teammates yet)\n");
                 } else {
-                    for m in &team.members {
-                        // FR-033: one status-word mapping.
-                        let status = status_label(m.status);
-                        let task = m.current_task_id.as_deref().unwrap_or("-").to_string();
-                        let sid = m.session_id.as_deref().unwrap_or("-");
-                        output.push_str(&format!(
-                            "  └ {:<18} {:<10} agent:{} session:{} task:{}\n",
-                            m.name, status, m.agent_id, sid, task
-                        ));
-                    }
+                    let rows: Vec<Vec<String>> = team
+                        .members
+                        .iter()
+                        .map(|m| {
+                            // FR-033: one status-word mapping.
+                            vec![
+                                crate::app::mdtable::cell(&m.name),
+                                crate::app::mdtable::cell(status_label(m.status)),
+                                crate::app::mdtable::cell(&m.agent_id),
+                                crate::app::mdtable::cell(m.session_id.as_deref().unwrap_or("-")),
+                                crate::app::mdtable::cell(
+                                    m.current_task_id.as_deref().unwrap_or("-"),
+                                ),
+                            ]
+                        })
+                        .collect();
+                    output.push('\n');
+                    output.push_str(&crate::app::mdtable::table(
+                        &["Teammate", "Status", "Agent", "Session", "Task"],
+                        rows,
+                    ));
                 }
                 output.push_str(&format!("\n{} teammate(s)\n", team.members.len()));
                 // FR-020: a message whose recipient terminated before
@@ -7674,27 +7799,30 @@ than assumed.
                             if task_list.tasks.is_empty() {
                                 output.push_str("  (no tasks)\n");
                             } else {
-                                output.push_str(&format!(
-                                    "  {:<12}  {:<34}  {:<12}  {}\n",
-                                    "ID", "Title", "Status", "Assignee"
+                                let rows: Vec<Vec<String>> = task_list
+                                    .tasks
+                                    .iter()
+                                    .map(|task| {
+                                        let status = match task.status {
+                                            TaskStatus::Pending => "pending",
+                                            TaskStatus::InProgress => "in-progress",
+                                            TaskStatus::Completed => "completed",
+                                            TaskStatus::Cancelled => "cancelled",
+                                        };
+                                        vec![
+                                            crate::app::mdtable::cell(&task.id),
+                                            crate::app::mdtable::cell(&task.title),
+                                            crate::app::mdtable::cell(status),
+                                            crate::app::mdtable::cell(
+                                                task.assigned_to.as_deref().unwrap_or("-"),
+                                            ),
+                                        ]
+                                    })
+                                    .collect();
+                                output.push_str(&crate::app::mdtable::table(
+                                    &["ID", "Title", "Status", "Assignee"],
+                                    rows,
                                 ));
-                                output.push_str(&format!(
-                                    "  {:-<12}  {:-<34}  {:-<12}  {:-<16}\n",
-                                    "", "", "", ""
-                                ));
-                                for task in &task_list.tasks {
-                                    let status = match task.status {
-                                        TaskStatus::Pending => "pending",
-                                        TaskStatus::InProgress => "in-progress",
-                                        TaskStatus::Completed => "completed",
-                                        TaskStatus::Cancelled => "cancelled",
-                                    };
-                                    let assignee = task.assigned_to.as_deref().unwrap_or("-");
-                                    output.push_str(&format!(
-                                        "  {:<12}  {:<34}  {:<12}  {}\n",
-                                        task.id, task.title, status, assignee
-                                    ));
-                                }
                             }
                             self.append_assistant_text(&output);
                             self.status = format!("{} task(s)", task_list.tasks.len());
@@ -12578,8 +12706,8 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                                     output.push_str(&format!(
                                         "| {} | `{}` | `{}` | {} |\n",
                                         i + 1,
-                                        node.name,
-                                        node.source_file,
+                                        crate::app::mdtable::cell(&node.name),
+                                        crate::app::mdtable::cell(&node.source_file),
                                         node.degree,
                                     ));
                                 }
@@ -13418,23 +13546,30 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         &boundaries,
                         &AttachmentInfo::default(),
                     );
-                    let mut table = String::from(
-                        "From: /router\n```\nDimension                 Score\n───────────────────────────────\n",
-                    );
-                    for i in 0..15 {
-                        let name = codemason_agent::provider::router_classifier::dimension_name(i);
-                        table.push_str(&format!("{:<26}{:.3}\n", name, result.dimension_scores[i]));
-                    }
-                    table.push_str(&format!("───────────────────────────────\n"));
-                    table.push_str(&format!(
-                        "{:<26}{:.3}\n",
-                        "composite", result.composite_score
-                    ));
-                    table.push_str(&format!("{:<26}{}\n", "tier", result.tier));
+                    // One row per dimension, then the scalar rows the
+                    // classifier produces, as a Markdown table.
+                    let mut rows: Vec<Vec<String>> = (0..15)
+                        .map(|i| {
+                            vec![
+                                crate::app::mdtable::cell(
+                                    codemason_agent::provider::router_classifier::dimension_name(i),
+                                ),
+                                format!("{:.3}", result.dimension_scores[i]),
+                            ]
+                        })
+                        .collect();
+                    rows.push(vec![
+                        "composite".to_string(),
+                        format!("{:.3}", result.composite_score),
+                    ]);
+                    rows.push(vec!["tier".to_string(), result.tier.to_string()]);
                     if result.requires_vision {
-                        table.push_str(&format!("{:<26}{}\n", "requires_vision", "true"));
+                        rows.push(vec!["requires_vision".to_string(), "true".to_string()]);
                     }
-                    table.push_str("```\n");
+                    let table = format!(
+                        "From: /router\n{}",
+                        crate::app::mdtable::table(&["Dimension", "Score"], rows)
+                    );
                     self.append_assistant_text(&table);
                     self.session.router_current_tier = Some(result.tier.to_string());
                     self.status = format!("router: test -> {}", result.tier);
@@ -13445,14 +13580,20 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 let sub2 = rest.strip_prefix("weights").unwrap_or("").trim();
                 if sub2.is_empty() {
                     let w = WeightConfig::default();
-                    let mut table = String::from(
-                        "From: /router\n```\nDimension                 Weight\n───────────────────────────────\n",
+                    let rows: Vec<Vec<String>> = (0..15)
+                        .map(|i| {
+                            vec![
+                                crate::app::mdtable::cell(
+                                    codemason_agent::provider::router_classifier::dimension_name(i),
+                                ),
+                                format!("{:.2}", w.weight_by_index(i)),
+                            ]
+                        })
+                        .collect();
+                    let table = format!(
+                        "From: /router\n{}",
+                        crate::app::mdtable::table(&["Dimension", "Weight"], rows)
                     );
-                    for i in 0..15 {
-                        let name = codemason_agent::provider::router_classifier::dimension_name(i);
-                        table.push_str(&format!("{:<26}{:.2}\n", name, w.weight_by_index(i)));
-                    }
-                    table.push_str("```\n");
                     self.append_assistant_text(&table);
                     self.status = "router: weights".to_string();
                 } else {
@@ -13468,10 +13609,27 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 let sub2 = rest.strip_prefix("boundaries").unwrap_or("").trim();
                 if sub2.is_empty() {
                     let b = BoundaryConfig::default();
+                    let rows = vec![
+                        vec![
+                            "SIMPLE".to_string(),
+                            "MEDIUM".to_string(),
+                            format!("{:.2}", b.simple_medium),
+                        ],
+                        vec![
+                            "MEDIUM".to_string(),
+                            "COMPLEX".to_string(),
+                            format!("{:.2}", b.medium_complex),
+                        ],
+                        vec![
+                            "COMPLEX".to_string(),
+                            "REASONING".to_string(),
+                            format!("{:.2}", b.complex_reasoning),
+                        ],
+                    ];
                     self.append_assistant_text(&format!(
-                                                                          "From: /router\n```\nBoundary            Threshold\n──────────────────────────\nSIMPLE -> MEDIUM     {:.2}\nMEDIUM -> COMPLEX    {:.2}\nCOMPLEX -> REASONING {:.2}\n```",
-                                                                          b.simple_medium, b.medium_complex, b.complex_reasoning,
-                                                                      ));
+                        "From: /router\n{}",
+                        crate::app::mdtable::table(&["From", "To", "Threshold"], rows)
+                    ));
                     self.status = "router: boundaries".to_string();
                 } else {
                     self.append_assistant_text(
@@ -13484,29 +13642,35 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
             "tiers" => {
                 use codemason_agent::provider::router_config::{RouterConfig, Tier};
                 let config = RouterConfig::default();
-                let mut output = String::from(
-                    "From: /router\n```\nTier      Provider/Model                         Timeout\n─────────────────────────────────────────────────\n",
-                );
+                // One row per (tier, model) entry; a tier's fallbacks are rows
+                // of their own under the same tier name.
+                let mut rows: Vec<Vec<String>> = Vec::new();
                 for tier in Tier::all() {
                     let tc = config.tier_config(*tier);
                     for (i, entry) in tc.models.iter().enumerate() {
-                        let prefix = if i == 0 {
+                        let name = if i == 0 {
                             tier.to_string()
                         } else {
-                            "  fallback".to_string()
+                            format!("{tier} (fallback)")
                         };
                         let timeout = tc
                             .timeout_ms
                             .map(|ms| format!("{}ms", ms))
                             .unwrap_or_else(|| "default".to_string());
-                        output.push_str(&format!(
-                            "{:<10}{}/{}  {}\n",
-                            prefix, entry.provider_id, entry.model, timeout
-                        ));
+                        rows.push(vec![
+                            crate::app::mdtable::cell(&name),
+                            crate::app::mdtable::cell(&format!(
+                                "{}/{}",
+                                entry.provider_id, entry.model
+                            )),
+                            timeout,
+                        ]);
                     }
                 }
-                output.push_str("```\n");
-                self.append_assistant_text(&output);
+                self.append_assistant_text(&format!(
+                    "From: /router\n{}",
+                    crate::app::mdtable::table(&["Tier", "Provider/Model", "Timeout"], rows)
+                ));
                 self.status = "router: tiers".to_string();
             }
             _ => {
@@ -13929,44 +14093,40 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
             output.push_str("    AgentSkills: ~/.agents/skills/<name>/SKILL.md (user)\n");
             output.push_str("                 .agents/skills/<name>/SKILL.md (project)\n");
         } else {
-            // Render each skill as its own compact block instead of one wide
-            // dense table row, so long descriptions wrap cleanly under the
-            // command name instead of stretching an ever-wider column.
-            output.push_str("```\n");
-            for skill in &skills {
-                let hint = skill
-                    .argument_hint
-                    .as_deref()
-                    .map(|h| format!(" {h}"))
-                    .unwrap_or_default();
-                let access = match (skill.user_invocable, !skill.disable_model_invocation) {
-                    (true, true) => "both",
-                    (true, false) => "user-only",
-                    (false, true) => "agent-only",
-                    (false, false) => "disabled",
-                };
-                let desc = skill.description.as_deref().unwrap_or("(no description)");
-                output.push_str(&format!("/{}{}\n", skill.name, hint));
-                output.push_str(&format!("  scope: {}  access: {}\n", skill.scope, access));
-                // Wrap the description at ~76 cols with a hanging indent so
-                // multi-line descriptions stay visually attached to the skill.
-                let mut line = String::from("  ");
-                for word in desc.split_whitespace() {
-                    if line.len() + word.len() + 1 > 78 {
-                        output.push_str(&line);
-                        output.push('\n');
-                        line = String::from("  ");
-                    }
-                    if line.len() > 2 {
-                        line.push(' ');
-                    }
-                    line.push_str(word);
-                }
-                output.push_str(&line);
-                output.push_str("\n\n");
-            }
-            output.push_str(&format!("{} skill(s) registered\n", skills.len()));
-            output.push_str("```\n");
+            // One row per skill, so a long description wraps inside its own
+            // cell rather than stretching an ever-wider column.
+            let rows: Vec<Vec<String>> = skills
+                .iter()
+                .map(|skill| {
+                    let hint = skill
+                        .argument_hint
+                        .as_deref()
+                        .map(|h| format!(" {h}"))
+                        .unwrap_or_default();
+                    let access = match (skill.user_invocable, !skill.disable_model_invocation) {
+                        (true, true) => "both",
+                        (true, false) => "user-only",
+                        (false, true) => "agent-only",
+                        (false, false) => "disabled",
+                    };
+                    vec![
+                        format!(
+                            "`/{}`",
+                            crate::app::mdtable::cell(&format!("{}{}", skill.name, hint))
+                        ),
+                        crate::app::mdtable::cell(&skill.scope.to_string()),
+                        crate::app::mdtable::cell(access),
+                        crate::app::mdtable::cell(
+                            skill.description.as_deref().unwrap_or("(no description)"),
+                        ),
+                    ]
+                })
+                .collect();
+            output.push_str(&crate::app::mdtable::table(
+                &["Skill", "Scope", "Access", "Description"],
+                rows,
+            ));
+            output.push_str(&format!("\n{} skill(s) registered\n", skills.len()));
         }
 
         self.append_assistant_text(&output);
@@ -14031,11 +14191,6 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
         if snapshot.operations.is_empty() {
             return None;
         }
-        let mut out = String::from(
-            "Agent action-loop average timings (ms):\n\n\
-               ```\n\
-               count     avg ms     self avg    max ms    operation\n",
-        );
         // Sort by descending average elapsed time for a useful overview.
         let mut ops: Vec<_> = snapshot.operations.iter().collect();
         ops.sort_by(|a, b| {
@@ -14043,14 +14198,25 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 .partial_cmp(&a.avg_ms)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        for op in ops {
-            out.push_str(&format!(
-                "{:>5}  {:>10.2}  {:>10.2}  {:>9.2}  {}\n",
-                op.count, op.avg_ms, op.self_avg_ms, op.max_ms, op.name
-            ));
-        }
-        out.push_str("```\n");
-        Some(out)
+        let rows: Vec<Vec<String>> = ops
+            .iter()
+            .map(|op| {
+                vec![
+                    crate::app::mdtable::cell(&op.name),
+                    op.count.to_string(),
+                    format!("{:.2}", op.avg_ms),
+                    format!("{:.2}", op.self_avg_ms),
+                    format!("{:.2}", op.max_ms),
+                ]
+            })
+            .collect();
+        Some(format!(
+            "Agent action-loop average timings (ms):\n\n{}",
+            crate::app::mdtable::table(
+                &["Operation", "Count", "Avg ms", "Self avg ms", "Max ms"],
+                rows
+            )
+        ))
     }
 
     // -- /cron slash-command handler (spec agentchron T-013) ------------
@@ -14601,9 +14767,15 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
             };
             let cond_preview = truncate_field(&rule.condition, 40);
             let action_preview = truncate_field(&rule.action, 40);
+            // A condition or an action is free text the user wrote, so it can
+            // carry a `|`; escape it rather than let it split the row.
             output.push_str(&format!(
                 "| `{}` | {} | {} | {} | {} |\n",
-                id_short, cond_preview, action_preview, mode, status
+                crate::app::mdtable::cell(&id_short),
+                crate::app::mdtable::cell(&cond_preview),
+                crate::app::mdtable::cell(&action_preview),
+                mode,
+                status
             ));
         }
         output.push_str(&format!("\n**{} rule(s) registered.**\n", rules.len()));
