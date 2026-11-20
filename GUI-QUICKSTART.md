@@ -205,7 +205,11 @@ unreachable / key missing), the thinking level, the agent, and how much of the
 model's context window the last request used. Warnings appear in it only while
 they apply (quota from 80%, a non-default backend, `AUTO`, `YOLO`, code-index
 activity). The `Details` button at its end opens a popup with the version,
-project, branch, backend, and the on/off state of every service.
+project, branch, backend, and a chip for every service (GCF, CDX, LOG, EDIT,
+TELE, AUTO, YOLO). A chip is filled with a check while its service is on;
+click it to turn the service on or off (it runs the same `/<command> on|off`
+the slash command does). The `AUTO` and `YOLO` chips in the bar itself turn
+autopilot or YOLO off with one click.
 
 A new session starts with an empty Messages pane that shows three starter
 actions; clicking one fills the prompt.
@@ -329,7 +333,8 @@ it applies a default 1800-second (`--max-time`) limit — a stray keystroke cann
 start an unbounded run. Use `/autopilot on` with no flags when you want a run
 with no time limit. Pressing `Alt+O` again stops the run.
 
-The status bar shows an `AUTO` indicator that is on while autopilot runs.
+The status bar shows an `AUTO` chip while autopilot runs; clicking it runs
+`/autopilot off`.
 
 ---
 

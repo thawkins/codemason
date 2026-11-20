@@ -26,6 +26,12 @@
 > below are not re-measured; a full `cargo nextest run --workspace` on this tree
 > ran 15,844 tests, all passing.
 >
+> **Status bar service chips (unreleased, branch
+> `claude/status-bar-panel-indicators-ui-59168c`).** The status bar and Details
+> service indicators become toggleable Material chips; adds `chip_dense` and
+> `ChipKind::Caution`. No crate is added or removed; the tables below are not
+> re-measured. `cargo nextest run -p codemason-gui` ran 548 tests, all passing.
+>
 > **GUI phase 0 (unreleased, branch `feat/ui-phase0`).** Empty state for new
 > sessions with the banner and logo removed, one-row status bar with a Details
 > popup and a busy spinner, `/theme`, a label-free prompt
