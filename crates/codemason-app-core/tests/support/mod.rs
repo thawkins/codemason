@@ -165,3 +165,20 @@ impl Drop for GlobalConfigGuard {
         codemason_config::Config::invalidate_load_cache();
     }
 }
+
+/// Sends config-file writes (such as the theme `/theme` saves) to a fresh
+/// `target/temp/config-writes/<pid>-<n>/codemason.json`, so a test never edits
+/// the developer's own config, and returns that path.
+#[allow(dead_code)]
+pub fn scratch_config_target() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/config-writes")
+        .join(format!("{}-{n}", std::process::id()))
+        .join("codemason.json");
+    // INTENTIONAL: a leftover file from an earlier run with the same pid.
+    let _ = std::fs::remove_file(&path);
+    codemason_config::Config::set_config_write_target(Some(path.clone()));
+    path
+}

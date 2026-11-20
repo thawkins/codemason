@@ -607,6 +607,7 @@ fn theme_picker_rig() -> (
     UnboundedSender<Event>,
     Harness<'static, Shell>,
 ) {
+    support::scratch_config_target();
     rig(|app| {
         app.themes = codemason_app_core::theme_tokens::ThemeCatalog::builtin();
         app.theme = codemason_app_core::theme_tokens::ThemeSelection::System;

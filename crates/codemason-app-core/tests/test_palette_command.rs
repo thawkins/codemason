@@ -7,6 +7,7 @@ use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 mod support;
 
 fn app() -> codemason_app_core::app::App {
+    support::scratch_config_target();
     let mut app = support::make_app();
     app.themes = ThemeCatalog::builtin();
     app.theme = ThemeSelection::System;

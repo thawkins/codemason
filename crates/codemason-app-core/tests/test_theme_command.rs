@@ -9,6 +9,7 @@ mod support;
 /// An App whose theme catalog is the built-in one and whose theme is
 /// `system`, whatever theme files the developer's machine has.
 fn make_app() -> codemason_app_core::app::App {
+    support::scratch_config_target();
     let mut app = support::make_app();
     app.themes = ThemeCatalog::builtin();
     app.theme = ThemeSelection::System;
@@ -199,4 +200,57 @@ fn test_new_app_starts_in_the_startup_theme() {
     // follows the system, whatever the developer's own config file says.
     assert_eq!(codemason_app_core::theme_tokens::startup(), None);
     assert_eq!(support::make_app().theme, ThemeSelection::System);
+}
+
+/// The `theme` key of the config file at `path`, if the file sets one.
+fn saved_theme(path: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).expect("config is JSON");
+    json.get("theme")?.as_str().map(str::to_string)
+}
+
+/// `/theme <name>` saves the theme, so a restart opens in it; other keys in
+/// the file are kept.
+#[tokio::test]
+async fn test_theme_command_persists_choice() {
+    let mut app = make_app();
+    let target = support::scratch_config_target();
+    std::fs::create_dir_all(target.parent().expect("parent")).expect("dir");
+    std::fs::write(&target, r#"{"username":"kept"}"#).expect("seed config");
+
+    app.execute_slash_command("/theme nord").await;
+
+    assert_eq!(saved_theme(&target).as_deref(), Some("nord"));
+    let raw = std::fs::read_to_string(&target).expect("config");
+    assert!(raw.contains("\"username\": \"kept\""), "{raw}");
+    assert_eq!(app.status, "theme: nord");
+}
+
+/// Enter in the picker saves the previewed theme; Esc saves nothing.
+#[tokio::test]
+async fn test_theme_picker_enter_persists_and_esc_does_not() {
+    let mut app = make_app();
+    let target = support::scratch_config_target();
+
+    app.execute_slash_command("/theme").await;
+    press(&mut app, Key::Down).await;
+    press(&mut app, Key::Esc).await;
+    assert_eq!(saved_theme(&target), None, "Esc must not save");
+
+    app.execute_slash_command("/theme").await;
+    press(&mut app, Key::Down).await;
+    let previewed = app.theme.display_name().to_string();
+    press(&mut app, Key::Enter).await;
+    assert_eq!(saved_theme(&target), Some(previewed));
+}
+
+/// Choosing a theme from the command palette saves it too.
+#[tokio::test]
+async fn test_theme_palette_choice_persists() {
+    let mut app = make_app();
+    let target = support::scratch_config_target();
+
+    app.run_palette_entry("theme:high-contrast").await;
+
+    assert_eq!(saved_theme(&target).as_deref(), Some("high-contrast"));
 }
