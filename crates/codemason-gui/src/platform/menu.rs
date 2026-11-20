@@ -14,7 +14,7 @@
 //! - **Quit** (Cmd+Q) is craft-menu's built-in Quit, which asks the window
 //!   to close (`craft_quit::on_menu_event`): the shell's close path decides,
 //!   asking first while an agent turn runs ([`super::window`]).
-//! - **About** runs app-core's `/about`.
+//! - **About** opens the About dialog ([`crate::dialogs::about`]).
 //! - **A panel toggle** sends the App the TUI chord of its keymap command
 //!   (`keys::command_key_input`), as the keyboard shortcut does. Its
 //!   shortcut, pressed, comes back to egui as the key press it was
@@ -45,6 +45,8 @@ pub enum MenuAction {
     Key(KeyInput),
     /// Run this slash command through `App::execute_slash_command`.
     Slash(&'static str),
+    /// Open the About dialog ([`crate::dialogs::about`]).
+    About,
 }
 
 /// The app's menus, before the platform layout: About, and a View menu with
@@ -114,7 +116,7 @@ pub fn mac_menu_layout(keymap: &Keymap) -> Layout {
 #[must_use]
 pub fn menu_action(command: &CommandRef) -> Option<MenuAction> {
     if *command == CommandRef::new(ABOUT_COMMAND) {
-        return Some(MenuAction::Slash("/about"));
+        return Some(MenuAction::About);
     }
     command_key_input(command).map(MenuAction::Key)
 }

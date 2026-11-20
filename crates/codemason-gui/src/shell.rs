@@ -454,6 +454,7 @@ impl Shell {
                         .runtime
                         .block_on(self.app.execute_slash_command(line));
                 }
+                Some(MenuAction::About) => dialogs::about::open(ctx),
                 None => tracing::debug!(?command, "menu command without an action"),
             }
             ctx.request_repaint();
@@ -571,6 +572,7 @@ impl Shell {
         }
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx(), &palette);
+        dialogs::about::show(ui.ctx(), &palette);
         self.close.show(ui.ctx(), &mut self.app);
         if matches!(self.frame, craft_window::policy::Frame::Integrated(_)) {
             crate::title_bar::resize_edges(ui.ctx());
@@ -709,6 +711,10 @@ impl Shell {
                     crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
                 })
                 .map(MenuAction::Key),
+            RibbonAction::Menu(MenuAction::About) => {
+                dialogs::about::open(ctx);
+                return;
+            }
             RibbonAction::Menu(menu_action) => Some(menu_action),
         };
         let (Some(menu_action), Some(sources)) = (key, self.sources.as_ref()) else {
@@ -724,6 +730,8 @@ impl Shell {
                     .runtime
                     .block_on(self.app.execute_slash_command(line));
             }
+            // Opened above, before the runtime is needed.
+            MenuAction::About => dialogs::about::open(ctx),
         }
         ctx.request_repaint();
     }

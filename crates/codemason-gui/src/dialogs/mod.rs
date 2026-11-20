@@ -37,6 +37,7 @@
 //! Dependencies: `codemason-app-core` (the App and its key types), `egui`
 //! (`Modal`) and `craft-ui` (`ComboBox`).
 
+pub mod about;
 pub mod banner;
 pub mod confirm;
 pub mod context_menu;

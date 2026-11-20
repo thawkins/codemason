@@ -91,7 +91,7 @@ fn test_menu_commands_run_the_keymap_chord_or_about() {
     );
     assert_eq!(
         menu_action(&CommandRef::new(ABOUT_COMMAND)),
-        Some(MenuAction::Slash("/about"))
+        Some(MenuAction::About)
     );
     assert_eq!(menu_action(&CommandRef::new("no.such.command")), None);
 }

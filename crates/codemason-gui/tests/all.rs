@@ -199,6 +199,8 @@ pub fn global_env_lock() -> MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+#[path = "test_about_gui.rs"]
+mod test_about_gui;
 #[path = "test_agents_teams_cursor_gui.rs"]
 mod test_agents_teams_cursor_gui;
 #[path = "test_agents_window_table_gui.rs"]
