@@ -4,8 +4,8 @@
 
 ### Changed
 
-- Changed: every service indicator in the GUI status bar and its `Details` popup (GCF, CDX, LOG, EDIT, TELE, AUTO, YOLO) is a dense Material filter chip that turns its service on or off: selected while the service is on, and a click runs the service's own `/<command> on|off` (`/gcf`, `/codeindex`, `/alog`, `/editlog`, `/telemetry`, `/autopilot`, `/yolo`), so the change persists exactly as the slash command does. The `<NAME> [ok]` / `<NAME> [x]` text tags are gone. `AUTO` and `YOLO` use a caution tone (`error_container`) and, in the bar, turn autopilot or YOLO off with one click. The `Details` popup stays open on a chip click, and the bar is always one chip high so it no longer changes height when YOLO or autopilot turns on.
-- Added: `material::chip::chip_dense` (a 24-point chip at M3 density -2) and `ChipKind::Caution` (a filter chip filled with `error_container` while on).
+- Changed: every service indicator in the GUI status bar and its `Details` popup (GCF, CDX, LOG, EDIT, TELE, AUTO, YOLO) is a dense Material status chip that turns its service on or off: a green check while the service is on and a red cross while it is off, and a click runs the service's own `/<command> on|off` (`/gcf`, `/codeindex`, `/alog`, `/editlog`, `/telemetry`, `/autopilot`, `/yolo`), so the change persists exactly as the slash command does. The `<NAME> [ok]` / `<NAME> [x]` text tags are gone. `AUTO` and `YOLO` use a caution tone (`error_container`) and, in the bar, turn autopilot or YOLO off with one click. The `Details` popup stays open on a chip click, and the bar is always one chip high so it no longer changes height when YOLO or autopilot turns on.
+- Added: `material::chip::chip_dense` (a 24-point chip at M3 density -2) and `ChipKind::Status` (a green check while on, a red cross while off, so the chip keeps one width; a caution status chip is filled with `error_container` while on).
 
 ### Fixed
 

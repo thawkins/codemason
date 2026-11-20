@@ -206,7 +206,7 @@ model's context window the last request used. Warnings appear in it only while
 they apply (quota from 80%, a non-default backend, `AUTO`, `YOLO`, code-index
 activity). The `Details` button at its end opens a popup with the version,
 project, branch, backend, and a chip for every service (GCF, CDX, LOG, EDIT,
-TELE, AUTO, YOLO). A chip is filled with a check while its service is on;
+TELE, AUTO, YOLO). A chip shows a green check while its service is on and a red cross while it is off;
 click it to turn the service on or off (it runs the same `/<command> on|off`
 the slash command does). The `AUTO` and `YOLO` chips in the bar itself turn
 autopilot or YOLO off with one click.

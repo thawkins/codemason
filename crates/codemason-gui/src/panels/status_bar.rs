@@ -18,8 +18,8 @@
 //!   activity log, autopilot, edit log, telemetry, YOLO).
 //!
 //! Every service indicator, in the bar and in Details, is a dense Material
-//! filter chip ([`crate::material::chip::chip_dense`]): selected while the
-//! service is on, and a click asks for the service's own `/<command> on|off`
+//! status chip ([`crate::material::chip::chip_dense`]): a green check while
+//! the service is on and a red cross while it is off, and a click asks for the service's own `/<command> on|off`
 //! slash command, which [`status_bar_ui`] returns for the shell to run.
 //!
 //! A run's cost and tokens appear in the run-cost banner
@@ -215,15 +215,16 @@ impl Service {
         }
     }
 
-    /// The chip kind for the on state: the services that let the agent act
-    /// without asking are caution chips.
-    const fn kind(self, selected: bool) -> ChipKind {
-        match self {
-            Self::Autopilot | Self::Yolo => ChipKind::Caution { selected },
+    /// The chip kind for the state `on`: the services that let the agent
+    /// act without asking are caution chips.
+    const fn kind(self, on: bool) -> ChipKind {
+        let caution = match self {
+            Self::Autopilot | Self::Yolo => true,
             Self::Gcf | Self::CodeIndex | Self::ActivityLog | Self::EditLog | Self::Telemetry => {
-                ChipKind::Filter { selected }
+                false
             }
-        }
+        };
+        ChipKind::Status { on, caution }
     }
 }
 

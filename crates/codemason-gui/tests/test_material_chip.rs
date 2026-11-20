@@ -39,12 +39,13 @@ fn test_material_chip_filter_toggles_and_reports_state() {
 }
 
 #[test]
-fn test_material_chip_dense_caution_is_short_and_reports_state() {
+fn test_material_chip_dense_status_is_short_and_reports_state() {
     let palette = support_material::palette();
     let mut harness = support_material::builder().build_ui_state(
         move |ui, selected: &mut bool| {
-            let kind = ChipKind::Caution {
-                selected: *selected,
+            let kind = ChipKind::Status {
+                on: *selected,
+                caution: true,
             };
             if chip_dense(ui, &palette, kind, None, "YOLO").clicked() {
                 *selected = !*selected;
@@ -61,4 +62,28 @@ fn test_material_chip_dense_caution_is_short_and_reports_state() {
     harness.get_by_label("YOLO").click();
     harness.run();
     assert!(!*harness.state());
+}
+
+#[test]
+fn test_material_chip_status_keeps_its_width_on_and_off() {
+    let palette = support_material::palette();
+    let mut harness = support_material::builder().build_ui_state(
+        move |ui, on: &mut bool| {
+            let kind = ChipKind::Status {
+                on: *on,
+                caution: false,
+            };
+            if chip_dense(ui, &palette, kind, None, "GCF").clicked() {
+                *on = !*on;
+            }
+        },
+        false,
+    );
+    // The cross (off) and the check (on) take the same room.
+    let off = harness.get_by_label("GCF").rect().width();
+    harness.get_by_label("GCF").click();
+    harness.run();
+    assert!(*harness.state());
+    let on = harness.get_by_label("GCF").rect().width();
+    assert!((on - off).abs() < 0.5, "off {off} on {on}");
 }
