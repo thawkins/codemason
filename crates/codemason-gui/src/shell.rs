@@ -542,7 +542,7 @@ impl Shell {
             });
         });
         if let Some(line) = service_command {
-            self.run_ribbon_action(ui.ctx(), RibbonAction::Menu(MenuAction::Slash(line)));
+            self.run_service_command(ui.ctx(), line);
         }
         let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
@@ -723,6 +723,20 @@ impl Shell {
             }
         }
         ctx.request_repaint();
+    }
+
+    /// Run a status-bar service chip's `/<command> on|off` as the ribbon runs
+    /// its slash commands, keeping the draft: running a slash command clears
+    /// the prompt (it is normally the prompt's own submission), and flipping
+    /// a service is not a submission.
+    fn run_service_command(&mut self, ctx: &egui::Context, line: &'static str) {
+        let draft = self.app.session.input.clone();
+        let cursor = self.app.session.input_cursor;
+        let menu = self.app.slash_menu.clone();
+        self.run_ribbon_action(ctx, RibbonAction::Menu(MenuAction::Slash(line)));
+        self.app.session.input = draft;
+        self.app.session.input_cursor = cursor;
+        self.app.slash_menu = menu;
     }
 
     fn show_dock(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<egui::Rect> {

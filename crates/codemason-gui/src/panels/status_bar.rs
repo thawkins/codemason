@@ -415,9 +415,17 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) -> Option<&'static s
     // flipped in one visit.
     let config = egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    let (_, picked) = egui::containers::menu::MenuButton::from_button(button)
-        .config(config)
-        .ui(ui, |ui| details(ui, app, palette));
+    // A fixed id: the AUTO and YOLO chips before the button come and go, and
+    // the button's automatic id (and so its popup's) would change with them,
+    // closing the popup when one of them is flipped from inside it.
+    let fixed = egui::UiBuilder::new().scope_id(egui::Id::unique("status_bar_details"));
+    let (_, picked) = ui
+        .scope_builder(fixed, |ui| {
+            egui::containers::menu::MenuButton::from_button(button)
+                .config(config)
+                .ui(ui, |ui| details(ui, app, palette))
+        })
+        .inner;
     command.or(picked.and_then(|inner| inner.inner))
 }
 
@@ -467,7 +475,8 @@ fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) -> Option<&'static s
         );
     }
     ui.separator();
-    ui.horizontal(|ui| {
+    // Wrapped, so every chip stays reachable in a narrow or zoomed window.
+    ui.horizontal_wrapped(|ui| {
         Service::ALL.into_iter().fold(None, |picked, service| {
             picked.or(service_chip(ui, app, palette, service))
         })

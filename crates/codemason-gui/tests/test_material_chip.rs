@@ -87,3 +87,25 @@ fn test_material_chip_status_keeps_its_width_on_and_off() {
     let on = harness.get_by_label("GCF").rect().width();
     assert!((on - off).abs() < 0.5, "off {off} on {on}");
 }
+
+#[test]
+fn test_material_chip_dense_never_takes_the_keyboard_focus() {
+    // A focused status-bar control would share Enter with the prompt.
+    let palette = support_material::palette();
+    let mut harness = support_material::builder().build_ui_state(
+        move |ui, clicks: &mut u32| {
+            let kind = ChipKind::Status {
+                on: false,
+                caution: false,
+            };
+            if chip_dense(ui, &palette, kind, None, "GCF").clicked() {
+                *clicks += 1;
+            }
+        },
+        0,
+    );
+    harness.get_by_label("GCF").click();
+    harness.run();
+    assert_eq!(*harness.state(), 1, "the click still lands");
+    assert!(harness.ctx.memory(|m| m.focused()).is_none());
+}

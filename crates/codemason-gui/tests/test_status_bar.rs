@@ -286,3 +286,31 @@ fn test_status_bar_service_commands_turn_each_service_on_and_off() {
         assert_eq!(on.trim_end_matches(" on"), off.trim_end_matches(" off"));
     }
 }
+
+#[test]
+fn test_status_bar_chip_keeps_the_draft_and_the_details_popup_open() {
+    let mut rig = rig(|_, app| {
+        assert!(!app.session.autopilot_enabled);
+        app.session.input = "half-written message".to_string();
+        app.session.input_cursor = 4;
+    });
+    open_details(&mut rig);
+    // Turning autopilot on adds the AUTO chip to the bar, before the Details
+    // button: the popup must stay open regardless.
+    rig.harness
+        .get_all_by_label("AUTO")
+        .next()
+        .expect("AUTO chip")
+        .click();
+    rig.harness.run();
+    let app = rig.harness.state().app();
+    assert!(app.session.autopilot_enabled, "the chip ran /autopilot on");
+    assert_eq!(app.session.input, "half-written message");
+    assert_eq!(app.session.input_cursor, 4);
+    assert_eq!(
+        rig.harness.get_all_by_label("AUTO").count(),
+        2,
+        "the bar's AUTO chip and the still-open popup's"
+    );
+    rig.harness.get_by_label("TELE");
+}

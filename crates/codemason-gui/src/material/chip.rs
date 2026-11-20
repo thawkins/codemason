@@ -84,10 +84,24 @@ pub fn chip(
     icon: Option<Icon>,
     label: &str,
 ) -> Response {
-    draw(ui, palette, kind, icon, label, HEIGHT, PADDING)
+    draw(
+        ui,
+        palette,
+        kind,
+        icon,
+        label,
+        HEIGHT,
+        PADDING,
+        Sense::click(),
+    )
 }
 
 /// Draw a dense chip: [`chip`] at [`DENSE_HEIGHT`] with tighter padding.
+///
+/// A dense chip is click-only: it never takes the keyboard focus, because
+/// the rows it is made for (the status bar) sit beside the prompt, and a
+/// focused control there would share Enter with the prompt, which sends the
+/// draft.
 ///
 /// # Arguments
 ///
@@ -108,10 +122,21 @@ pub fn chip_dense(
     icon: Option<Icon>,
     label: &str,
 ) -> Response {
-    draw(ui, palette, kind, icon, label, DENSE_HEIGHT, DENSE_PADDING)
+    draw(
+        ui,
+        palette,
+        kind,
+        icon,
+        label,
+        DENSE_HEIGHT,
+        DENSE_PADDING,
+        Sense::CLICK,
+    )
 }
 
-/// Draw a chip `height` points high with `padding` beside its label.
+/// Draw a chip `height` points high with `padding` beside its label,
+/// responding to `sense`.
+#[allow(clippy::too_many_arguments)] // The two public wrappers fix the last three.
 fn draw(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -120,6 +145,7 @@ fn draw(
     label: &str,
     height: f32,
     padding: f32,
+    sense: Sense,
 ) -> Response {
     let m3 = &palette.m3;
     let selected = matches!(
@@ -165,7 +191,7 @@ fn draw(
         0.0
     };
     let width = leading + icon_width + text.size().x + padding;
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), sense);
     response.widget_info(|| match kind {
         ChipKind::Filter { selected } | ChipKind::Status { on: selected, .. } => {
             WidgetInfo::selected(Role::CheckBox, ui.is_enabled(), selected, label)
