@@ -63,8 +63,16 @@
 //! (`pending_attachments`) are listed above the prompt. A right-click opens
 //! the Cut/Copy/Paste context menu ([`crate::dialogs::context_menu`]).
 //!
+//! # The collapse button
+//!
+//! Left of the field, first in the row, a dense Material icon button
+//! ([`COLLAPSE_ALL_LABEL`]) closes every open block in the transcript
+//! ([`crate::panels::messages::collapse_all`]). It is drawn whether or not
+//! anything is open, so the field never moves, and it sits before the queue
+//! counter so neither shifts the other.
+//!
 //! Dependencies: `codemason-app-core` (the App state), `craft-ui` (the IME
-//! composer) and `egui`.
+//! composer), this crate's Material components, and `egui`.
 
 use codemason_app_core::app::{App, KeyWindow, SelectionPane};
 use craft_ui::ime::Composer;
@@ -73,7 +81,10 @@ use egui::{Event, Id};
 
 use codemason_app_core::input_event::{Key, KeyInput};
 
+use crate::icons::Icon;
 use crate::keys::{Focus, is_key_text, is_prompt_app_key, is_prompt_edit_key, to_key_input};
+use crate::material::icon_button::{IconButtonKind, icon_button_inline};
+use crate::panels::messages::COLLAPSE_ALL_LABEL;
 
 /// Accessible label of the prompt input.
 pub const PROMPT_LABEL: &str = "Prompt";
@@ -551,6 +562,23 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
         .data(|data| data.get_temp(text_height_id()))
         .unwrap_or_default();
     let scrolls = text_height > max_height;
+    let palette = crate::palette::palette_for(app, ui.ctx());
+    let collapse = |ui: &mut egui::Ui| {
+        // Left of the field and first in the row, so it never moves when the
+        // queue counter appears, and its row stays one text row tall.
+        let clicked = icon_button_inline(
+            ui,
+            &palette,
+            IconButtonKind::Standard,
+            Icon::UnfoldLess,
+            COLLAPSE_ALL_LABEL,
+            None,
+        )
+        .clicked();
+        if clicked {
+            crate::panels::messages::collapse_all(ui.ctx());
+        }
+    };
     let counter = |ui: &mut egui::Ui| {
         if queued > 0 {
             // The TUI's queue counter before the prompt, e.g. "03>".
@@ -567,6 +595,7 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
             egui::vec2(ui.available_width(), max_height),
             egui::Layout::left_to_right(egui::Align::TOP),
             |ui| {
+                collapse(ui);
                 counter(ui);
                 let scrolled = egui::ScrollArea::vertical()
                     .id_salt("prompt_scroll")
@@ -580,6 +609,7 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
     } else {
         let output = ui
             .horizontal(|ui| {
+                collapse(ui);
                 counter(ui);
                 editor(ui, app, id, editable)
             })
