@@ -410,22 +410,16 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) -> Option<&'static s
     }
     // Click-only: a button that can hold the keyboard focus would share Enter
     // with the prompt, which sends the draft.
-    let button = egui::Button::new(DETAILS_LABEL).sense(egui::Sense::CLICK);
-    // The popup stays open on a chip's click, so several services can be
-    // flipped in one visit.
-    let config = egui::containers::menu::MenuConfig::new()
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    // A fixed id: the AUTO and YOLO chips before the button come and go, and
-    // the button's automatic id (and so its popup's) would change with them,
-    // closing the popup when one of them is flipped from inside it.
-    let fixed = egui::UiBuilder::new().scope_id(egui::Id::unique("status_bar_details"));
-    let (_, picked) = ui
-        .scope_builder(fixed, |ui| {
-            egui::containers::menu::MenuButton::from_button(button)
-                .config(config)
-                .ui(ui, |ui| details(ui, app, palette))
-        })
-        .inner;
+    let response = ui.add(egui::Button::new(DETAILS_LABEL).sense(egui::Sense::CLICK));
+    // The popup has a fixed id: the AUTO and YOLO chips before the button
+    // come and go, and an id taken from the button's would change with them,
+    // closing the popup when one of them is flipped from inside it. It stays
+    // open on a chip's click, so several services can be flipped in one
+    // visit.
+    let picked = egui::Popup::menu(&response)
+        .id(egui::Id::unique("status_bar_details"))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| details(ui, app, palette));
     command.or(picked.and_then(|inner| inner.inner))
 }
 

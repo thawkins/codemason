@@ -195,13 +195,26 @@ fn test_status_bar_keeps_a_non_default_backend_in_view() {
     rig.harness.get_by_label("Backend:docker");
 }
 
+/// The tallest a one-line status-bar row gets, in points (a dense chip).
+const DETAILS_MAX_ROW_HEIGHT: f32 = codemason_gui::material::chip::DENSE_HEIGHT;
+
 #[test]
 fn test_status_bar_summary_never_overlaps_the_zoom_control() {
     let mut rig = rig(|_, _| {});
-    for width in [1600.0, 900.0, 700.0, 520.0] {
+    // Every 20 pt from 1000 down to 500, plus a wide window: the summary
+    // wraps at a different item at each, the Details button among them.
+    let widths =
+        std::iter::once(1600.0).chain((0..=25).map(|step| (step as f32).mul_add(-20.0, 1000.0)));
+    for width in widths {
         rig.harness.set_size(egui::vec2(width, 800.0));
         rig.harness.run();
         let details = rig.harness.get_by_label("Details").rect();
+        // Wrapped as a whole onto the next row, never squeezed into the
+        // width left on the current one (its text broken over several lines).
+        assert!(
+            details.height() < 2.0 * DETAILS_MAX_ROW_HEIGHT,
+            "at {width} pt, Details is squeezed: {details:?}"
+        );
         let zoom = rig
             .harness
             .get_by_label(codemason_gui::panels::status_bar::ZOOM_LABEL)
