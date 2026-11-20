@@ -9,13 +9,18 @@
 //!   `Model:` and the model label, the thinking level, the agent, and the
 //!   share of the context window the last request used;
 //! - states that need attention, shown only while they apply: the quota from
-//!   80%, a non-default execution backend, `AUTO [ok]` with its countdown,
-//!   the `YOLO` chip, the code-index busy tags, and the `N need you` badge
-//!   for background sessions waiting on the user;
+//!   80%, a non-default execution backend, the `AUTO` chip with its
+//!   countdown, the `YOLO` chip, the code-index busy tags, and the
+//!   `N need you` badge for background sessions waiting on the user;
 //! - a `Details` button whose popup holds the rest: the application name and
 //!   version, `Project:`, `Branch:`, the last-prompt tag, the backend, the
-//!   quota, and the on/off state of every service (GCF, code index, activity
-//!   log, autopilot, edit log, telemetry, YOLO).
+//!   quota, and a chip for every service ([`Service`]: GCF, code index,
+//!   activity log, autopilot, edit log, telemetry, YOLO).
+//!
+//! Every service indicator, in the bar and in Details, is a dense Material
+//! filter chip ([`crate::material::chip::chip_dense`]): selected while the
+//! service is on, and a click asks for the service's own `/<command> on|off`
+//! slash command, which [`status_bar_ui`] returns for the shell to run.
 //!
 //! A run's cost and tokens appear in the run-cost banner
 //! (`crate::dialogs::banner`) and the log, not here. The labels are app-core's
@@ -25,14 +30,15 @@
 //!
 //! Dependencies: `codemason-app-core` (the App), `codemason-config` (i18n
 //! labels and the GCF, activity-log and YOLO switches),
-//! `codemason-tools-core` (the edit-log switch), `egui` and
-//! [`crate::palette`].
+//! `codemason-tools-core` (the edit-log switch), `egui`,
+//! [`crate::material`] and [`crate::palette`].
 
 use codemason_app_core::app::App;
 use codemason_app_core::styled::ThemeColor;
 use codemason_config::i18n::{MessageKey, t};
 use egui::{Color32, RichText, Role, WidgetInfo};
 
+use crate::material::chip::{ChipKind, chip_dense};
 use crate::palette::Palette;
 use crate::styled_text::drawable;
 
@@ -119,14 +125,123 @@ fn item(ui: &mut egui::Ui, text: impl Into<String>, color: Color32, strong: bool
     ui.label(rich);
 }
 
-/// A service indicator: its name and `[ok]` (enabled) or `[x]` (disabled).
-fn indicator(ui: &mut egui::Ui, name: &str, enabled: bool, palette: &Palette) {
-    let (mark, color) = if enabled {
-        ("[ok]", palette.success)
-    } else {
-        ("[x]", palette.error)
-    };
-    item(ui, format!("{name} {mark}"), color, false);
+/// A service the status bar shows as an on/off chip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Service {
+    /// GCF tool-result encoding.
+    Gcf,
+    /// The code index.
+    CodeIndex,
+    /// The activity log.
+    ActivityLog,
+    /// Autopilot (autonomous operation).
+    Autopilot,
+    /// The edit log.
+    EditLog,
+    /// OpenTelemetry export.
+    Telemetry,
+    /// YOLO mode (tool calls run without asking).
+    Yolo,
+}
+
+impl Service {
+    /// Every service, in the order Details shows them.
+    pub const ALL: [Self; 7] = [
+        Self::Gcf,
+        Self::CodeIndex,
+        Self::ActivityLog,
+        Self::EditLog,
+        Self::Telemetry,
+        Self::Autopilot,
+        Self::Yolo,
+    ];
+
+    /// The chip's text, also its accessible name.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Gcf => "GCF",
+            Self::CodeIndex => "CDX",
+            Self::ActivityLog => "LOG",
+            Self::Autopilot => "AUTO",
+            Self::EditLog => "EDIT",
+            Self::Telemetry => "TELE",
+            Self::Yolo => "YOLO",
+        }
+    }
+
+    /// The service's full name, shown when the pointer rests on the chip.
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Gcf => "GCF tool-result encoding",
+            Self::CodeIndex => "Code index",
+            Self::ActivityLog => "Activity log",
+            Self::Autopilot => "Autopilot",
+            Self::EditLog => "Edit log",
+            Self::Telemetry => "Telemetry",
+            Self::Yolo => "YOLO mode",
+        }
+    }
+
+    /// Whether the service is on.
+    pub fn is_on(self, app: &App) -> bool {
+        match self {
+            Self::Gcf => codemason_config::gcf::is_enabled(),
+            Self::CodeIndex => app.code_index_enabled,
+            Self::ActivityLog => codemason_config::activity_log::is_enabled(),
+            Self::Autopilot => app.session.autopilot_enabled,
+            Self::EditLog => codemason_tools_core::edit_log::is_edit_log_enabled(),
+            Self::Telemetry => app.session_processor.telemetry.is_enabled(),
+            Self::Yolo => codemason_config::yolo::is_enabled(),
+        }
+    }
+
+    /// The slash command that turns the service on (`on`) or off.
+    pub const fn command(self, on: bool) -> &'static str {
+        match (self, on) {
+            (Self::Gcf, true) => "/gcf on",
+            (Self::Gcf, false) => "/gcf off",
+            (Self::CodeIndex, true) => "/codeindex on",
+            (Self::CodeIndex, false) => "/codeindex off",
+            (Self::ActivityLog, true) => "/alog on",
+            (Self::ActivityLog, false) => "/alog off",
+            (Self::Autopilot, true) => "/autopilot on",
+            (Self::Autopilot, false) => "/autopilot off",
+            (Self::EditLog, true) => "/editlog on",
+            (Self::EditLog, false) => "/editlog off",
+            (Self::Telemetry, true) => "/telemetry on",
+            (Self::Telemetry, false) => "/telemetry off",
+            (Self::Yolo, true) => "/yolo on",
+            (Self::Yolo, false) => "/yolo off",
+        }
+    }
+
+    /// The chip kind for the on state: the services that let the agent act
+    /// without asking are caution chips.
+    const fn kind(self, selected: bool) -> ChipKind {
+        match self {
+            Self::Autopilot | Self::Yolo => ChipKind::Caution { selected },
+            Self::Gcf | Self::CodeIndex | Self::ActivityLog | Self::EditLog | Self::Telemetry => {
+                ChipKind::Filter { selected }
+            }
+        }
+    }
+}
+
+/// A service's chip: selected while the service is on. A click returns the
+/// slash command that flips it.
+fn service_chip(
+    ui: &mut egui::Ui,
+    app: &App,
+    palette: &Palette,
+    service: Service,
+) -> Option<&'static str> {
+    let on = service.is_on(app);
+    let command = service.command(!on);
+    let state = if on { "on" } else { "off" };
+    let response = chip_dense(ui, palette, service.kind(on), None, service.label()).on_hover_text(
+        format!("{}: {state}. Click to run {command}", service.title()),
+    );
+    response.clicked().then_some(command)
 }
 
 /// Accessible label of the button that opens the details popup.
@@ -153,7 +268,10 @@ fn context_percent(app: &App) -> Option<u64> {
 
 /// The bar: what the turn is doing, which model and agent it uses, and the
 /// states that need attention. Everything else is in [`details`].
-fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
+///
+/// Returns the slash command a clicked service chip asks for.
+fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) -> Option<&'static str> {
+    let mut command = None;
     if app.session.is_processing {
         busy_spinner(ui, palette, BUSY_LABEL);
     }
@@ -262,7 +380,7 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         );
     }
     if app.session.autopilot_enabled {
-        indicator(ui, "AUTO", true, palette);
+        command = command.or(service_chip(ui, app, palette, Service::Autopilot));
         if let Some(remaining) = autopilot_remaining_secs(app) {
             item(
                 ui,
@@ -273,11 +391,7 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         }
     }
     if codemason_config::yolo::is_enabled() {
-        let chip = RichText::new(" YOLO ")
-            .color(palette.background)
-            .background_color(palette.warning)
-            .strong();
-        ui.label(chip);
+        command = command.or(service_chip(ui, app, palette, Service::Yolo));
     }
     if app.code_index_busy {
         item(ui, "BUSY:cdx-idx", palette.warning, true);
@@ -296,12 +410,21 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
     // Click-only: a button that can hold the keyboard focus would share Enter
     // with the prompt, which sends the draft.
     let button = egui::Button::new(DETAILS_LABEL).sense(egui::Sense::CLICK);
-    egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| details(ui, app, palette));
+    // The popup stays open on a chip's click, so several services can be
+    // flipped in one visit.
+    let config = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (_, picked) = egui::containers::menu::MenuButton::from_button(button)
+        .config(config)
+        .ui(ui, |ui| details(ui, app, palette));
+    command.or(picked.and_then(|inner| inner.inner))
 }
 
 /// The details popup: identity, place, the last prompt, the backend, the
-/// quota and the state of every service.
-fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) {
+/// quota and a chip for every service.
+///
+/// Returns the slash command a clicked service chip asks for.
+fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) -> Option<&'static str> {
     item(
         ui,
         format!("codemason v{}", env!("CARGO_PKG_VERSION")),
@@ -343,28 +466,12 @@ fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) {
         );
     }
     ui.separator();
-    indicator(ui, "GCF", codemason_config::gcf::is_enabled(), palette);
-    indicator(ui, "CDX", app.code_index_enabled, palette);
-    indicator(
-        ui,
-        "LOG",
-        codemason_config::activity_log::is_enabled(),
-        palette,
-    );
-    indicator(ui, "AUTO", app.session.autopilot_enabled, palette);
-    indicator(
-        ui,
-        "EDIT",
-        codemason_tools_core::edit_log::is_edit_log_enabled(),
-        palette,
-    );
-    indicator(
-        ui,
-        "TELE",
-        app.session_processor.telemetry.is_enabled(),
-        palette,
-    );
-    indicator(ui, "YOLO", codemason_config::yolo::is_enabled(), palette);
+    ui.horizontal(|ui| {
+        Service::ALL.into_iter().fold(None, |picked, service| {
+            picked.or(service_chip(ui, app, palette, service))
+        })
+    })
+    .inner
 }
 
 /// Draw the status bar into `ui`.
@@ -377,14 +484,27 @@ fn details(ui: &mut egui::Ui, app: &App, palette: &Palette) {
 /// * `ui` - the status bar's panel.
 /// * `app` - the App whose status is shown.
 /// * `palette` - the colours to draw with.
-pub fn status_bar_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
+///
+/// # Returns
+///
+/// The slash command a clicked service chip asks for (such as
+/// `/yolo off`), for the caller to run through
+/// `App::execute_slash_command`.
+pub fn status_bar_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) -> Option<&'static str> {
     app.update_cached_provider_model_label(app.compute_provider_model_label());
-    let rect = ui
-        .horizontal_wrapped(|ui| summary(ui, app, palette))
-        .response
-        .rect;
-    let bar = ui.interact(rect, ui.scope_id().with("status_bar"), egui::Sense::hover());
+    let inner = ui.horizontal_wrapped(|ui| {
+        // As tall as a chip whether or not one shows, so the bar keeps its
+        // height when YOLO or autopilot turns on or off.
+        ui.set_min_height(crate::material::chip::DENSE_HEIGHT);
+        summary(ui, app, palette)
+    });
+    let bar = ui.interact(
+        inner.response.rect,
+        ui.scope_id().with("status_bar"),
+        egui::Sense::hover(),
+    );
     bar.widget_info(|| WidgetInfo::labeled(Role::Status, true, STATUS_BAR_LABEL));
+    inner.inner
 }
 
 /// Accessible name of the status bar's zoom slider.

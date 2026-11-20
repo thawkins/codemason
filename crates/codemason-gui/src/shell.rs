@@ -528,6 +528,7 @@ impl Shell {
         if let Some(action) = chosen {
             self.run_ribbon_action(ui.ctx(), action);
         }
+        let mut service_command = None;
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             // The zoom control takes its place at the right first, so the
             // summary wraps in the width left over instead of running under it.
@@ -535,11 +536,14 @@ impl Shell {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     crate::panels::status_bar::zoom_ui(ui, &palette);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        status_bar_ui(ui, &mut self.app, &palette);
+                        service_command = status_bar_ui(ui, &mut self.app, &palette);
                     });
                 });
             });
         });
+        if let Some(line) = service_command {
+            self.run_ribbon_action(ui.ctx(), RibbonAction::Menu(MenuAction::Slash(line)));
+        }
         let mut sessions_rect = None;
         egui::CentralPanel::default().show(ui, |ui| {
             sessions_rect = self.show_dock(ui, &palette);

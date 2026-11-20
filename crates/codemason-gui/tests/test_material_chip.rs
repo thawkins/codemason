@@ -4,7 +4,7 @@
 #[path = "support_material.rs"]
 mod support_material;
 
-use codemason_gui::material::chip::{ChipKind, HEIGHT, chip};
+use codemason_gui::material::chip::{ChipKind, DENSE_HEIGHT, HEIGHT, chip, chip_dense};
 use egui_kittest::kittest::{NodeT, Queryable};
 
 #[test]
@@ -36,4 +36,29 @@ fn test_material_chip_filter_toggles_and_reports_state() {
             .toggled(),
         Some(egui::accesskit::Toggled::True)
     );
+}
+
+#[test]
+fn test_material_chip_dense_caution_is_short_and_reports_state() {
+    let palette = support_material::palette();
+    let mut harness = support_material::builder().build_ui_state(
+        move |ui, selected: &mut bool| {
+            let kind = ChipKind::Caution {
+                selected: *selected,
+            };
+            if chip_dense(ui, &palette, kind, None, "YOLO").clicked() {
+                *selected = !*selected;
+            }
+        },
+        true,
+    );
+    let rect = harness.get_by_label("YOLO").rect();
+    assert!((rect.height() - DENSE_HEIGHT).abs() < 0.5);
+    assert_eq!(
+        harness.get_by_label("YOLO").accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    harness.get_by_label("YOLO").click();
+    harness.run();
+    assert!(!*harness.state());
 }
