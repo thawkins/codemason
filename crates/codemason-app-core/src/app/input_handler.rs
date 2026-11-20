@@ -1184,6 +1184,43 @@ impl App {
         }
     }
 
+    /// Toggle YOLO mode, persist the new state and report it.
+    ///
+    /// This is the one path every UI toggle shares (`Alt+Y`, `/yolo`, and the
+    /// status bar's [`yolo_toggle`](crate::app::App::toggle_yolo) button), so
+    /// the status line, the log entry and the persisted value cannot diverge
+    /// between them.
+    ///
+    /// # Returns
+    ///
+    /// The new state, or `None` when it could not be persisted (the runtime
+    /// flag is then left as it was and the failure is reported).
+    pub fn toggle_yolo(&mut self) -> Option<bool> {
+        match codemason_config::yolo::toggle_persist() {
+            Ok(enabled) => {
+                self.status = if enabled {
+                    "YOLO mode enabled".to_string()
+                } else {
+                    "YOLO mode disabled".to_string()
+                };
+                self.push_log_no_agent(
+                    if enabled {
+                        LogLevel::Warn
+                    } else {
+                        LogLevel::Info
+                    },
+                    format!("YOLO mode {}", if enabled { "enabled" } else { "disabled" }),
+                );
+                Some(enabled)
+            }
+            Err(e) => {
+                self.status = format!("[!] failed to persist YOLO mode: {e}");
+                self.push_log_no_agent(LogLevel::Error, format!("YOLO persist failed: {e}"));
+                None
+            }
+        }
+    }
+
     /// Dispatch a key press to the active UI region and report the outcome.
     ///
     /// # Arguments
@@ -1614,30 +1651,10 @@ impl App {
                         }
                     }
                 }
-                InputAction::ToggleYolo => match codemason_config::yolo::toggle_persist() {
-                    Ok(enabled) => {
-                        self.status = if enabled {
-                            "YOLO mode enabled".to_string()
-                        } else {
-                            "YOLO mode disabled".to_string()
-                        };
-                        self.push_log_no_agent(
-                            if enabled {
-                                LogLevel::Warn
-                            } else {
-                                LogLevel::Info
-                            },
-                            format!("YOLO mode {}", if enabled { "enabled" } else { "disabled" }),
-                        );
-                    }
-                    Err(e) => {
-                        self.status = format!("[!] failed to persist YOLO mode: {e}");
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("YOLO persist failed: {e}"),
-                        );
-                    }
-                },
+                InputAction::ToggleYolo => {
+                    // The same path the status bar's YOLO toggle and `/yolo` use.
+                    self.toggle_yolo();
+                }
                 InputAction::ToggleTasksPanel => {
                     // Toggle the TASKS side panel visibility (Alt+I). Implements
                     // FR-002 (toggle) and FR-003 (mutual exclusion of side
