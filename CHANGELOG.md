@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
+
 ## [1.0.173] - 2026-11-21
 
 GUI clipboard and shutdown fixes.

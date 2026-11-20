@@ -2116,7 +2116,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/compact [help]` | Summarise and compact history |
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
-| `/theme [<name>\|system\|dark\|light\|list]` | Open the theme picker, or switch the colour theme (set `"theme"` in `codemason.json` to keep it) |
+| `/theme [<name>\|system\|dark\|light\|list]` | Open the theme picker, or switch the colour theme (the choice is saved to `codemason.json` and kept on restart) |
 | `/verbosity low\|medium\|high` | Set how much the transcript shows (config key `verbosity`) |
 | `/thinking-display show\|hide\|collapse` | Set how thinking text shows (config key `thinking_display`) |
 | `/undo` | Remove the last turn and restore the files it changed |

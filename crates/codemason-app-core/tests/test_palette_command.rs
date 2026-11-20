@@ -24,6 +24,7 @@ async fn press(app: &mut codemason_app_core::app::App, key: Key) {
 
 #[test]
 fn test_palette_lists_every_kind() {
+    let _config = crate::scratch_config_target();
     let app = app();
     let entries = palette_entries(&app);
     for prefix in ["action:", "slash:", "theme:", "agent:"] {
@@ -39,6 +40,7 @@ fn test_palette_lists_every_kind() {
 
 #[tokio::test]
 async fn test_palette_query_ranks_and_enter_runs_the_row() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     app.open_palette();
     app.set_palette_query("theme nord");
@@ -52,6 +54,7 @@ async fn test_palette_query_ranks_and_enter_runs_the_row() {
 
 #[tokio::test]
 async fn test_palette_keys_move_and_esc_closes_without_change() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     app.open_palette();
     app.set_palette_query("theme");
@@ -67,6 +70,7 @@ async fn test_palette_keys_move_and_esc_closes_without_change() {
 
 #[tokio::test]
 async fn test_palette_slash_rows_run_or_fill_the_prompt() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     // `/theme` takes arguments: it goes to the prompt to finish.
     app.run_palette_entry("slash:theme").await;
@@ -81,6 +85,7 @@ async fn test_palette_slash_rows_run_or_fill_the_prompt() {
 
 #[tokio::test]
 async fn test_palette_agent_picker_lists_agents_and_switches() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     assert!(app.run_action("picker.agent").await);
     assert_eq!(
@@ -108,6 +113,7 @@ async fn test_palette_agent_picker_lists_agents_and_switches() {
 
 #[tokio::test]
 async fn test_palette_session_picker_lists_sessions_and_switches() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     app.execute_slash_command("/session new").await;
     let current = app.session.session_id.clone().expect("focused session");
@@ -133,6 +139,7 @@ async fn test_palette_session_picker_lists_sessions_and_switches() {
 
 #[tokio::test]
 async fn test_palette_slash_waits_for_the_turn_and_keeps_the_draft() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     app.session.input = "half-written".to_string();
     app.session.input_cursor = 4;
@@ -151,6 +158,7 @@ async fn test_palette_slash_waits_for_the_turn_and_keeps_the_draft() {
 
 #[tokio::test]
 async fn test_palette_editor_keeps_the_draft_for_the_editor() {
+    let _config = crate::scratch_config_target();
     let mut app = app();
     app.session.input = "draft to edit".to_string();
     app.run_palette_entry("slash:editor").await;

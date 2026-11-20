@@ -8881,9 +8881,9 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
     ///
     /// A bare `/theme` opens the theme picker, `/theme list` reports the
     /// current theme and lists the catalog, and a theme name (or `system`,
-    /// `dark`, `light`) switches to it for the running window. The frontend restyles on its next frame from `App::theme`. The
-    /// choice is not written to the config file: the `theme` config key sets
-    /// the theme used at startup.
+    /// `dark`, `light`) switches to it. The frontend restyles on its next
+    /// frame from `App::theme`. The choice is saved as the `theme` key of the
+    /// user-global config, so the next start opens in it.
     fn slash_theme(&mut self, args: &str) {
         use crate::app::helpers::from_cmd;
 
@@ -8919,18 +8919,15 @@ Changes are persisted immediately to `.codemason/codemason.json` and take effect
                      | `/theme light` | The standard light theme, `codemason-light` |\n\
                      | `/theme <name>` | Any listed theme, e.g. `high-contrast`, `nord` |\n\
                      | `/theme help` | Show this help |\n\n\
-                     The switch applies to the running window. To start in a theme, set \
-                     `\"theme\": \"<name>\"` in `codemason.json`. Your own themes are \
+                     The choice is saved as `\"theme\"` in the user-global \
+                     `codemason.json`, so the next start opens in it. Your own themes are \
                      `*.json` files in `~/.config/codemason/themes/` or the project's \
                      `.codemason/themes/`.",
                 ));
                 self.status = "theme: help".to_string();
             }
             name => match self.themes.parse(name) {
-                Some(selection) => {
-                    self.status = format!("theme: {}", selection.display_name());
-                    self.theme = selection;
-                }
+                Some(selection) => self.commit_theme(selection),
                 None => {
                     let text = format!("Unknown theme `{name}`. Available: {names}.");
                     self.append_assistant_text(&from_cmd("theme", &text));
