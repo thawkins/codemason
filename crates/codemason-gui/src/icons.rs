@@ -98,6 +98,16 @@ pub enum Icon {
     Quit,
     /// Collapse (`expand_less`).
     ChevronUp,
+    /// Collapse everything that is open (`unfold_less`).
+    UnfoldLess,
+    /// The previous one (`chevron_left`).
+    ChevronLeft,
+    /// The previous one, upwards (`arrow_upward`).
+    ArrowUpward,
+    /// The next one, downwards (`arrow_downward`).
+    ArrowDownward,
+    /// Old on the left, new on the right (`vertical_split`).
+    VerticalSplit,
     /// Minimise the window (`minimize`).
     Minimize,
     /// Maximise the window (`crop_square`).
@@ -108,7 +118,7 @@ pub enum Icon {
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 42] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -143,6 +153,11 @@ impl Icon {
         Self::Doctor,
         Self::Quit,
         Self::ChevronUp,
+        Self::UnfoldLess,
+        Self::ChevronLeft,
+        Self::ArrowUpward,
+        Self::ArrowDownward,
+        Self::VerticalSplit,
         Self::Minimize,
         Self::Maximize,
         Self::Restore,
@@ -186,6 +201,11 @@ impl Icon {
             Self::Doctor => "\u{e1d5}",
             Self::Quit => "\u{e9ba}",
             Self::ChevronUp => "\u{e5ce}",
+            Self::UnfoldLess => "\u{e5d6}",
+            Self::ChevronLeft => "\u{e5cb}",
+            Self::ArrowUpward => "\u{e5d8}",
+            Self::ArrowDownward => "\u{e5db}",
+            Self::VerticalSplit => "\u{e949}",
             Self::Minimize => "\u{e931}",
             Self::Maximize => "\u{e3c6}",
             Self::Restore => "\u{e3e0}",
@@ -230,6 +250,11 @@ impl Icon {
             Self::Doctor => "dr",
             Self::Quit => "q",
             Self::ChevronUp => "^",
+            Self::UnfoldLess => "-",
+            Self::ChevronLeft => "<",
+            Self::ArrowUpward => "^^",
+            Self::ArrowDownward => "vv",
+            Self::VerticalSplit => "| |",
             Self::Minimize => "_",
             Self::Maximize => "[ ]",
             Self::Restore => "[=]",
