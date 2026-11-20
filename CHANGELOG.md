@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added: a **Help** ribbon tab with an **About** entry. It opens a Material dialog showing the CodeMason primary lockup (the dark or light variant, matching the theme), the version and a link to the GitHub repository; Close or a click outside dismisses it (`dialogs::about`). About moves out of the File tab, and the macOS app menu's About opens the same dialog instead of running `/about`.
 - Added: a **Collapse all** button at the left end of the prompt row (Material inline icon button, `material::icon_button::icon_button_inline`, 18 points so the prompt's row keeps its own height). It closes every open block in the transcript in one click: the folded activity rows and the `Thinking` rows. `messages::collapse_all` bumps a collapse epoch and each disclosure row keeps its open choice with the epoch it was settled in, so a click closes the rows on screen and the rows scrolled out of view alike, while a row first drawn after the click (the `Thinking` row of a reply that starts streaming later) still opens as before. The button sits before the queue counter, so neither shifts the other when a prompt is queued.
 - Added: `material::chip::chip_dense` (a 20-point chip, one text line high) and `ChipKind::Status` (a green check while on, a red cross while off, so the chip keeps one width; a caution status chip is filled with `error_container` while on).
 
