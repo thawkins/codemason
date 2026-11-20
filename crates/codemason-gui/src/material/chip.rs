@@ -3,7 +3,8 @@
 //! [`chip`] draws one: 32 points high with small (8 point) corners. An
 //! assist chip and an unselected filter chip have an `outline_variant`
 //! border; a selected filter chip is filled with `secondary_container` and
-//! shows a check icon.
+//! shows a check icon. [`chip_dense`] is the same chip at [`DENSE_HEIGHT`],
+//! for a row (a status bar) that must not grow to a 32-point control.
 //!
 //! Dependencies: `egui`, and this crate's palette and icons.
 
@@ -19,8 +20,14 @@ use crate::palette::{Palette, rgb};
 /// Height of a chip, in points.
 pub const HEIGHT: f32 = 32.0;
 
+/// Height of a dense chip, in points: one row of a text line.
+pub const DENSE_HEIGHT: f32 = 20.0;
+
 /// Padding beside the label, in points.
 const PADDING: f32 = 16.0;
+
+/// Padding beside a dense chip's label, in points.
+const DENSE_PADDING: f32 = 8.0;
 
 /// Padding before a leading icon, in points.
 const ICON_PADDING: f32 = 8.0;
@@ -64,6 +71,39 @@ pub fn chip(
     icon: Option<Icon>,
     label: &str,
 ) -> Response {
+    draw(ui, palette, kind, icon, label, HEIGHT, PADDING)
+}
+
+/// Draw a dense chip: [`DENSE_HEIGHT`] high, with tighter padding, so it can
+/// sit on a status bar's row without growing the row.
+///
+/// # Arguments
+///
+/// As [`chip`].
+///
+/// # Returns
+///
+/// The chip's response, as [`chip`].
+pub fn chip_dense(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    kind: ChipKind,
+    icon: Option<Icon>,
+    label: &str,
+) -> Response {
+    draw(ui, palette, kind, icon, label, DENSE_HEIGHT, DENSE_PADDING)
+}
+
+/// Draw one chip `height` points high with `padding` beside its label.
+fn draw(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    kind: ChipKind,
+    icon: Option<Icon>,
+    label: &str,
+    height: f32,
+    padding: f32,
+) -> Response {
     let m3 = &palette.m3;
     let selected = matches!(kind, ChipKind::Filter { selected: true });
     let icon = if selected { Some(Icon::Check) } else { icon };
@@ -80,15 +120,15 @@ pub fn chip(
     let leading = if icon.is_some() {
         ICON_PADDING
     } else {
-        PADDING
+        padding
     };
     let icon_width = if icon.is_some() {
         ICON_SIZE + ICON_GAP
     } else {
         0.0
     };
-    let width = leading + icon_width + text.size().x + PADDING;
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, HEIGHT), Sense::click());
+    let width = leading + icon_width + text.size().x + padding;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     response.widget_info(|| match kind {
         ChipKind::Filter { selected } => {
             WidgetInfo::selected(Role::CheckBox, ui.is_enabled(), selected, label)

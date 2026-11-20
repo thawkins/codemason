@@ -529,11 +529,14 @@ impl Shell {
             self.run_ribbon_action(ui.ctx(), action);
         }
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            // The zoom control takes its place at the right first, so the
-            // summary wraps in the width left over instead of running under it.
+            // The interface controls take their places at the right first,
+            // so the summary wraps in the width left over instead of running
+            // under them. Right to left: the interface scale, then the YOLO
+            // toggle, so YOLO sits to its left.
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     crate::panels::status_bar::zoom_ui(ui, &palette);
+                    crate::panels::status_bar::yolo_toggle_ui(ui, &mut self.app, &palette);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         status_bar_ui(ui, &mut self.app, &palette);
                     });

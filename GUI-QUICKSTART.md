@@ -221,9 +221,15 @@ appears under a "Thinking" row that is open while the reply streams;
 `/thinking-display show` keeps it open and `/thinking-display hide` removes it.
 
 Edits show their diff under the call; click **Open diff** to review a
-message's changed files in the Diff pane. Click in the pane, then use `]` and
-`[` for the next and previous hunk, `n` and `p` for the next and previous file,
-`v` to switch between unified and split, and `m` to mark a file reviewed.
+message's changed files in the Diff pane. Its row of buttons steps through the
+files and the hunks and switches the layout and the reviewed mark; a button
+with nothing that way (the first hunk, the last file) is greyed out, and a
+readout at the right of the row says which hunk and which file you are on.
+Click in the pane and the same moves have keys: `]` and `[` for the next and
+previous hunk, `n` and `p` for the next and previous file, `v` to switch
+between unified and split, and `m` to mark a file reviewed. Every button names
+its key when you hover it. The pane's **Close diff** button, at the right of
+its header, closes it; the dock tab's own Close does too.
 
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
@@ -352,6 +358,10 @@ preserved rather than being swallowed.
 Click in the **Prompt** pane at the bottom and type your prompt.
 
 Press **`Enter`** to send.
+
+The **minus** button at the left end of the prompt row closes every expanded
+block in the transcript at once: the folded tool-call rows and the `Thinking`
+rows. Blocks you open afterwards stay open.
 
 ### Multi-line prompts
 

@@ -16,7 +16,7 @@ use codemason_gui::Shell;
 use codemason_gui::keys::default_keymap;
 use craft_keymap::Platform;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A running window: the runtime it was built on and the harness.
 struct Rig {
@@ -220,4 +220,109 @@ fn test_status_bar_summary_never_overlaps_the_zoom_control() {
             );
         }
     }
+}
+
+/// A config write target in `target/temp`, so a YOLO toggle in a test never
+/// writes the developer's real `~/.config/codemason/codemason.json`.
+///
+/// The target is preferred over the global file by
+/// `Config::set_global_bool_key`, and it is cleared on drop. The write target
+/// and the YOLO runtime flag are process-globals, so the guard holds the
+/// binary-wide environment lock for as long as it lives.
+struct ConfigWriteTarget {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _temp: tempfile::TempDir,
+}
+
+impl ConfigWriteTarget {
+    fn enter(name: &str) -> Self {
+        let lock = crate::global_env_lock();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
+        let _ = std::fs::create_dir_all(&root); // INTENTIONAL: the scratch root may not exist yet
+        let temp = tempfile::Builder::new()
+            .prefix(name)
+            .tempdir_in(&root)
+            .expect("config scratch dir");
+        codemason_config::Config::set_config_write_target(Some(temp.path().join("codemason.json")));
+        Self {
+            _lock: lock,
+            _temp: temp,
+        }
+    }
+}
+
+impl Drop for ConfigWriteTarget {
+    fn drop(&mut self) {
+        codemason_config::Config::set_config_write_target(None);
+        codemason_config::yolo::set_enabled(false);
+    }
+}
+
+#[test]
+fn test_status_bar_yolo_toggle_is_a_chip_after_the_zoom_control() {
+    let _target = ConfigWriteTarget::enter("status-bar-yolo");
+    codemason_config::yolo::set_enabled(true);
+    let rig = rig(|_, _| {});
+    let chip = rig
+        .harness
+        .get_by_label(codemason_gui::panels::status_bar::YOLO_LABEL)
+        .rect();
+    let zoom = rig
+        .harness
+        .get_by_label(codemason_gui::panels::status_bar::ZOOM_LABEL)
+        .rect();
+    // The bar is laid out right to left, so the toggle sits to the zoom
+    // control's left rather than where the summary text is.
+    assert!(
+        chip.right() <= zoom.left(),
+        "YOLO chip {chip:?} is not left of the zoom control {zoom:?}"
+    );
+    assert!(
+        chip.height() <= codemason_gui::material::chip::DENSE_HEIGHT + 0.5,
+        "the toggle must not grow the bar: {chip:?}"
+    );
+}
+
+#[test]
+fn test_status_bar_yolo_toggle_switches_the_mode() {
+    let _target = ConfigWriteTarget::enter("status-bar-yolo-click");
+    codemason_config::yolo::set_enabled(false);
+    let mut rig = rig(|_, _| {});
+    let label = codemason_gui::panels::status_bar::YOLO_LABEL;
+    assert_eq!(
+        rig.harness.get_by_label(label).accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::False)
+    );
+
+    rig.harness.get_by_label(label).click();
+    rig.harness.run();
+    assert!(
+        codemason_config::yolo::is_enabled(),
+        "a click turns YOLO on"
+    );
+    assert!(
+        rig.harness
+            .state()
+            .app()
+            .status
+            .contains("YOLO mode enabled")
+    );
+    assert_eq!(
+        rig.harness.get_by_label(label).accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+
+    rig.harness.get_by_label(label).click();
+    rig.harness.run();
+    assert!(
+        !codemason_config::yolo::is_enabled(),
+        "a second click turns it off"
+    );
+    assert!(
+        rig.harness
+            .state()
+            .app()
+            .status
+            .contains("YOLO mode disabled")
+    );
 }

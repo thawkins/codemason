@@ -298,7 +298,7 @@ graph TB
 
 | Crate | Responsibility | Approx. `src/` Lines |
 |-------|----------------|---------------|
-| `codemason-types` | Shared IDs, events, messages, errors, sanitisation | ~8,000 |
+| `codemason-types` | Shared IDs, events, messages, errors, sanitisation, Markdown table construction (`mdtable`) | ~8,000 |
 | `codemason-config` | Configuration loading, defaults, permission rules | ~8,900 |
 | `codemason-connectors` | Connector descriptors, store/ledger, catalogue providers, MCP bridge, `/connectors` surface | ~10,500 |
 | `codemason-storage` | SQLite persistence, snapshots, encrypted credentials | ~7,700 |
@@ -2220,7 +2220,14 @@ open while the reply streams and closed after, `expanded` shows it in full,
 header line stays) and to an activity group that holds only reasoning, which
 is drawn as its thinking blocks with no row of its own. Whether a row is open is kept per block
 (`messages::block_id`, from the message id and block index) and survives
-streaming and scrolling. A completed `Edit`, `multi_edit`, `Write` or `create` call
+streaming and scrolling. A dense icon button at the prompt's left end
+(`messages::collapse_all`, labelled "Collapse all expanded blocks") closes
+every open row in one action: each row keeps its open choice with the collapse
+epoch it was settled in, so bumping the epoch closes the rows already on
+screen and every row off screen too (their flag is read when they are next
+laid out), while a row first drawn after the collapse still opens by default
+(the `Thinking` row of a reply that starts streaming later). A completed
+`Edit`, `multi_edit`, `Write` or `create` call
 is followed by one `Diff` block per file (`diff_view::diffs_from_tool_input`:
 `Edit`/`multi_edit` diff `old_string` against `new_string`, so their line
 numbers count from that snippet; `Write`/`create` add every line of `content`
@@ -2236,9 +2243,23 @@ hunk (up to 40 lines) on `diff.added_bg`/`diff.removed_bg` rows with
 button. That button opens the `Diff` dock pane (`PaneId::Diff`, in the right
 tab group, shown while `App::diff_pane.shown`) on the message's diffs with the
 clicked one selected. The pane shows one file, unified or split (`Old` and
-`New` columns per hunk, removed runs beside the added runs that follow them),
-with buttons for the previous/next file and hunk, `Split` and `Reviewed`;
-while it holds the keyboard focus (any press inside it) `]`/`[`, `n`/`p`, `v`
+`New` columns per hunk, removed runs beside the added runs that follow them).
+Its header is one line whatever the path's length: the path (truncated with an
+ellipsis, with its whole text on hover), the `+added -removed` counts as one
+layout job (so a right-to-left header cannot swap them), and a `Close diff`
+icon button at its right that clears `App::diff_pane.shown` (the dock tab's own
+Close does the same, as it does for every closable pane). Under it is one row
+of 32-point icon buttons, which fits the pane's ~270 points where six text
+buttons wrapped onto two rows: previous and next file, previous and next hunk,
+`Split` and `Reviewed`, the two groups separated by a rule, each naming its key
+in its hover text. A step button with nothing that way is disabled
+(`Previous hunk ([): none that way` on hover) instead of being live and doing
+nothing, and a readout at the row's right end says `hunk 2/4  file 1/2`, each
+part left out when there is nothing to count against. A pane with no file shows
+`No diff open` in its header and the sentence saying what to click on a line of
+its own, where it wraps inside the pane. There is no key legend line: the keys
+are in the buttons' hover text.
+While it holds the keyboard focus (any press inside it) `]`/`[`, `n`/`p`, `v`
 and `m` do the same and are taken out of the input, so they neither type nor
 reach the App. A reviewed file is collapsed to a note; a mark is for one
 change (`FileDiff::identity`, its path and lines), so a later change to the
@@ -2394,10 +2415,10 @@ modal dialogs:
 
 | Panel | Purpose |
 |-------|---------|
-| Messages | Conversation stream drawn as styled text. Markdown is not rendered and code is not syntax-highlighted; slash-command output written in Markdown is flattened to plain text. A session with no messages shows an empty state instead: the product name, the version, three starter actions that fill the prompt, and one tip (`panels/empty_state.rs`) |
+| Messages | Conversation stream rendered as Markdown (headings, lists, tables, block quotes, links, inline images) with syntax-highlighted code. Slash-command output is stored as **Markdown source** and laid out by the viewer, so a report written as a `|`-table draws as a real table (`App::prepare_transcript_text` keeps a `From: /` reply verbatim instead of running it through the html2text pass, which would bake the columns into fixed-width padding before any viewer saw them). A session with no messages shows an empty state instead: the product name, the version, three starter actions that fill the prompt, and one tip (`panels/empty_state.rs`) |
 | Log | Step-numbered tool calls with pretty-printed JSON |
 | Context (`Alt+C`) | What the next request sends to the model: the selected model's context window, the tokens sent on the last turn, each partition (system prompt with its skills/memory/`agents.md` breakdown, tool catalog, tool metadata, history with its message count) with its token estimate and share of the window, the total, the free headroom and the bytes streamed to and from the model. Display-only: `codemason_app_core::context_panel` builds the lines and `crates/codemason-gui/src/panels/context.rs` draws them; percentages read `unknown` when the provider advertises no context window |
-| Status bar | One row (it wraps only when the window is too narrow, in the width left of the zoom slider, which keeps its place at the right). In the bar: a spinner while the focused session's turn is running, the status text, the Auto-fix summary, compaction state, provider health dot, model, thinking level, agent, and the share of the context window the last request used. Shown only while they apply: the quota from 80%, a non-default execution backend, `AUTO [ok]` with its countdown, a `YOLO` chip, `BUSY:cdx-idx` / `BUSY:cdx-graph`, and the `N need you` badge. A `Details` button opens a popup with the version, project directory, branch, last prompt, backend, quota, and one tag per service drawn as `<NAME> [ok]` or `<NAME> [x]` (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`). Message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
+| Status bar | One row (it wraps only when the window is too narrow, in the width left of the interface controls at the right, which keep their places). In the bar: a spinner while the focused session's turn is running, the status text, the Auto-fix summary, compaction state, provider health dot, model, thinking level, agent, and the share of the context window the last request used. Shown only while they apply: the quota from 80%, a non-default execution backend, `AUTO [ok]` with its countdown, `BUSY:cdx-idx` / `BUSY:cdx-graph`, and the `N need you` badge. A `Details` button opens a popup with the version, project directory, branch, last prompt, backend, quota, and one tag per service drawn as `<NAME> [ok]` or `<NAME> [x]` (`GCF`, `CDX`, `LOG`, `AUTO`, `EDIT`, `TELE`, `YOLO`). The right end holds the interface controls, laid out right to left: the interface-scale slider (`Zoom`, 50%-200%, bound to egui's zoom factor; Ctrl+Plus / Ctrl+Minus / Ctrl+0 also change it, and the factor is saved in `gui-window.json` and restored before the first frame, so a chosen scale survives a restart) and, to its left, the `YOLO` toggle - a dense 20 pt filter chip, filled while YOLO mode is on, whose click calls the same `App::toggle_yolo` path `Alt+Y` and `/yolo` take (persisting the user-global config). Message-window tool categories use ASCII marker prefixes (`[file]`, `[dir]`, `[search]`, `[exec]`, `[git]`, `[team]`, ...) |
 | Teammate strip | Not implemented in the GUI. Teammates are listed in the Teams pane (spec `agentui` FR-027 described a row of pills under the status bar) |
 | Agents window | The `Active agents` dock pane, listing the primary agent and an ancestor-indented sub-agent tree with status, elapsed time, step count, `[stop]`/`[x]` status glyphs, and a background-shell section; openable from the keyboard with `Alt+A` (the chord resolves to `InputAction::ToggleAgentsWindow` and calls the same `App::toggle_agents_window` the button click does, so both share one visibility path, one no-subject no-op and one redraw flag - spec `agentssetup` FR-022); keyboard-first: a block cursor (`Up`/`Down`/`PgUp`/`PgDn`) selects a row, `Space` toggles suspend/resume, `Del` arms the kill confirmation, `Enter` opens the row's output view, and clicking a row selects it; the FR-077 key legend sits in the footer (spec `agentui` FR-006..FR-016) |
 | Teams window | The `Teams` dock pane, listing the lead plus every teammate with focus markers, status words from `MemberStatus::display_label()`, model column (inherited global model suppressed), and claimed/done/sent/recv counters; the block cursor plus `Enter`/`Space`/`Del` drive focus, suspend and shutdown; clicking a teammate selects it (spec `agentui` FR-017..FR-026) |
@@ -5182,11 +5203,21 @@ report) sees the live handle from the beginning; a one-shot run no longer races
 the loop. Startup does not block on the loop: the GUI adopts whatever state the
 loop has published, then prints its one-shot per-server report off the loop's
 completion sentinel (an empty-id `McpStatusChanged { status: "initialized" }`
-event), once, after every server has settled. The report prints one `[mcp]` line
-per server — `Starting <id> (<transport>)` plus `Connected ... via <transport>`,
-or `Skipping ... (<transport>, disabled)`, or `Failed to connect ... : <reason>`,
-or `... needs authentication` — where `<transport>` is the config's declared wire
-protocol (`stdio` / `sse` / `http`, via `Display for McpTransport`).
+event), once, after every server has settled. The report is a **Markdown table**
+with one row per server and four columns — `Server`, `Transport`, `Result`,
+`Detail` — so a frontend lays it out as a table instead of printing
+`|`-separated source. `Transport` is the config's declared wire protocol
+(`stdio` / `sse` / `http`, via `Display for McpTransport`); `Result` is
+`connected`, `disabled`, `failed` or `needs auth`; and `Detail` carries whatever
+explains that result — the tool count for a connected server, the failure reason
+for a failed one, `` `/mcp connect <id>` to enable `` for a disabled one, and
+`` `/mcp` to authenticate `` for one that needs auth. Every cell is escaped
+(`|` becomes `\|`, a newline becomes a space), so a reason that arrived with a
+pipe or a line break in it cannot split its row into extra columns. The table is
+preceded by a blank line (Markdown starts a table only after one) and followed by
+one, so the startup block is separated from whatever the stream prints next. The
+header is emitted only when there is at least one row, so a report of headings
+with nothing under them can never be printed.
 `report_mcp_startup` latches its own one-shot; a `try_read` miss (the connect loop
 holds the client write lock across a connect) defers the report without latching,
 so the next sentinel retries it. Every `connect` failure path — a config rejected

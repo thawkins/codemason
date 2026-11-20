@@ -10,12 +10,18 @@
 //!   share of the context window the last request used;
 //! - states that need attention, shown only while they apply: the quota from
 //!   80%, a non-default execution backend, `AUTO [ok]` with its countdown,
-//!   the `YOLO` chip, the code-index busy tags, and the `N need you` badge
+//!   the code-index busy tags, and the `N need you` badge
 //!   for background sessions waiting on the user;
 //! - a `Details` button whose popup holds the rest: the application name and
 //!   version, `Project:`, `Branch:`, the last-prompt tag, the backend, the
 //!   quota, and the on/off state of every service (GCF, code index, activity
 //!   log, autopilot, edit log, telemetry, YOLO).
+//!
+//! The right end of the bar holds the interface controls, drawn right to
+//! left: the [`yolo_toggle_ui`] toggle and then the [`zoom_ui`] interface
+//! scale, so YOLO mode can be switched from the bar rather than only from
+//! `Alt+Y` or `/yolo`. The zoom factor itself is remembered across restarts
+//! through the window geometry (`crate::platform::window`).
 //!
 //! A run's cost and tokens appear in the run-cost banner
 //! (`crate::dialogs::banner`) and the log, not here. The labels are app-core's
@@ -272,13 +278,6 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) {
             );
         }
     }
-    if codemason_config::yolo::is_enabled() {
-        let chip = RichText::new(" YOLO ")
-            .color(palette.background)
-            .background_color(palette.warning)
-            .strong();
-        ui.label(chip);
-    }
     if app.code_index_busy {
         item(ui, "BUSY:cdx-idx", palette.warning, true);
     }
@@ -421,4 +420,41 @@ pub fn zoom_ui(ui: &mut egui::Ui, palette: &Palette) {
         ctx.set_zoom_factor((zoom * 100.0).round() / 100.0);
     }
     ui.label(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).color(palette.muted));
+}
+
+/// Accessible name of the status bar's YOLO toggle.
+pub const YOLO_LABEL: &str = "YOLO";
+
+/// What YOLO is, in the toggle's hover text.
+const YOLO_HINT: &str = "bypasses command validation and tool restrictions";
+
+/// The status bar's YOLO toggle: a dense filter chip that reads `YOLO` and is
+/// filled while the mode is on.
+///
+/// A click toggles the mode through
+/// [`App::toggle_yolo`](codemason_app_core::app::App::toggle_yolo), the same
+/// path `Alt+Y` and `/yolo` take, so the chip, the status line, the log and
+/// the persisted config value always agree.
+///
+/// # Arguments
+///
+/// * `ui` - the status bar's ui, laid out right to left.
+/// * `app` - the App whose YOLO state is shown and toggled.
+/// * `palette` - the colours.
+pub fn yolo_toggle_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
+    let on = codemason_config::yolo::is_enabled();
+    let chip = crate::material::chip::chip_dense(
+        ui,
+        palette,
+        crate::material::chip::ChipKind::Filter { selected: on },
+        None,
+        YOLO_LABEL,
+    );
+    let chip = chip.on_hover_text(format!(
+        "{YOLO_HINT} (Alt+Y). Currently {}.",
+        if on { "on" } else { "off" }
+    ));
+    if chip.clicked() {
+        app.toggle_yolo();
+    }
 }

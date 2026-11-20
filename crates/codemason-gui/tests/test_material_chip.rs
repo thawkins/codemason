@@ -4,7 +4,7 @@
 #[path = "support_material.rs"]
 mod support_material;
 
-use codemason_gui::material::chip::{ChipKind, HEIGHT, chip};
+use codemason_gui::material::chip::{ChipKind, DENSE_HEIGHT, HEIGHT, chip, chip_dense};
 use egui_kittest::kittest::{NodeT, Queryable};
 
 #[test]
@@ -34,6 +34,34 @@ fn test_material_chip_filter_toggles_and_reports_state() {
             .get_by_label("Errors only")
             .accesskit_node()
             .toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+}
+
+#[test]
+fn test_material_chip_dense_keeps_one_line_height() {
+    let palette = support_material::palette();
+    let mut harness = support_material::builder().build_ui_state(
+        move |ui, selected: &mut bool| {
+            let kind = ChipKind::Filter {
+                selected: *selected,
+            };
+            if chip_dense(ui, &palette, kind, None, "YOLO").clicked() {
+                *selected = !*selected;
+            }
+        },
+        false,
+    );
+    let rect = harness.get_by_label("YOLO").rect();
+    assert!(
+        (rect.height() - DENSE_HEIGHT).abs() < 0.5,
+        "a dense chip is {DENSE_HEIGHT} pt high, got {rect:?}"
+    );
+    harness.get_by_label("YOLO").click();
+    harness.run();
+    assert!(*harness.state());
+    assert_eq!(
+        harness.get_by_label("YOLO").accesskit_node().toggled(),
         Some(egui::accesskit::Toggled::True)
     );
 }
