@@ -178,7 +178,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   `gui-keys.json`; a leader key (`Ctrl+G`) starts two-key sequences with a
   which-key popup; model favourites (`Ctrl+F` in the picker) and `F2` for
   recent models; `@file#20-45` mentions send only those lines; and `/editor`
-  writes the prompt in your own editor. Without a display
+  writes the prompt in your own editor. A **Help** tab's **About** opens a
+  Material dialog with the CodeMason lockup (dark or light to match the theme),
+  the version and the repository link; Close, `Esc` or a click outside dismisses
+  it, it fits the smallest window, and app shortcuts do not act behind it.
+  Without a display
   (an SSH session) `cdmn` exits with a pointer to `cdmn run`
 - **Telemetry export health** — every OTLP metric export outcome is classified
   (success, non-2xx collector response, transport error, export timeout) and a
@@ -261,7 +265,10 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   (`/session new --branch`), and the session sidebar groups sessions by
   project and shows each session's pull/merge request count (`0` when it has
   none) and an icon for the execution backend it runs on (local, Docker,
-  Podman or remote) (`/project`, `cdmn project`)
+  Podman or remote) (`/project`, `cdmn project`). Rows carry a coloured
+  attention dot (amber waiting, accent running, red failed, blue unread), and
+  a project heading is drawn a fifth larger than the session titles under it
+  with a tighter gap above it
 - **Session menu and Auto-fix** — right-click (or `m` on) a sidebar session
   for Open PR/MR, Open in (editor, file manager, terminal), Pin, Mark as
   unread, Rename, Fork, Move to section, Archive, Delete and, on a machine that

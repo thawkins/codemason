@@ -105,6 +105,10 @@ Return to the host:
   the active row carries an `[active]` marker.
 - A switch appends an `From: /backend` message bubble and sets the status to
   `backend: <kind>`.
+- A successful switch also marks the sessions sidebar dirty, so each row
+  redraws at once with the icon of the backend it now runs on (monitor for the
+  local computer, slatted container for Docker, three boxes for Podman, cloud
+  for a remote system), instead of waiting for the next unrelated reload.
 - A refusal appends a `[warn]` message explaining why and sets the status to
   `backend: unavailable` / `backend: unknown`.
 - No permission prompt is raised and no LLM call is made.

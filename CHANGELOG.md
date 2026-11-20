@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [1.0.172] - 2026-11-20
+
+Sessions panel restyle, a Help tab with About, and Markdown tables for
+slash-command reports.
+
+The Sessions panel rows carry a coloured attention dot and painted pull-request
+and execution-backend icons, its project headings are drawn 20% over the session
+titles with a 40% shorter gap above them, and the list is virtualised over a
+per-row height table. The ribbon gains a Help tab whose About dialog shows the
+CodeMason lockup, the version and the repository link. Slash-command reports are
+stored and rendered as Markdown tables instead of flattened ASCII grids. Also in
+this release: the Status bar's service indicators became toggleable dense chips,
+the Diff pane gained a one-row Material toolbar with a Close button and a
+position readout, a Collapse all button for the transcript, and the interface
+scale is restored across restarts.
+
 ### Added
 
 - Added: a **Help** ribbon tab with an **About** entry. It opens a Material dialog showing the CodeMason primary lockup (the dark or light variant, matching the theme), the version and a link to the GitHub repository; Close, Esc or a click outside dismisses it, it fits the smallest window (scrolling if need be), and app shortcuts and menu commands do not act behind it (`dialogs::about`). About moves out of the File tab, and the macOS app menu's About opens the same dialog instead of running `/about`.
@@ -11,6 +27,19 @@
 ### Changed
 
 - Changed: Sessions panel rows are restyled. Each session row shows its title, a coloured attention dot while it needs a look (amber waiting, accent running, red failed, blue unread), then two aligned columns on the right: a pull-request icon with the session's request count, shown on every row with `0` when it has none (grey none, blue past, green while one is bound, amber while Auto-fix waits on you), and an icon for the execution backend the session runs on (monitor for the local computer, slatted container for Docker, three boxes for Podman, cloud for a remote system). The relative age, branch and request details move to the row's tooltip and accessible description. The open or cursor row sits on a rounded selection fill, multi-selected rows carry an accent bar on their left edge, project headings are small and muted with the disclosure triangle after the name, and rows are taller. A session's backend is its own stored `execution_backend`, else the global one from the config (`Storage::session_backends`, `sessions_sidebar_state::backend_of`).
+- Changed: the Sessions panel's project and `Pinned` headings are drawn at **20%
+  over the session rows' own title size** (`panels::sessions::heading_size`),
+  where they used egui's `TextStyle::Small` at a stock 9 pt: a project's name was
+  smaller than the session titles under it and below the smallest caption the
+  rest of the window uses. The disclosure triangle takes its slot from the same
+  size, so it grows with its label. The **gap above a heading is 40% smaller**
+  (`section_gap_height`): the blank row a section puts above itself was a full
+  row tall, which opened a hole between a section's sessions and the next
+  project's name. Because the rows are no longer uniform in height, the list is
+  virtualised with `ScrollArea::show_viewport` over a per-row height table
+  (`RowLayout`) instead of `ScrollArea::show_rows`, which assumes one height for
+  every row; each row is laid out at its own position, so the scrollbar, the
+  content height and the cursor's scroll-into-view stay exact.
 - Changed: **slash-command reports are Markdown tables, and the transcript keeps
   them as Markdown.** A reply that starts `From: /` is now stored as Markdown
   source instead of being run through the `markdown -> HTML -> html2text` pass,
@@ -81,6 +110,15 @@
   reads `No diff open` and the sentence gets a line of its own, where it wraps.
 - Fixed: the Diff pane has a **Close diff** button. It had no visible way out: the pane could only be closed from the dock tab's context menu or a middle click, so a reader who opened a diff was stuck with it. The cross sits at the right of the pane's header (a Material icon button, `material::icon_button`), takes its place before the file's path so the path wraps in the width left over, and hides the pane by clearing `App::diff_pane.shown`, as the dock's own Close does. It is drawn even when the pane has no file to show, so a pane shown with nothing in it can still be closed, and the files it held stay, so opening a diff again shows them.
 - Fixed: `test_open_project_dialog_registers_the_folder_as_a_project` failed in checkouts with a long path, because the transcript wraps `registered at` and the path onto two lines; the test now accepts any whitespace there.
+- Fixed: a `/backend` switch (session-scoped on a project session, or the global backend) marks the sessions sidebar dirty, so each row redraws with the new execution-backend icon at once instead of at the next unrelated reload (`6738c6f`).
+
+### Docs
+
+- README's Projects bullet, QUICKSTART's multiple-sessions and Auto-fix sections and SPEC section 6.1's Session sidebar row describe the restyled row: a coloured attention dot, a painted pull-request icon with a count shown on every row (`0` when it has none), and a painted execution-backend icon, with the age, branch and request detail moved into the row's tooltip and accessible description. The old `#`/`#!`/`Y`/`!` text markers are gone from the prose.
+- SPEC section 6.1's Session sidebar row now says a project heading is 20% larger than a session row's title with a 40% shorter blank row above it, and that the list is virtualised with `ScrollArea::show_viewport` over a per-row height table (`RowLayout`) rather than `show_rows`.
+- SPEC section 6.1's panel table gains a Help/About description: the ribbon's Help tab opens the About dialog (`dialogs::about`), which the macOS app menu's About also opens, and while it is up the shell routes no keys to the App and gates the native menu as modal, so shortcuts cannot act on the session behind it.
+- GUI-QUICKSTART lists the Help ribbon tab and describes the About dialog; `docs/howtos/slashcommands/about.md` cross-links the dialog and `backend.md` records the sidebar redraw on a switch.
+- STATS re-measures the three tables on this tree.
 
 ## [1.0.171] - 2026-11-20
 

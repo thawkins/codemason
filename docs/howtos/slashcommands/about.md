@@ -61,6 +61,12 @@ Display the banner:
 
 ## Related
 
+- About dialog  -  the GUI's Help tab opens a Material About dialog showing the
+  CodeMason lockup (dark or light to match the theme), the version and a link to
+  the repository (`dialogs::about`); the macOS app menu's About opens the same
+  dialog. Close, `Esc` or a click outside dismisses it, it fits the smallest
+  window, and while it is open the app's shortcuts and menu commands do not act
+  on the session behind it. `/about` remains the text-only CLI form.
 - `/help`  -  list all available slash commands
 - `/cost`  -  session token usage and estimated cost
 - `/startup`  -  startup timing report

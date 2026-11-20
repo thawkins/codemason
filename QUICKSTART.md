@@ -1421,7 +1421,11 @@ the first prompt.
 
 The left-hand sidebar lists sessions by project. `Alt+S` shows, focuses or
 hides it; `Ctrl+N` opens a session; `Ctrl+Up`/`Ctrl+Down` move to the
-previous/next one; `Alt+R` returns to the last one. Right-click a session
+previous/next one; `Alt+R` returns to the last one. Each row shows the
+session's title, a coloured attention dot, its pull/merge request count and
+an icon for the execution backend it runs on; a project heading is drawn a
+fifth larger than the session titles under it with a tighter gap above it.
+Right-click a session
 row (or press `m` on it with the sidebar focused) for its menu: Open PR/MR,
 Auto-fix on/off, Open in (editor, file manager, terminal), Pin, Mark as
 unread, Rename, Fork, Move to section, Archive and Delete. Right-click a

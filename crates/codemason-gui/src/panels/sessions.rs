@@ -32,8 +32,11 @@
 //! The session count is in the dock tab's title ([`tab_title`]), not in the
 //! panel.
 //!
-//! The list is virtualised with `ScrollArea::show_rows` (one text row per
-//! sidebar row), so a long session list costs only the visible rows.
+//! The list is virtualised with `ScrollArea::show_viewport` over a table of
+//! row heights (one text row per sidebar row), so a long session list costs
+//! only the visible rows. `show_rows` is not used because a section's blank
+//! row is drawn shorter than a session row, and `show_rows` assumes every row
+//! is the same height.
 //!
 //! Dependencies: `codemason-app-core` (sidebar state and actions),
 //! `codemason-config` (backend kinds), `chrono` (relative ages), `egui` and
@@ -58,6 +61,47 @@ use crate::styled_text::drawable;
 
 /// Accessible label of the session list.
 pub const SESSIONS_LABEL: &str = "Sessions";
+
+/// How much larger a section heading is drawn than a session row's title.
+///
+/// The titles are drawn in `TextStyle::Button`; the heading is this factor of
+/// that, so it stays a fifth larger whatever the window's font size is.
+const HEADING_SCALE: f32 = 1.2;
+
+/// The height of a section's blank row above its heading, as a fraction of a
+/// full row: the gap above a project heading is 40% smaller than a blank row
+/// used to make it.
+const SECTION_GAP_SCALE: f32 = 0.6;
+
+/// The size a section heading is drawn at, given its session titles' size.
+///
+/// # Arguments
+///
+/// * `title_size` - the size the session rows' titles are drawn at.
+///
+/// # Returns
+///
+/// [`HEADING_SCALE`] of `title_size`.
+#[doc(hidden)]
+#[must_use]
+pub fn heading_size(title_size: f32) -> f32 {
+    title_size * HEADING_SCALE
+}
+
+/// The height of a section's blank row above its heading.
+///
+/// # Arguments
+///
+/// * `row_height` - the height of a full session row.
+///
+/// # Returns
+///
+/// [`SECTION_GAP_SCALE`] of `row_height`.
+#[doc(hidden)]
+#[must_use]
+pub fn section_gap_height(row_height: f32) -> f32 {
+    row_height * SECTION_GAP_SCALE
+}
 
 /// Scroll state the sidebar keeps between frames.
 #[derive(Debug, Default)]
@@ -467,10 +511,14 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> At
             if let Some(kind) = remote {
                 text.push_str(&format!(" [{kind}]"));
             }
-            let size = egui::TextStyle::Small.resolve(ui.style()).size;
+            // A heading is a fifth larger than the titles it heads, so a
+            // project's name no longer reads as smaller than its own
+            // sessions (egui's `TextStyle::Small`, at 9 pt, sat below both
+            // this window's smallest caption and the 13 pt session titles).
+            let size = heading_size(font.size);
             (
                 RichText::new(text)
-                    .small()
+                    .size(size)
                     .color(header_colour(key, palette)),
                 Atom::custom(disclosure_id(), egui::Vec2::splat(size)),
             )
@@ -555,8 +603,13 @@ impl SessionsView {
             app.sidebar.cursor.min(rows.len().saturating_sub(1)),
             true,
         );
-        // Roomy rows, as a navigation list draws them.
+        // Roomy rows, as a navigation list draws them. A section's blank row
+        // is drawn shorter than a session row, so the rows are laid out one
+        // by one instead of by `ScrollArea::show_rows`, which assumes they
+        // are all the same height.
         let row_height = ui.text_style_height(&egui::TextStyle::Button) + 10.0;
+        let spacing = ui.spacing().item_spacing.y;
+        let layout = RowLayout::new(&rows, row_height, spacing);
         // app-core pages PageUp/PageDown by the painted height in rows, with
         // the border rows of the terminal's box.
         let visible_rows = (ui.available_height() / row_height).floor().max(1.0);
@@ -577,19 +630,31 @@ impl SessionsView {
             .id_salt("sessions_rows")
             .auto_shrink([false, false]);
         if focused && self.last_cursor != Some(cursor) {
-            scroll = scroll_to_row(scroll, ui, cursor, row_height, visible_rows);
+            scroll = scroll_to_row(scroll, ui, &layout, cursor, visible_rows);
         }
         self.last_cursor = focused.then_some(cursor);
         let mut clicked = None;
         let mut menu = None;
-        let output = scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
-            for index in range {
+        let output = scroll.show_viewport(ui, |ui, viewport| {
+            ui.set_height(layout.content_height());
+            for index in layout.visible(&viewport) {
                 let Some(row) = rows.get(index) else {
                     continue;
                 };
+                let top = ui.max_rect().top() + layout.top(index);
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt(("sessions_row", index))
+                        .max_rect(Rect::from_min_size(
+                            pos2(ui.max_rect().left(), top),
+                            vec2(ui.available_width(), layout.height(index)),
+                        ))
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                let ui = &mut child;
                 if matches!(row, SidebarRow::Spacer) {
-                    // A blank line: it takes its row and cannot be clicked.
-                    ui.allocate_space(egui::vec2(ui.available_width(), row_height));
+                    // A blank row: it is drawn shorter than a session row and
+                    // cannot be clicked.
                     continue;
                 }
                 let open = matches!(
@@ -610,8 +675,8 @@ impl SessionsView {
                 }
                 let response = button
                     .min_size(egui::vec2(ui.available_width(), row_height))
-                    // One line per row: `show_rows` and the cursor
-                    // scrolling assume a fixed row height.
+                    // One line per row: the row heights and the cursor
+                    // scrolling assume a fixed height per row.
                     .truncate()
                     .atom_ui(ui);
                 if let SidebarRow::Header { key, collapsed, .. } = row {
@@ -716,18 +781,126 @@ fn paint_session_row(
     }
 }
 
+/// Where each row of the sidebar is drawn, and how tall it is.
+///
+/// Session rows are all `row_height`, but a section's blank row above its
+/// heading is [`SECTION_GAP_SCALE`] of that, so the list cannot use
+/// `ScrollArea::show_rows`, which assumes a uniform row height. This table
+/// gives each row's top and height, so the rows in view are laid out by
+/// position and the content height is exact.
+#[derive(Debug)]
+struct RowLayout {
+    /// The top of each row, relative to the top of the scrolled content.
+    tops: Vec<f32>,
+    /// The height of each row.
+    heights: Vec<f32>,
+    /// The gap drawn between two rows.
+    spacing: f32,
+    /// The content height: every row and the gap under it, without the last
+    /// gap (as `ScrollArea::show_rows` lays it out).
+    content_height: f32,
+}
+
+impl RowLayout {
+    /// Lay out `rows`: `row_height` for a session or heading row, and
+    /// [`SECTION_GAP_SCALE`] of it for a blank row.
+    ///
+    /// # Arguments
+    ///
+    /// * `rows` - the rows to lay out, in order.
+    /// * `row_height` - the height of a full row.
+    /// * `spacing` - the gap drawn under each row.
+    ///
+    /// # Returns
+    ///
+    /// The layout.
+    fn new(rows: &[SidebarRow], row_height: f32, spacing: f32) -> Self {
+        let gap = section_gap_height(row_height);
+        let mut tops = Vec::with_capacity(rows.len());
+        let mut heights = Vec::with_capacity(rows.len());
+        let mut offset = 0.0;
+        for row in rows {
+            let height = if matches!(row, SidebarRow::Spacer) {
+                gap
+            } else {
+                row_height
+            };
+            tops.push(offset);
+            heights.push(height);
+            offset += height + spacing;
+        }
+        Self {
+            tops,
+            heights,
+            spacing,
+            content_height: (offset - spacing).max(0.0),
+        }
+    }
+
+    /// The number of rows laid out.
+    fn len(&self) -> usize {
+        self.heights.len()
+    }
+
+    /// The top of row `index`.
+    fn top(&self, index: usize) -> f32 {
+        self.tops.get(index).copied().unwrap_or(0.0)
+    }
+
+    /// The height of row `index`.
+    fn height(&self, index: usize) -> f32 {
+        self.heights.get(index).copied().unwrap_or(0.0)
+    }
+
+    /// The top of the scrolled content.
+    ///
+    /// # Returns
+    ///
+    /// Every row and the gap under it, without the last gap.
+    fn content_height(&self) -> f32 {
+        self.content_height
+    }
+
+    /// The rows that intersect `viewport`, which is relative to the top of the
+    /// scrolled content.
+    ///
+    /// # Arguments
+    ///
+    /// * `viewport` - the visible part of the content.
+    ///
+    /// # Returns
+    ///
+    /// The index range of the rows to draw, top to bottom.
+    fn visible(&self, viewport: &Rect) -> std::ops::Range<usize> {
+        if self.len() == 0 {
+            return 0..0;
+        }
+        let min = viewport.min.y;
+        let max = viewport.max.y;
+        let first = self
+            .tops
+            .partition_point(|&top| top < min)
+            .saturating_sub(1);
+        let last = self
+            .tops
+            .partition_point(|&top| top < max)
+            .max(first + 1)
+            .min(self.len());
+        first..last
+    }
+}
+
 /// `scroll` set to bring row `index` into view, given this frame's viewport
-/// of `visible_rows` rows of `row_height`.
+/// of `visible_rows` full rows.
 fn scroll_to_row(
     scroll: ScrollArea,
     ui: &egui::Ui,
+    layout: &RowLayout,
     index: usize,
-    row_height: f32,
     visible_rows: f32,
 ) -> ScrollArea {
-    let spacing = ui.spacing().item_spacing.y;
-    let stride = row_height + spacing;
-    let top = index as f32 * stride;
+    let stride = layout.height(index) + layout.spacing;
+    let top = layout.top(index);
     let id = ui.make_persistent_id("sessions_rows");
     let offset = egui::scroll_area::State::load(ui.ctx(), id).map_or(0.0, |s| s.clamped_offset().y);
     let view = visible_rows * stride;

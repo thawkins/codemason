@@ -81,11 +81,11 @@ for it):
 - A title strip shows the session's name (set it with `/name`; otherwise
   `untitled` and its id) and four quick buttons: New session, Undo, Copy
   transcript and Stop.
-- A ribbon carries the commands. Its tabs are File (open a project, a
-  new project folder, About, Quit), Home (sessions, undo and redo, copy,
-  stop, compact), Insert (attach images, templates), Agent (model, agent,
-  loop), View (the Log, Profile, Tasks and Memory panels, theme) and Review
-  (cost, stats, doctor). Every button runs a command codemason already has
+- A ribbon carries the commands. Its tabs are File (open a project, a new
+  project folder, Quit), Home (sessions, undo and redo, copy, stop, compact),
+  Insert (attach images, templates), Agent (model, agent, loop), View (the Log,
+  Profile, Tasks and Memory panels, theme), Review (cost, stats, doctor) and
+  Help (About). Every button runs a command codemason already has
   and is labelled with its name. The Log, Profile, Tasks and Memory buttons
   stay highlighted while their panel is open. The band of buttons spans the
   window, so it keeps its size when you switch tabs; in a window too narrow
@@ -410,7 +410,10 @@ Add unit tests for the bash permission command-name extraction logic
 
 The ribbon's **File** tab has **Open project** (register a project folder, as
 `/project add <path>`) and **New folder** (start a session in a new folder, as
-`/session new <path>`). On macOS the menu bar also carries About, Quit
+`/session new <path>`). The **Help** tab's **About** opens a dialog with the
+CodeMason logo, the version and a link to the repository; Close, `Esc` or a
+click outside dismisses it, it fits the smallest window, and the app's
+shortcuts do not act behind it. On macOS the menu bar also carries About, Quit
 (`Cmd+Q`) and a View menu with the panel toggles.
 
 ### Clipboard

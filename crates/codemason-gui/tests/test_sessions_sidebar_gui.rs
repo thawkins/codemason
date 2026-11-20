@@ -321,3 +321,36 @@ async fn test_sessions_sidebar_session_details_name_backend_and_requests() {
     );
     assert_eq!(details.last().map(String::as_str), Some("Pull requests: 0"));
 }
+
+#[test]
+fn test_sessions_sidebar_project_heading_is_20_percent_larger_than_a_session_row() {
+    use codemason_gui::panels::sessions::heading_size;
+
+    let title_size = 13.0;
+    let heading = heading_size(title_size);
+    assert_eq!(heading, 15.6, "a heading is its titles' size times 1.2");
+    assert!(
+        (heading / title_size - 1.2).abs() < f32::EPSILON,
+        "a heading is 20% larger than the session row's title: {heading} against {title_size}"
+    );
+    assert!(
+        heading > title_size,
+        "a project's name is never smaller than its own session titles"
+    );
+}
+
+#[test]
+fn test_sessions_sidebar_gap_above_a_heading_is_40_percent_smaller_than_a_row() {
+    use codemason_gui::panels::sessions::section_gap_height;
+
+    let row_height = 28.0;
+    let gap = section_gap_height(row_height);
+    assert!(
+        (gap / row_height - 0.6).abs() < f32::EPSILON,
+        "the gap is 40% smaller than a full row: {gap} against {row_height}"
+    );
+    assert!(
+        gap < row_height,
+        "the gap takes less room than a session row"
+    );
+}
