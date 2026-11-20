@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use codemason_agent::event::Event;
-use codemason_agent::message::Role;
+use codemason_agent::message::{Message, Role};
 
 use super::helpers::short_session_id;
 use super::session_view::{Attention, SessionView};
@@ -77,6 +77,11 @@ impl App {
     /// The owning background index, or `None` when the event belongs to the
     /// focused session or to no open session.
     pub(crate) fn background_owner(&self, session_id: &str) -> Option<usize> {
+        // A focused sub-agent session shows its own events, even though its
+        // parent is parked in the background.
+        if self.session.session_id.as_deref() == Some(session_id) {
+            return None;
+        }
         if let Some(index) = self.background.position(session_id) {
             return Some(index);
         }
@@ -93,6 +98,59 @@ impl App {
                 .iter()
                 .any(|member| member.session_id.as_deref() == Some(session_id))
         })
+    }
+
+    /// The running sub-agent task whose child session is `session_id`.
+    pub(crate) fn active_subagent_task(
+        &self,
+        session_id: &str,
+    ) -> Option<&codemason_agent::task::TaskEntry> {
+        self.active_tasks
+            .iter()
+            .find(|task| task.child_session_id == session_id)
+    }
+
+    /// Whether `session_id` is a sub-agent session whose task is no longer
+    /// running (absent from [`App::active_tasks`]).
+    fn is_finished_subagent_session(&self, session_id: &str) -> bool {
+        self.active_subagent_task(session_id).is_none()
+            && matches!(
+                self.storage.session_kind(session_id),
+                Ok(Some(codemason_storage::SessionKind::Subagent))
+            )
+    }
+
+    /// Queues `text` for the running sub-agent focused in `self.session`; the
+    /// agent loop reads it at its next step. The message is shown in the
+    /// transcript at once.
+    ///
+    /// # Returns
+    ///
+    /// `false` when the focused session is not a running sub-agent, so the
+    /// caller starts a normal turn instead.
+    pub(crate) fn send_to_focused_subagent(&mut self, text: &str) -> bool {
+        let Some(sid) = self.session.session_id.clone() else {
+            return false;
+        };
+        let Some(agent_name) = self
+            .active_subagent_task(&sid)
+            .map(|t| t.agent_name.clone())
+        else {
+            return false;
+        };
+        let Some(manager) = self.session_processor.agent_manager.get() else {
+            return false;
+        };
+        if let Err(e) = manager.send_to_session(&sid, text) {
+            self.status = format!("[warn] {e}");
+            return true;
+        }
+        self.session.messages.push(Message::user_text(&sid, text));
+        self.add_to_history(text.to_string());
+        self.session.input.clear();
+        self.session.input_cursor = 0;
+        self.status = format!("sent to {agent_name}; it reads it at its next step");
+        true
     }
 
     /// Swaps the focused view with the background view at `index`.
@@ -329,6 +387,15 @@ impl App {
     /// A view without a session id has never been created in storage and
     /// holds nothing worth keeping, so it is dropped.
     pub(super) fn park_session(&mut self, previous: SessionView) {
+        // A sub-agent session is only listed while its task runs; once the
+        // task has ended its view is dropped rather than kept open.
+        if previous
+            .session_id
+            .as_deref()
+            .is_some_and(|id| self.is_finished_subagent_session(id))
+        {
+            return;
+        }
         if previous.session_id.is_some() {
             self.background.insert_front(previous);
         }

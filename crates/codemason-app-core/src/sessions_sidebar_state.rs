@@ -277,6 +277,21 @@ pub enum SidebarRow {
         /// Pull/merge requests whose source is `branch`; `None` when unknown.
         requests: Option<i64>,
     },
+    /// A running sub-agent, nested under the session that spawned it. Listed
+    /// only while its task is in [`App::active_tasks`]; activating it focuses
+    /// its child session, whose prompt then messages the running agent.
+    SubAgent {
+        /// The sub-agent's child session id.
+        id: String,
+        /// Name of the agent running the task.
+        agent: String,
+        /// First line of the task prompt.
+        task: String,
+        /// Nesting level: 1 under a top-level session, 2 under a sub-agent.
+        depth: usize,
+        /// Whether the task is suspended.
+        suspended: bool,
+    },
 }
 
 /// Reloads the cached storage data when it is marked dirty.
@@ -625,17 +640,48 @@ fn push_section(rows: &mut Vec<SidebarRow>, app: &App, section: &SectionData<'_>
         description: section.description.clone(),
     });
     if !collapsed {
-        rows.extend(matching.into_iter().map(|s| {
+        for s in matching {
             let checkout = app.sidebar.checkouts.get(&s.id);
-            SidebarRow::Session {
+            rows.push(SidebarRow::Session {
                 id: s.id.clone(),
                 title: display_title(&s.id, &s.title),
                 updated_at: s.updated_at.clone(),
                 branch: checkout.and_then(|c| c.branch.clone()),
                 owns_worktree: checkout.is_some_and(|c| c.worktree.is_some()),
                 requests: checkout.and_then(|c| c.pr_count),
-            }
-        }));
+            });
+            push_subagents(rows, app, &s.id, 1);
+        }
+    }
+}
+
+/// Deepest sub-agent nesting listed; guards against a parent cycle.
+const MAX_SUBAGENT_DEPTH: usize = 8;
+
+/// Appends the running sub-agents spawned by session `parent`, each followed
+/// by its own sub-agents, in spawn order.
+fn push_subagents(rows: &mut Vec<SidebarRow>, app: &App, parent: &str, depth: usize) {
+    if depth > MAX_SUBAGENT_DEPTH {
+        return;
+    }
+    for task in app
+        .active_tasks
+        .iter()
+        .filter(|task| task.parent_session_id == parent)
+    {
+        rows.push(SidebarRow::SubAgent {
+            id: task.child_session_id.clone(),
+            agent: task.agent_name.clone(),
+            task: task
+                .task_prompt
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+            depth,
+            suspended: task.status == codemason_agent::task::TaskStatus::Suspended,
+        });
+        push_subagents(rows, app, &task.child_session_id, depth + 1);
     }
 }
 
@@ -808,7 +854,7 @@ fn activate_row(app: &mut App, index: usize) {
         Some(SidebarRow::Search) => start_filter(app),
         Some(SidebarRow::Spacer) => {}
         Some(SidebarRow::Header { key, .. }) => toggle_section(app, key, None),
-        Some(SidebarRow::Session { id, .. }) => {
+        Some(SidebarRow::Session { id, .. } | SidebarRow::SubAgent { id, .. }) => {
             let result = app.switch_to_session(id);
             report(app, result);
             app.sidebar.focused = false;
@@ -1053,7 +1099,8 @@ fn open_menu_for_row(app: &mut App, index: usize, row_y: u16) -> bool {
             SidebarRow::Header { .. }
             | SidebarRow::NewSession
             | SidebarRow::Spacer
-            | SidebarRow::Search,
+            | SidebarRow::Search
+            | SidebarRow::SubAgent { .. },
         )
         | None => false,
     }

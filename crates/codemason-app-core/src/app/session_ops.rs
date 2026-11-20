@@ -909,6 +909,13 @@ impl App {
         image_paths: Vec<std::path::PathBuf>,
     ) {
         self.session.auto_compact_failed = false;
+        // A running sub-agent is already in a turn: the message joins it.
+        if self.send_to_focused_subagent(&text) {
+            if !image_paths.is_empty() {
+                self.status = format!("{} (images are not sent to sub-agents)", self.status);
+            }
+            return;
+        }
         let Some(sid) = self.session.session_id.clone() else {
             self.status = "[warn] No active session".to_string();
             return;

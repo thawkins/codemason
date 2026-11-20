@@ -525,7 +525,52 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> At
                 .into_atoms()
         }
         SidebarRow::Session { id, title, .. } => session_atoms(ui, app, id, &shown(title), palette),
+        SidebarRow::SubAgent {
+            agent,
+            task,
+            depth,
+            suspended,
+            ..
+        } => subagent_atoms(ui, &shown(agent), &shown(task), *depth, *suspended, palette),
     }
+}
+
+/// A running sub-agent row, indented under the session that spawned it:
+/// the agent icon and name, then the task's first line, dimmed.
+fn subagent_atoms(
+    ui: &egui::Ui,
+    agent: &str,
+    task: &str,
+    depth: usize,
+    suspended: bool,
+    palette: &Palette,
+) -> Atoms<'static> {
+    let size = egui::TextStyle::Button.resolve(ui.style()).size;
+    let colour = if suspended {
+        palette.muted
+    } else {
+        palette.text
+    };
+    let state = if suspended { " (paused)" } else { "" };
+    (
+        Atom::custom(
+            row_indent_id(),
+            vec2(size.mul_add(depth as f32, SESSION_INDENT), size),
+        ),
+        icon_label(ui.ctx(), Icon::Agent, size, colour),
+        RichText::new(format!("{agent}{state}")).color(colour),
+        RichText::new(format!(" {task}")).color(palette.muted),
+    )
+        .into_atoms()
+}
+
+/// How far session rows sit in from their project heading, in points, so
+/// sessions and projects are told apart at a glance.
+const SESSION_INDENT: f32 = 20.0;
+
+/// Id of the blank slot that indents a session or sub-agent row.
+fn row_indent_id() -> IdSalt {
+    IdSalt::new("sessions_row_indent")
 }
 
 /// A session row: its title (and attention dot), then the fixed-width
@@ -553,6 +598,7 @@ fn session_atoms(
         .size()
         .x;
     let mut atoms = text.into_atoms();
+    atoms.push_left(Atom::custom(row_indent_id(), vec2(SESSION_INDENT, size)));
     if attention_colour(attention, palette).is_some() {
         atoms.push_right(Atom::custom(attention_id(), vec2(size * 0.7, size)));
     }
@@ -659,7 +705,8 @@ impl SessionsView {
                 }
                 let open = matches!(
                     row,
-                    SidebarRow::Session { id, .. } if app.session.session_id.as_deref() == Some(id)
+                    SidebarRow::Session { id, .. } | SidebarRow::SubAgent { id, .. }
+                        if app.session.session_id.as_deref() == Some(id)
                 );
                 let highlighted = (focused && index == cursor) || open;
                 // Left-aligned like every other list: `add_sized` would
@@ -709,6 +756,11 @@ impl SessionsView {
                     // The tooltip is shown as a side effect; the returned
                     // response is the same row.
                     response.response.clone().on_hover_text(details.join("\n"));
+                }
+                if let SidebarRow::SubAgent { agent, task, .. } = row {
+                    response.response.clone().on_hover_text(format!(
+                        "Sub-agent {agent}: {task}\nOpen to watch it and message it"
+                    ));
                 }
                 if response.clicked() {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);

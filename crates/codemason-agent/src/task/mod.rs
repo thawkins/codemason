@@ -484,6 +484,11 @@ pub struct AgentManager {
     /// request, no further tool execution - until `resume_task` clears it or
     /// the turn is cancelled.
     suspend_flags: Arc<DashMap<String, Arc<AtomicBool>>>,
+    /// User messages waiting for a running sub-agent, keyed by the CHILD
+    /// session id like `suspend_flags`. The agent loop drains them at its next
+    /// inter-step safe point ([`AgentManager::take_inbox`]), so the user can
+    /// steer a sub-agent while it runs.
+    inboxes: Arc<DashMap<String, Vec<String>>>,
     /// Event bus for publishing sub-agent lifecycle events.
     event_bus: Arc<EventBus>,
     /// Session processor for running sub-agent loops.
@@ -525,6 +530,7 @@ impl AgentManager {
             tasks: Arc::new(DashMap::new()),
             cancel_flags: Arc::new(DashMap::new()),
             suspend_flags: Arc::new(DashMap::new()),
+            inboxes: Arc::new(DashMap::new()),
             event_bus,
             processor,
             max_background,
@@ -673,6 +679,7 @@ impl AgentManager {
                 self.has_pending_background.store(true, Ordering::Relaxed);
                 self.cancel_flags.remove(&task_id);
                 self.suspend_flags.remove(&child_sid);
+                self.inboxes.remove(&child_sid);
                 if cancelled {
                     self.event_bus.publish(Event::SubagentCancelled {
                         session_id: parent_session_id.to_string(),
@@ -722,6 +729,7 @@ impl AgentManager {
                 self.has_pending_background.store(true, Ordering::Relaxed);
                 self.cancel_flags.remove(&task_id);
                 self.suspend_flags.remove(&child_sid);
+                self.inboxes.remove(&child_sid);
                 self.event_bus.publish(Event::SubagentComplete {
                     session_id: parent_session_id.to_string(),
                     task_id: task_id.clone(),
@@ -918,6 +926,7 @@ impl AgentManager {
         let tasks = self.tasks.clone();
         let cancel_flags = self.cancel_flags.clone();
         let suspend_flags = self.suspend_flags.clone();
+        let inboxes = self.inboxes.clone();
         let processor = self.processor.clone();
         let background_timeout_secs = self.background_timeout_secs;
         let tid = task_id.clone();
@@ -1035,6 +1044,7 @@ impl AgentManager {
                     cancel_flags.remove(&tid);
                     if let Some(child) = tasks.get(&tid).map(|e| e.child_session_id.clone()) {
                         suspend_flags.remove(&child);
+                        inboxes.remove(&child);
                     }
                     event_bus.publish(Event::SubagentCancelled {
                         session_id: parent_sid,
@@ -1096,6 +1106,7 @@ impl AgentManager {
                     cancel_flags.remove(&tid);
                     if let Some(child) = tasks.get(&tid).map(|e| e.child_session_id.clone()) {
                         suspend_flags.remove(&child);
+                        inboxes.remove(&child);
                     }
                     event_bus.publish(Event::SubagentComplete {
                         session_id: parent_sid,
@@ -1134,6 +1145,7 @@ impl AgentManager {
                     cancel_flags.remove(&tid);
                     if let Some(child) = tasks.get(&tid).map(|e| e.child_session_id.clone()) {
                         suspend_flags.remove(&child);
+                        inboxes.remove(&child);
                     }
 
                     if is_cancelled {
@@ -1287,6 +1299,41 @@ impl AgentManager {
         self.suspend_flags
             .get(child_session_id)
             .map(|flag| Arc::clone(flag.value()))
+    }
+
+    /// Queue a user message for the running sub-agent whose child session is
+    /// `child_session_id`; the agent loop delivers it at its next inter-step
+    /// safe point (or before it would end the turn).
+    ///
+    /// # Errors
+    ///
+    /// Fails when no running or suspended sub-agent owns that session.
+    pub fn send_to_session(&self, child_session_id: &str, text: &str) -> anyhow::Result<()> {
+        if !self.suspend_flags.contains_key(child_session_id) {
+            anyhow::bail!("no running sub-agent for session '{child_session_id}'");
+        }
+        self.inboxes
+            .entry(child_session_id.to_string())
+            .or_default()
+            .push(text.to_string());
+        Ok(())
+    }
+
+    /// Whether user messages are waiting for the sub-agent in
+    /// `child_session_id`.
+    pub fn has_inbox(&self, child_session_id: &str) -> bool {
+        self.inboxes
+            .get(child_session_id)
+            .is_some_and(|queued| !queued.is_empty())
+    }
+
+    /// Remove and return the user messages waiting for the sub-agent in
+    /// `child_session_id`, oldest first; empty for sessions with none.
+    pub fn take_inbox(&self, child_session_id: &str) -> Vec<String> {
+        self.inboxes
+            .remove(child_session_id)
+            .map(|(_, queued)| queued)
+            .unwrap_or_default()
     }
 
     /// Kill a running or suspended task (forcible termination).

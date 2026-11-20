@@ -232,6 +232,13 @@ impl App {
     /// (`agents.completed_history` is clamped to `1..=200`) but is treated as
     /// "keep nothing" rather than indexing an empty deque.
     fn record_completed_task(&mut self, entry: &TaskEntry) {
+        // The sessions tree lists a sub-agent only while it runs, so a
+        // finished one's parked view is closed too (a focused one stays until
+        // the user moves away from it).
+        if let Some(index) = self.background.position(&entry.child_session_id) {
+            self.background.remove(index);
+            self.sidebar.dirty = true;
+        }
         if self.agents_history_cap == 0 {
             return;
         }

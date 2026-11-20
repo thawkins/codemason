@@ -361,3 +361,103 @@ async fn test_sessions_sidebar_backend_of_uses_own_then_global() {
     app.sidebar.default_backend = ExecutionBackendKind::Remote;
     assert_eq!(backend_of(&app, &b), ExecutionBackendKind::Remote);
 }
+
+/// A running sub-agent task spawned by `parent`, whose child session `child`
+/// is stored as a `subagent` session.
+fn running_subagent(app: &App, parent: &str, child: &str) -> codemason_agent::task::TaskEntry {
+    let dir = app.cwd_path.to_string_lossy().to_string();
+    app.storage
+        .create_session_with(
+            child,
+            &dir,
+            Some(parent),
+            codemason_storage::SessionKind::Subagent,
+        )
+        .expect("store the child session");
+    codemason_agent::task::TaskEntry {
+        id: format!("task-{child}"),
+        parent_session_id: parent.to_string(),
+        child_session_id: child.to_string(),
+        agent_name: "explore".to_string(),
+        task_prompt: "map the code\nsecond line".to_string(),
+        background: true,
+        detached: false,
+        status: codemason_agent::task::TaskStatus::Running,
+        result: None,
+        error: None,
+        created_at: chrono::Utc::now(),
+        completed_at: None,
+        reported: false,
+        waiter_count: 0,
+        output_file: None,
+        report_status: codemason_agent::task::ReportStatus::default(),
+        time_bound_secs: None,
+    }
+}
+
+#[tokio::test]
+async fn test_sessions_sidebar_nests_running_subagents_under_their_parent() {
+    use codemason_app_core::sessions_sidebar_state::{SidebarRow, build_rows};
+    let (mut app, a, _b) = app_with_sidebar().await;
+    codemason_app_core::sessions_sidebar_state::refresh_if_dirty(&mut app);
+    let child = running_subagent(&app, &a, "child-1");
+    let grandchild = running_subagent(&app, "child-1", "child-2");
+    app.active_tasks.push(child);
+    app.active_tasks.push(grandchild);
+
+    let rows = build_rows(&app);
+    let parent_at = rows
+        .iter()
+        .position(|r| matches!(r, SidebarRow::Session { id, .. } if *id == a))
+        .expect("parent row");
+    match (&rows[parent_at + 1], &rows[parent_at + 2]) {
+        (
+            SidebarRow::SubAgent {
+                id: c,
+                depth: 1,
+                agent,
+                task,
+                ..
+            },
+            SidebarRow::SubAgent {
+                id: g, depth: 2, ..
+            },
+        ) => {
+            assert_eq!(c, "child-1");
+            assert_eq!(g, "child-2");
+            assert_eq!(agent, "explore");
+            assert_eq!(task, "map the code");
+        }
+        other => panic!("sub-agents not nested under their parent: {other:?}"),
+    }
+
+    // Finished tasks leave the tree.
+    app.active_tasks.clear();
+    assert!(
+        !build_rows(&app)
+            .iter()
+            .any(|r| matches!(r, SidebarRow::SubAgent { .. }))
+    );
+}
+
+#[tokio::test]
+async fn test_sessions_sidebar_subagent_row_focuses_its_session() {
+    use codemason_app_core::sessions_sidebar_state::{SidebarRow, build_rows, click_row};
+    let (mut app, a, _b) = app_with_sidebar().await;
+    codemason_app_core::sessions_sidebar_state::refresh_if_dirty(&mut app);
+    let task = running_subagent(&app, &a, "child-1");
+    app.active_tasks.push(task);
+
+    let index = build_rows(&app)
+        .iter()
+        .position(|r| matches!(r, SidebarRow::SubAgent { .. }))
+        .expect("sub-agent row");
+    click_row(&mut app, index, false);
+    assert_eq!(app.session.session_id.as_deref(), Some("child-1"));
+
+    // Once its task has ended, moving away closes the sub-agent's view
+    // instead of parking it.
+    app.active_tasks.clear();
+    app.switch_to_session(&a).expect("back to the parent");
+    assert!(app.background.position("child-1").is_none());
+}

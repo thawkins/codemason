@@ -696,3 +696,76 @@ async fn cancelled_sync_task_is_recorded_as_cancelled() -> Result<()> {
     );
     Ok(())
 }
+
+/// A message the user sends to a running sub-agent
+/// (`AgentManager::send_to_session`) reaches the model at the loop's next
+/// step, and the inbox is gone once the task has finished.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn message_sent_to_a_running_subagent_reaches_its_next_step() -> Result<()> {
+    let event_bus = Arc::new(EventBus::new(256));
+    let (mgr, captured) = make_suspension_fixture(
+        event_bus,
+        vec![think_call(), ScriptedReply::TextOnly("done")],
+    )
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handle = spawn_turn(&mgr, dir.path());
+
+    let task_id = poll_until(
+        || {
+            mgr.tasks_snapshot()
+                .now_or_never()?
+                .into_iter()
+                .find(|e| e.status == TaskStatus::Running)
+                .map(|e| e.id.clone())
+        },
+        "running task entry",
+    )
+    .await;
+    // Park the loop so the message is certainly queued before the next step.
+    mgr.suspend_task(&task_id).await.expect("suspend");
+    let child_sid = poll_until(
+        || {
+            mgr.tasks_snapshot()
+                .now_or_never()?
+                .into_iter()
+                .find(|e| e.id == task_id && e.status == TaskStatus::Suspended)
+                .map(|e| e.child_session_id)
+        },
+        "suspended entry",
+    )
+    .await;
+
+    const NOTE: &str = "also check the README please";
+    mgr.send_to_session(&child_sid, NOTE)
+        .expect("a running sub-agent accepts messages");
+    assert!(mgr.has_inbox(&child_sid));
+    mgr.resume_task(&task_id).await.expect("resume");
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), handle)
+        .await
+        .expect("turn completed")
+        .expect("spawn_sync join")
+        .expect("spawn_sync ok");
+    assert_eq!(result.entry.status, TaskStatus::Completed);
+    let delivered = captured
+        .lock()
+        .expect("captured lock")
+        .iter()
+        .any(|request| format!("{:?}", request.messages).contains(NOTE));
+    assert!(delivered, "the message never reached the model");
+    assert!(!mgr.has_inbox(&child_sid), "inbox kept after delivery");
+    assert!(
+        mgr.send_to_session(&child_sid, "too late").is_err(),
+        "a finished sub-agent accepted a message"
+    );
+    Ok(())
+}
+
+/// Sessions no sub-agent runs in have no inbox.
+#[tokio::test]
+async fn send_to_session_rejects_sessions_without_a_running_subagent() {
+    let (mgr, _captured) = make_suspension_fixture(Arc::new(EventBus::new(16)), vec![]).await;
+    assert!(mgr.send_to_session("no-such-session", "hello").is_err());
+    assert_eq!(mgr.take_inbox("no-such-session"), Vec::<String>::new());
+}
