@@ -3,7 +3,9 @@
 //!
 //! The Help tab's About ([`crate::ribbon`]) and the macOS app menu's About
 //! ([`crate::platform::menu`]) open it ([`open`]); [`show`] draws it in a
-//! Material dialog until the Close button or a click outside closes it.
+//! Material dialog until the Close button, Esc or a click outside closes
+//! it. While it is open the shell sends no keys or menu commands to the App
+//! ([`is_open`]), so nothing acts on the session behind it.
 //! The logo is the primary lockup drawn for the theme's background: the
 //! light-on-dark one on a dark theme, the dark-on-light one on a light theme.
 //!
@@ -15,8 +17,9 @@
 
 use egui::Id;
 
+use crate::dialogs::material_modal_response;
 use crate::material::button::{ButtonKind, button};
-use crate::material::dialog::{dialog_actions, dialog_frame, dialog_headline};
+use crate::material::dialog::dialog_actions;
 use crate::metrics::space;
 use crate::palette::Palette;
 
@@ -105,35 +108,37 @@ pub fn show(ctx: &egui::Context, palette: &Palette) -> bool {
     let uri = logo_uri(palette.dark);
     let bytes = if palette.dark { LOGO_DARK } else { LOGO_LIGHT };
     let mut close = false;
-    let modal = egui::Modal::new(Id::unique("codemason_about_modal"))
-        .frame(dialog_frame(palette))
-        .show(ctx, |ui| {
-            let inner = ui.vertical(|ui| {
-                ui.set_width(LOGO_WIDTH);
-                dialog_headline(ui, palette, ABOUT_TITLE);
-                let size = LOGO_PIXELS * (LOGO_WIDTH / LOGO_PIXELS.x);
-                ui.add(
-                    egui::Image::from_bytes(uri, bytes)
-                        .fit_to_exact_size(size)
-                        .alt_text("CodeMason logo"),
-                );
-                ui.add_space(space::LG);
-                ui.vertical_centered(|ui| {
-                    ui.label(format!("Version {VERSION}"));
-                    // Material has no link component; egui's hyperlink takes
-                    // the theme's link colour (crate::theme).
-                    ui.hyperlink_to(REPOSITORY_URL, REPOSITORY_URL);
-                });
-                ui.add_space(space::LG);
-                dialog_actions(ui, |ui| {
-                    close = button(ui, palette, ButtonKind::Text, None, CLOSE_ABOUT).clicked();
-                });
+    // The Material dialog keeps inside a small window: narrower than the
+    // logo's width if need be, its content scrolling past the window's height.
+    let modal = material_modal_response(
+        ctx,
+        palette,
+        "codemason_about_modal",
+        ABOUT_TITLE,
+        LOGO_WIDTH,
+        |ui| {
+            // The logo shrinks with the dialog, keeping its shape.
+            let width = ui.available_width().min(LOGO_WIDTH);
+            ui.add(
+                egui::Image::from_bytes(uri, bytes)
+                    .fit_to_exact_size(LOGO_PIXELS * (width / LOGO_PIXELS.x))
+                    .alt_text("CodeMason logo"),
+            );
+            ui.add_space(space::LG);
+            ui.vertical_centered(|ui| {
+                ui.label(format!("Version {VERSION}"));
+                // Material has no link component; egui's hyperlink takes
+                // the theme's link colour (crate::theme).
+                ui.hyperlink_to(REPOSITORY_URL, REPOSITORY_URL);
             });
-            inner
-                .response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, ABOUT_TITLE));
-        });
-    if close || modal.backdrop_response.clicked() {
+            ui.add_space(space::LG);
+            dialog_actions(ui, |ui| {
+                close = button(ui, palette, ButtonKind::Text, None, CLOSE_ABOUT).clicked();
+            });
+        },
+    );
+    // Esc or a click outside closes it too.
+    if close || modal.should_close() {
         ctx.data_mut(|d| d.remove::<bool>(open_id()));
     }
     true

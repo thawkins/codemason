@@ -495,6 +495,20 @@ pub(crate) fn material_modal<R>(
     width: f32,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    material_modal_response(ctx, palette, id, title, width, add_contents).inner
+}
+
+/// [`material_modal`], returning egui's whole modal response, for a dialog
+/// that closes itself (`ModalResponse::should_close`: Esc or a click on
+/// the backdrop) rather than through the App's key handling.
+pub(crate) fn material_modal_response<R>(
+    ctx: &egui::Context,
+    palette: &crate::palette::Palette,
+    id: &str,
+    title: &str,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::ModalResponse<R> {
     use crate::material::dialog::{dialog_frame, dialog_headline};
     egui::Modal::new(Id::unique(id))
         .frame(dialog_frame(palette))
@@ -527,7 +541,6 @@ pub(crate) fn material_modal<R>(
                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
             shown.inner
         })
-        .inner
 }
 
 /// A Material dialog's action row, right-aligned: the first button is the

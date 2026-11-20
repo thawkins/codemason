@@ -1,6 +1,7 @@
 //! Tests for the About dialog (`codemason_gui::dialogs::about`): the Help
 //! tab's About opens it, it shows the version and the repository link, the
-//! logo follows the theme, and Close or a click outside dismisses it.
+//! logo follows the theme, Close, Esc or a click outside dismisses it, it
+//! fits the smallest window, and app shortcuts do not act behind it.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -11,11 +12,12 @@ use codemason_gui::Shell;
 use codemason_gui::dialogs::about::{
     ABOUT_TITLE, CLOSE_ABOUT, REPOSITORY_URL, VERSION, is_open, logo_uri,
 };
+use codemason_gui::dock::{PaneId, pane_wanted};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::ribbon::TABS;
 use craft_keymap::Platform;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A running window in theme `theme`, with the About dialog opened from the
 /// Help tab. The runtime is returned so it outlives the harness.
@@ -99,4 +101,64 @@ fn test_about_click_outside_dismisses() {
         harness.run();
     }
     assert!(!is_open(&harness.ctx));
+}
+
+/// Press `key` with `modifiers` in `harness`, and run the frames it takes.
+fn press(harness: &mut Harness<'static, Shell>, key: egui::Key, modifiers: egui::Modifiers) {
+    for pressed in [true, false] {
+        harness.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        });
+    }
+    harness.run();
+}
+
+#[test]
+fn test_about_esc_dismisses() {
+    let (_runtime, mut harness) = opened("codemason-dark");
+    press(&mut harness, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!is_open(&harness.ctx));
+}
+
+#[test]
+fn test_about_keeps_app_shortcuts_from_the_session_behind() {
+    let (_runtime, mut harness) = opened("codemason-dark");
+    let before = pane_wanted(harness.state().app(), PaneId::Log);
+    // Alt+L toggles the Log panel when no dialog is up.
+    press(&mut harness, egui::Key::L, egui::Modifiers::ALT);
+    assert!(is_open(&harness.ctx));
+    assert_eq!(pane_wanted(harness.state().app(), PaneId::Log), before);
+    // Closed, the same shortcut reaches the App again.
+    harness.get_by_label(CLOSE_ABOUT).click();
+    harness.run();
+    press(&mut harness, egui::Key::L, egui::Modifiers::ALT);
+    assert_ne!(pane_wanted(harness.state().app(), PaneId::Log), before);
+}
+
+#[test]
+fn test_about_fits_the_smallest_window() {
+    let (_runtime, mut harness) = opened("codemason-light");
+    // The window's minimum size (480 x 320 points).
+    harness.set_size(egui::vec2(480.0, 320.0));
+    harness.run();
+    let window = harness.ctx.content_rect();
+    let dialog = harness
+        .query_all_by_label(ABOUT_TITLE)
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Dialog)
+        .expect("the dialog")
+        .rect();
+    assert!(
+        window.contains_rect(dialog),
+        "{dialog:?} outside {window:?}"
+    );
+    // The Close button stays reachable (scrolled into view if need be).
+    let close = harness.get_by_label(CLOSE_ABOUT);
+    close.scroll_to_me();
+    harness.run();
+    let close = harness.get_by_label(CLOSE_ABOUT).rect();
+    assert!(window.contains_rect(close), "{close:?} outside {window:?}");
 }

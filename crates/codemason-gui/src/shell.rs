@@ -427,7 +427,9 @@ impl Shell {
     /// holds the keyboard only the built-in items run (Quit still asks the
     /// window to close). Without attached sources the clicks are dropped.
     fn run_native_menu(&mut self, ctx: &egui::Context) {
-        let modal = dialogs::locks_prompt(&self.app) || self.close.is_asking();
+        let modal = dialogs::locks_prompt(&self.app)
+            || self.close.is_asking()
+            || dialogs::about::is_open(ctx);
         let Some((native, layout)) = self.native_menu.as_mut() else {
             return;
         };
@@ -1015,9 +1017,9 @@ impl Shell {
         clipboard::attach_pasted_images(ui.ctx(), &mut self.app);
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
-        // While the quit confirmation asks, keys stay with it (Esc cancels
-        // the dialog, not the turn).
-        if !self.close.is_asking() {
+        // While the quit confirmation or the About dialog is up, keys stay
+        // with it (Esc closes the dialog, not the turn).
+        if !self.close.is_asking() && !dialogs::about::is_open(ui.ctx()) {
             self.route_keys(ui.ctx(), focus);
         }
         // `/quit` (or any other path that stops the app) closes the window,
