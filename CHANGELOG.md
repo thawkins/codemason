@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.0.173] - 2026-11-21
+
+GUI clipboard and shutdown fixes.
+
+Pasting in the GUI no longer freezes the window on Wayland: app-core's
+clipboard reads on the UI thread (Ctrl+Shift+V, right-click Paste, Alt+V and
+the right-click menu's Paste check) used `arboard` through XWayland while the
+window served that same selection from the same thread. Copy transcript
+(`/clip`) works in the GUI again, and a slow GUI quit no longer makes the next
+start report a crash.
+
 ### Fixed
 
 - Fixed: the GUI froze when pasting with **Ctrl+Shift+V**, right-click **Paste** or **Alt+V** after copying text in the window (on Wayland). App-core read the clipboard with `arboard` on the UI thread, through XWayland, while the window served that same selection from the same thread, so the read waited on itself. On the GUI's UI thread app-core's clipboard reads now leave a paste request (`clipboard::take_frontend_paste_request`) that the GUI answers with egui's non-blocking `RequestPaste`, and right-click Paste sends it directly. With text on the clipboard, Alt+V in the GUI now pastes it as text; an image still attaches. Opening the right-click menu no longer reads the clipboard (it was another UI-thread `arboard` read): Paste stays enabled and the window pastes only when Paste is chosen (`clipboard::clipboard_may_hold_text`), and Alt+V no longer logs a missing image before the window's paste arrives.

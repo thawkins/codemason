@@ -1,6 +1,13 @@
 # Project Statistics
 
-**Version:** 1.0.171
+**Version:** 1.0.173
+
+> **GUI clipboard and shutdown fixes (1.0.173).** No crate is added or removed.
+> `codemason-app-core` gains two test files (`test_clipboard_routing`,
+> `test_quit_force_exit_hook`); the clipboard routing, `/clip` copy buffer and
+> quit safety-net hook are small edits to existing modules. `cargo nextest run
+> -p codemason-gui -p codemason-app-core -p codemason` ran 4,112 tests, all
+> passing.
 
 **Update prompt:** Update @STATS.md to show the composition of the project, show breakdown by crate
 
