@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.0.171] - 2026-11-20
+
+Material Design 3 GUI, transcript media, and the word-processor layout.
+
+The window gained a Material Design 3 component set and colour roles, a
+word-processor layout (title strip with quick access, ribbon, page on a desk,
+status bar with a zoom slider) for the `document-light` and `document-dark`
+themes, a title bar managed by the window on floating desktops, a command
+palette (`Ctrl+P`), a leader key (`Ctrl+G`) and a single action catalog so every
+shortcut can be rebound in `gui-keys.json`. The transcript now draws Mermaid
+diagrams, inline and standalone images and SVG, and fills its pane edge to edge.
+Also in this release: teammate and team-tool I/O routed through
+`spawn_blocking`, provider and model setup built from Material lists and
+outlined fields, session and project row menus as popups rather than dialogs,
+line-range `@src/a.rs#20-45` mentions, model favourites, and the display-size
+work.
+
 ### Added
 
 - Changed: the GUI transcript's page fills its pane edge to edge, so the first message starts level with the top of the Sessions panel (it sat about 16 points lower, inside a 4-point gap and 8 points of padding) and the text gets the room that inset took; 8 points of padding remain at its sides. The prompt field keeps its frame.

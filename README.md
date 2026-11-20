@@ -970,7 +970,8 @@ Docs and examples:
 
 ## Architecture
 
-The project is a Cargo workspace built from 20 focused crates:
+The project is a Cargo workspace built from 19 crates plus the root `codemason`
+binary package:
 
 | Crate                     | Purpose                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
@@ -1045,7 +1046,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.170** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.171** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered
