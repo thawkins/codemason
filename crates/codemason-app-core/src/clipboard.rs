@@ -174,14 +174,40 @@ pub fn get_clipboard_text() -> Option<String> {
         .and_then(|mut cb| cb.get_text().ok())
 }
 
+/// Whether the frontend owns this thread's clipboard
+/// ([`route_copies_to_frontend`]): reads here must not use `arboard`, and
+/// what the clipboard holds is unknown until the frontend pastes it.
+///
+/// # Returns
+///
+/// `true` while copies on this thread are routed to the frontend.
+pub fn frontend_owns_clipboard() -> bool {
+    FRONTEND_COPIES.with(|c| c.borrow().is_some())
+}
+
+/// Whether the clipboard may hold text to paste, for enabling a Paste
+/// item. A test override answers first; a frontend-owned clipboard is not
+/// read (that would request a paste) and counts as may-hold; otherwise the
+/// clipboard is read.
+///
+/// # Returns
+///
+/// `false` only when the clipboard is known to hold no text.
+pub fn clipboard_may_hold_text() -> bool {
+    if let Some(text) = CLIPBOARD_TEXT_OVERRIDE.with(|o| o.borrow().clone()) {
+        return !text.is_empty();
+    }
+    frontend_owns_clipboard() || get_clipboard_text().is_some_and(|s| !s.is_empty())
+}
+
 /// Leave a paste request for the frontend when it owns this thread's
 /// clipboard ([`route_copies_to_frontend`]).
 ///
 /// # Returns
 ///
 /// `true` when the request was left, so the caller must not read `arboard`.
-fn request_frontend_paste() -> bool {
-    let routed = FRONTEND_COPIES.with(|c| c.borrow().is_some());
+pub fn request_frontend_paste() -> bool {
+    let routed = frontend_owns_clipboard();
     if routed {
         FRONTEND_PASTE.with(|p| p.set(true));
     }

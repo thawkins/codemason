@@ -33,6 +33,10 @@ use super::App;
 /// runs (a wedged tty, a blocked write, an MCP server that will not stop).
 pub const FORCE_EXIT_AFTER: Duration = Duration::from_secs(3);
 
+/// The longest the exit safety net waits for the hook registered with
+/// [`set_force_exit_hook`] before it ends the process anyway.
+pub const FORCE_EXIT_HOOK_WAIT: Duration = Duration::from_millis(500);
+
 /// The longest [`App::stop_services_on_quit`] waits for the MCP servers to
 /// stop. A running turn inside an MCP tool call holds the client's read lock
 /// until the call ends (up to the tool-call timeout, 120 s); the shutdown
@@ -54,7 +58,17 @@ pub const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 pub fn arm_force_exit(after: Duration) {
     std::thread::spawn(move || {
         std::thread::sleep(after);
-        run_force_exit_hook();
+        // The hook writes a file; on a stalled filesystem it must not keep
+        // the process alive, so it runs on its own thread with a bounded
+        // wait and the exit happens either way.
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            run_force_exit_hook();
+            // INTENTIONAL: the receiver is gone once the wait timed out.
+            let _ = done.send(());
+        });
+        // INTENTIONAL: a timeout means the hook is abandoned; exit anyway.
+        let _ = finished.recv_timeout(FORCE_EXIT_HOOK_WAIT);
         std::process::exit(0);
     });
 }
