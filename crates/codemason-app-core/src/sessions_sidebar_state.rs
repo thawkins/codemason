@@ -37,6 +37,7 @@ use std::path::Path;
 
 use crate::geometry::Area;
 use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
+use codemason_config::ExecutionBackendKind;
 use codemason_storage::{ProjectSessions, SessionCheckout, SidebarSection, Storage, project_root};
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +89,12 @@ pub struct SidebarState {
     /// Cached number of pull/merge requests each session has had (created
     /// or bound); sessions with none are absent.
     pub request_totals: HashMap<String, usize>,
+    /// Cached execution backend of each session that has its own; the rest
+    /// use [`SidebarState::default_backend`].
+    pub backends: HashMap<String, ExecutionBackendKind>,
+    /// Cached execution backend of sessions without their own: the global
+    /// one, from the config.
+    pub default_backend: ExecutionBackendKind,
     /// Cached user-defined sections, in display order (SESSIONMENU FR-11).
     pub sections: Vec<SidebarSection>,
     /// Cached section id of each session placed in a section.
@@ -143,6 +150,8 @@ impl Default for SidebarState {
             unread: HashSet::new(),
             bound: HashMap::new(),
             request_totals: HashMap::new(),
+            backends: HashMap::new(),
+            default_backend: ExecutionBackendKind::Local,
             sections: Vec::new(),
             session_section: HashMap::new(),
             hidden: HashSet::new(),
@@ -282,6 +291,19 @@ pub fn refresh_if_dirty(app: &mut App) {
     match app.storage.session_request_totals() {
         Ok(totals) => app.sidebar.request_totals = totals,
         Err(e) => tracing::warn!(error = %e, "session sidebar: request totals not read"),
+    }
+    match app.storage.session_backends() {
+        Ok(backends) => {
+            app.sidebar.backends = backends
+                .into_iter()
+                .filter_map(|(id, kind)| ExecutionBackendKind::from_label(&kind).map(|k| (id, k)))
+                .collect();
+        }
+        Err(e) => tracing::warn!(error = %e, "session sidebar: session backends not read"),
+    }
+    match codemason_agent::Config::load_for(&app.cwd_path) {
+        Ok(config) => app.sidebar.default_backend = config.effective_execution_backend(),
+        Err(e) => tracing::warn!(error = %e, "session sidebar: config not read for the backend"),
     }
     match (
         app.storage.list_sessions_grouped(),
@@ -641,6 +663,24 @@ pub fn relative_age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Stri
         86_400..604_800 => format!("{}d", secs / 86_400),
         _ => format!("{}w", secs / 604_800),
     }
+}
+
+/// The execution backend session `id` runs on: its own, else the global one.
+///
+/// # Arguments
+///
+/// * `app` - the App whose cached sidebar data is read.
+/// * `id` - the session id.
+///
+/// # Returns
+///
+/// The backend kind.
+pub fn backend_of(app: &App, id: &str) -> ExecutionBackendKind {
+    app.sidebar
+        .backends
+        .get(id)
+        .copied()
+        .unwrap_or(app.sidebar.default_backend)
 }
 
 /// Attention of the session `id`: its open view's state, or `Unread` when

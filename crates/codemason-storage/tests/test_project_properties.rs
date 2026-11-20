@@ -88,3 +88,36 @@ fn test_project_properties_sessions_copy_the_backend_when_created() {
         "existing keep theirs"
     );
 }
+
+#[test]
+fn test_project_properties_session_backends_lists_only_own_backends() {
+    let storage = Storage::open_in_memory().expect("storage");
+    let project = storage
+        .ensure_project("/nonexistent/props_list")
+        .expect("project");
+    for id in ["global", "podman", "remote"] {
+        storage
+            .create_session_in_project(
+                id,
+                &project.id,
+                &project.worktree,
+                &SessionCheckout::default(),
+            )
+            .expect("session");
+    }
+    storage
+        .set_session_backend("podman", Some("podman"))
+        .expect("podman");
+    storage
+        .set_session_backend("remote", Some("remote"))
+        .expect("remote");
+
+    let backends = storage.session_backends().expect("backends");
+    assert_eq!(backends.len(), 2, "{backends:?}");
+    assert_eq!(backends.get("podman").map(String::as_str), Some("podman"));
+    assert_eq!(backends.get("remote").map(String::as_str), Some("remote"));
+    assert!(
+        !backends.contains_key("global"),
+        "global sessions are absent"
+    );
+}

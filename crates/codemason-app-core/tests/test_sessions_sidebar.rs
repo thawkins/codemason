@@ -344,3 +344,20 @@ async fn test_sessions_sidebar_current_title_of_a_session_the_sidebar_hides() {
     refresh_if_dirty(&mut app);
     assert_eq!(current_title(&mut app).as_deref(), Some("Renamed"));
 }
+
+#[tokio::test]
+async fn test_sessions_sidebar_backend_of_uses_own_then_global() {
+    use codemason_app_core::sessions_sidebar_state::{backend_of, refresh_if_dirty};
+    use codemason_config::ExecutionBackendKind;
+
+    let (mut app, a, b) = app_with_sidebar().await;
+    app.storage
+        .set_session_backend(&a, Some("podman"))
+        .expect("set backend");
+    app.sidebar.dirty = true;
+    refresh_if_dirty(&mut app);
+    assert_eq!(backend_of(&app, &a), ExecutionBackendKind::Podman);
+    // A session without its own follows the global one.
+    app.sidebar.default_backend = ExecutionBackendKind::Remote;
+    assert_eq!(backend_of(&app, &b), ExecutionBackendKind::Remote);
+}
