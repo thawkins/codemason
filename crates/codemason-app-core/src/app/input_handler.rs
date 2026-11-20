@@ -73,6 +73,23 @@ impl App {
         self.theme = selection;
     }
 
+    /// Switches the window to `selection` and saves it as the startup theme
+    /// (the `theme` config key), so a restart keeps it.
+    ///
+    /// The switch always applies; a save failure is logged and shown in the
+    /// status line.
+    pub(crate) fn commit_theme(&mut self, selection: crate::theme_tokens::ThemeSelection) {
+        self.theme = selection;
+        let name = self.theme.display_name().to_string();
+        self.status = match crate::theme_tokens::persist(&name) {
+            Ok(()) => format!("theme: {name}"),
+            Err(err) => {
+                tracing::warn!(theme = %name, error = %err, "failed to save the theme");
+                format!("theme: {name} (not saved: {err})")
+            }
+        };
+    }
+
     /// Serves a key while the `/theme` picker is open: Up/Down (or k/j) move
     /// the highlight and preview the theme, Enter keeps it, Esc or `q`
     /// restores the theme the picker opened on.
@@ -93,7 +110,7 @@ impl App {
             Key::Down | Key::Char('j') => self.theme_picker_select(selected + 1),
             Key::Enter => {
                 self.theme_picker = None;
-                self.status = format!("theme: {}", self.theme.display_name());
+                self.commit_theme(self.theme.clone());
             }
             _ => {}
         }

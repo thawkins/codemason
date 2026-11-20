@@ -14,7 +14,8 @@
 //! block, generated from one blue seed), and [`ThemeTokens::roles`] derives
 //! them for every other theme.
 //!
-//! Dependencies: `serde` and `serde_json` (theme files).
+//! Dependencies: `serde` and `serde_json` (theme files), `codemason-config`
+//! (saving the chosen theme).
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -830,6 +831,30 @@ static STARTUP: OnceLock<String> = OnceLock::new();
 pub fn set_startup(theme: &str) {
     // INTENTIONAL: a second call keeps the first theme.
     let _ = STARTUP.set(theme.to_string());
+}
+
+/// Saves `name` as the `theme` key of the user-global config, so the next
+/// start opens in that theme.
+///
+/// Only that one key is edited; every other key in the file is left as it is.
+/// Under `codemason --config <file>` the explicit file is edited instead (see
+/// [`codemason_config::Config::set_config_write_target`]). A project
+/// `.codemason/codemason.json` that sets `theme` still overrides the saved
+/// value at startup.
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read, parsed or written.
+pub fn persist(name: &str) -> anyhow::Result<()> {
+    codemason_config::Config::edit_global_config(|root| {
+        let value = serde_json::Value::String(name.to_string());
+        if root.get("theme") == Some(&value) {
+            return Ok(false);
+        }
+        root.insert("theme".to_string(), value);
+        Ok(true)
+    })?;
+    Ok(())
 }
 
 /// The `theme` value given to [`set_startup`], if any.

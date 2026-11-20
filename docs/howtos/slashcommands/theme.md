@@ -15,8 +15,10 @@
 | `catppuccin-mocha`, `gruvbox-dark`, `nord`, `tokyo-night` | Ports of those palettes |
 | `document-light`, `document-dark` | Material Design 3 colour schemes from one blue seed, made for the window's word-processor layout |
 
-The switch lasts until codemason exits. To start in a theme, set the `theme`
-key in `codemason.json`:
+Choosing a theme (`/theme <name>`, Enter in the picker, or the command
+palette) saves it as the `theme` key in the user-global
+`~/.config/codemason/codemason.json` (or the `--config` file), so the next start
+opens in it. You can also set the key by hand:
 
 ```json
 { "theme": "nord" }
@@ -93,7 +95,9 @@ Every token is required and every colour is `#rrggbb`:
   file replaces the built-in `nord`, and `/theme Ocean Mist` selects a theme
   named `ocean mist`. A user theme named `dark` or `light` wins over those
   aliases; `system` and `default` always mean `system`.
-- `/theme` does not write the config file; only the `theme` key persists.
+- Only the `theme` key is written; every other key in the file is kept. Esc in
+  the picker saves nothing. A project `.codemason/codemason.json` that sets
+  `theme` still overrides the saved value at startup.
 - A theme file that does not parse, is larger than 64 KiB, or is not a regular
   file (a FIFO or a device), is skipped with a warning in the Log pane.
 - A loaded theme whose text is hard to read is still used, with a warning in
