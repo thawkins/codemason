@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed: every service indicator in the GUI status bar and its `Details` popup (GCF, CDX, LOG, EDIT, TELE, AUTO, YOLO) is a dense Material status chip that turns its service on or off: a green check while the service is on and a red cross while it is off, and a click runs the service's own `/<command> on|off` (`/gcf`, `/codeindex`, `/alog`, `/editlog`, `/telemetry`, `/autopilot`, `/yolo`), so the change persists exactly as the slash command does. The `<NAME> [ok]` / `<NAME> [x]` text tags are gone. `AUTO` and `YOLO` use a caution tone (`error_container`) and, in the bar, turn autopilot or YOLO off with one click. The `Details` popup stays open on a chip click (its button has a fixed id, so the AUTO and YOLO chips appearing before it do not close it), wraps its chips in a narrow window, and the bar is always one chip high so it no longer changes height when YOLO or autopilot turns on. A chip click keeps the prompt's draft, and the dense chips never take the keyboard focus, so Enter still goes to the prompt.
+- Added: `material::chip::chip_dense` (a 24-point chip at M3 density -2) and `ChipKind::Status` (a green check while on, a red cross while off, so the chip keeps one width; a caution status chip is filled with `error_container` while on).
+
+### Fixed
+
+- Fixed: `test_open_project_dialog_registers_the_folder_as_a_project` failed in checkouts with a long path, because the transcript wraps `registered at` and the path onto two lines; the test now accepts any whitespace there.
+
 ## [1.0.171] - 2026-11-20
 
 Material Design 3 GUI, transcript media, and the word-processor layout.

@@ -14,9 +14,11 @@ use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
 use codemason_gui::keys::default_keymap;
+use codemason_gui::panels::status_bar::{Service, status_bar_ui};
 use craft_keymap::Platform;
+use egui::accesskit::Toggled;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A running window: the runtime it was built on and the harness.
 struct Rig {
@@ -67,29 +69,26 @@ fn open_details(rig: &mut Rig) {
     rig.harness.run();
 }
 
+/// Whether the chip labelled `label` is selected (its service on).
+fn chip_on(harness: &Harness<'static, Shell>, label: &str) -> bool {
+    harness.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True)
+}
+
 #[test]
 fn test_status_bar_shows_autopilot_off_only_in_details() {
     let mut rig = rig(|_, app| assert!(!app.session.autopilot_enabled));
-    // The bar shows the autopilot tag only while autopilot is on.
-    assert!(rig.harness.query_by_label("AUTO [x]").is_none());
-    assert!(rig.harness.query_by_label("AUTO [ok]").is_none());
+    // The bar shows the autopilot chip only while autopilot is on.
+    assert!(rig.harness.query_by_label("AUTO").is_none());
 
     open_details(&mut rig);
-    rig.harness.get_by_label("AUTO [x]");
+    assert!(!chip_on(&rig.harness, "AUTO"));
 }
 
 #[test]
 fn test_status_bar_is_one_row_with_service_tags_in_details() {
     let mut rig = rig(|_, _| {});
-    // None of the service tags or identity fields is in the bar itself.
-    for hidden in [
-        "GCF [ok]",
-        "GCF [x]",
-        "CDX [ok]",
-        "CDX [x]",
-        "TELE [x]",
-        "TELE [ok]",
-    ] {
+    // None of the service chips or identity fields is in the bar itself.
+    for hidden in ["GCF", "CDX", "LOG", "EDIT", "TELE"] {
         assert!(rig.harness.query_by_label(hidden).is_none(), "{hidden}");
     }
     assert!(
@@ -102,14 +101,10 @@ fn test_status_bar_is_one_row_with_service_tags_in_details() {
     open_details(&mut rig);
     rig.harness
         .get_by_label(&format!("codemason v{}", env!("CARGO_PKG_VERSION")));
-    assert!(
-        rig.harness.query_by_label("GCF [ok]").is_some()
-            || rig.harness.query_by_label("GCF [x]").is_some()
-    );
-    assert!(
-        rig.harness.query_by_label("TELE [ok]").is_some()
-            || rig.harness.query_by_label("TELE [x]").is_some()
-    );
+    // Every service has its chip in Details.
+    for service in Service::ALL {
+        rig.harness.get_by_label(service.label());
+    }
 }
 
 #[test]
@@ -118,8 +113,7 @@ fn test_status_bar_shows_autopilot_on_after_alt_o() {
         press_alt_o(runtime, app);
         assert!(app.session.autopilot_enabled, "Alt+O enables autopilot");
     });
-    rig.harness.get_by_label("AUTO [ok]");
-    assert!(rig.harness.query_by_label("AUTO [x]").is_none());
+    assert!(chip_on(&rig.harness, "AUTO"));
 }
 
 #[test]
@@ -137,7 +131,7 @@ fn test_status_bar_omits_the_countdown_without_a_time_limit() {
         assert!(app.session.autopilot_enabled);
         assert!(app.session.autopilot_time_limit_secs.is_none());
     });
-    rig.harness.get_by_label("AUTO [ok]");
+    assert!(chip_on(&rig.harness, "AUTO"));
     assert!(
         rig.harness.query_by_label_contains("[00:").is_none()
             && rig.harness.query_by_label_contains("[01:").is_none(),
@@ -201,13 +195,26 @@ fn test_status_bar_keeps_a_non_default_backend_in_view() {
     rig.harness.get_by_label("Backend:docker");
 }
 
+/// The tallest a one-line status-bar row gets, in points (a dense chip).
+const DETAILS_MAX_ROW_HEIGHT: f32 = codemason_gui::material::chip::DENSE_HEIGHT;
+
 #[test]
 fn test_status_bar_summary_never_overlaps_the_zoom_control() {
     let mut rig = rig(|_, _| {});
-    for width in [1600.0, 900.0, 700.0, 520.0] {
+    // Every 20 pt from 1000 down to 500, plus a wide window: the summary
+    // wraps at a different item at each, the Details button among them.
+    let widths =
+        std::iter::once(1600.0).chain((0..=25).map(|step| (step as f32).mul_add(-20.0, 1000.0)));
+    for width in widths {
         rig.harness.set_size(egui::vec2(width, 800.0));
         rig.harness.run();
         let details = rig.harness.get_by_label("Details").rect();
+        // Wrapped as a whole onto the next row, never squeezed into the
+        // width left on the current one (its text broken over several lines).
+        assert!(
+            details.height() < 2.0 * DETAILS_MAX_ROW_HEIGHT,
+            "at {width} pt, Details is squeezed: {details:?}"
+        );
         let zoom = rig
             .harness
             .get_by_label(codemason_gui::panels::status_bar::ZOOM_LABEL)
@@ -220,4 +227,103 @@ fn test_status_bar_summary_never_overlaps_the_zoom_control() {
             );
         }
     }
+}
+
+/// The status bar alone over `app`, keeping the command the last frame
+/// returned, so a chip's click is seen without running (and persisting) it.
+fn bar_harness(app: App) -> Harness<'static, (App, Option<&'static str>)> {
+    let palette = codemason_gui::palette::Palette::from_tokens(
+        &codemason_app_core::theme_tokens::ThemeCatalog::builtin()
+            .get("document-light")
+            .expect("built-in"),
+    );
+    Harness::builder()
+        .with_size(egui::vec2(1600.0, 400.0))
+        .allow_missing_glyphs()
+        .build_ui_state(
+            move |ui, (app, command): &mut (App, Option<&'static str>)| {
+                if let Some(line) = status_bar_ui(ui, app, &palette) {
+                    *command = Some(line);
+                }
+            },
+            (app, None),
+        )
+}
+
+#[test]
+fn test_status_bar_autopilot_chip_click_asks_to_turn_it_off() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let mut app = {
+        let _enter = runtime.enter();
+        support::make_app()
+    };
+    app.session.autopilot_enabled = true;
+    let mut harness = bar_harness(app);
+    harness.run();
+    harness.get_by_label("AUTO").click();
+    harness.run();
+    assert_eq!(harness.state().1, Some("/autopilot off"));
+}
+
+#[test]
+fn test_status_bar_details_chips_ask_for_their_toggle_and_stay_open() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let mut app = {
+        let _enter = runtime.enter();
+        support::make_app()
+    };
+    app.code_index_enabled = false;
+    let mut harness = bar_harness(app);
+    harness.run();
+    harness
+        .get_by_label(codemason_gui::panels::status_bar::DETAILS_LABEL)
+        .click();
+    harness.run();
+    assert_eq!(
+        harness.get_by_label("CDX").accesskit_node().toggled(),
+        Some(Toggled::False)
+    );
+    harness.get_by_label("CDX").click();
+    harness.run();
+    assert_eq!(harness.state().1, Some("/codeindex on"));
+    // The popup stays open, so another service can be flipped at once.
+    harness.get_by_label("TELE");
+}
+
+#[test]
+fn test_status_bar_service_commands_turn_each_service_on_and_off() {
+    for service in Service::ALL {
+        let on = service.command(true);
+        let off = service.command(false);
+        assert!(on.ends_with(" on") && off.ends_with(" off"), "{on} / {off}");
+        assert_eq!(on.trim_end_matches(" on"), off.trim_end_matches(" off"));
+    }
+}
+
+#[test]
+fn test_status_bar_chip_keeps_the_draft_and_the_details_popup_open() {
+    let mut rig = rig(|_, app| {
+        assert!(!app.session.autopilot_enabled);
+        app.session.input = "half-written message".to_string();
+        app.session.input_cursor = 4;
+    });
+    open_details(&mut rig);
+    // Turning autopilot on adds the AUTO chip to the bar, before the Details
+    // button: the popup must stay open regardless.
+    rig.harness
+        .get_all_by_label("AUTO")
+        .next()
+        .expect("AUTO chip")
+        .click();
+    rig.harness.run();
+    let app = rig.harness.state().app();
+    assert!(app.session.autopilot_enabled, "the chip ran /autopilot on");
+    assert_eq!(app.session.input, "half-written message");
+    assert_eq!(app.session.input_cursor, 4);
+    assert_eq!(
+        rig.harness.get_all_by_label("AUTO").count(),
+        2,
+        "the bar's AUTO chip and the still-open popup's"
+    );
+    rig.harness.get_by_label("TELE");
 }
