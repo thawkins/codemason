@@ -259,8 +259,9 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   name, an optional base model and, when it came from GitHub or GitLab, its
   remote. A session can run in its own `git worktree` at a branch
   (`/session new --branch`), and the session sidebar groups sessions by
-  project and shows the pull/merge request count for each session's branch
-  (`/project`, `cdmn project`)
+  project and shows each session's pull/merge request count (`0` when it has
+  none) and an icon for the execution backend it runs on (local, Docker,
+  Podman or remote) (`/project`, `cdmn project`)
 - **Session menu and Auto-fix** — right-click (or `m` on) a sidebar session
   for Open PR/MR, Open in (editor, file manager, terminal), Pin, Mark as
   unread, Rename, Fork, Move to section, Archive, Delete and, on a machine that
