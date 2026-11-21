@@ -137,6 +137,30 @@ fn test_image_load_file_uri_puts_the_third_slash_of_a_drive_path() {
 }
 
 #[test]
+fn test_image_load_file_uri_puts_a_unc_host_after_the_scheme() {
+    // A UNC path's share is the URI's authority: the loader puts the two
+    // backslashes back in front of the host, so `file://server/share` is the
+    // share path and `file://\\server\share` would be a path named `\\`.
+    let path = std::path::Path::new(r"\\server\share\shots\screen.png");
+    let uri = file_uri(path);
+    assert_eq!(uri, r"file://server\share\shots\screen.png");
+    // The extended-length form is a share path too, and round-trips as it is.
+    let long = std::path::Path::new(r"\\?\C:\shots\screen.png");
+    assert_eq!(file_uri(long), r"file://?\C:\shots\screen.png");
+    if cfg!(windows) {
+        assert_eq!(uri_path(&uri).as_deref(), Some(path), "and back again");
+        assert_eq!(uri_path(&file_uri(long)).as_deref(), Some(long));
+    } else {
+        // Only the loader on Windows rebuilds a host; elsewhere the text after
+        // the scheme is the path, so nothing here claims a share it cannot name.
+        assert_eq!(
+            uri_path(&uri).as_deref(),
+            Some(std::path::Path::new(r"server\share\shots\screen.png"))
+        );
+    }
+}
+
+#[test]
 fn test_image_load_file_uri_leaves_a_relative_path_alone() {
     // A relative path is not a drive, so it keeps the scheme's two slashes.
     let uri = file_uri(std::path::Path::new("shots/screen.png"));
@@ -187,6 +211,15 @@ fn test_image_load_file_uri_dir_keeps_a_drive_path_resolvable() {
         file_uri_dir(std::path::Path::new("/home/me/shots/")),
         "file:///home/me/shots/"
     );
+    // A share is the authority, so its host stays after the scheme.
+    let share = file_uri_dir(std::path::Path::new(r"\\server\share\shots"));
+    assert_eq!(share, r"file://server\share\shots/");
+    if cfg!(windows) {
+        assert_eq!(
+            uri_path(&format!("{share}screen.png")).as_deref(),
+            Some(std::path::Path::new(r"\\server\share\shots/screen.png"))
+        );
+    }
 }
 
 #[test]
@@ -207,5 +240,35 @@ fn test_image_load_uri_path_drops_only_the_scheme_slash() {
     assert_eq!(
         uri_path("file:///home/me/shot.png").as_deref(),
         Some(std::path::Path::new("/home/me/shot.png"))
+    );
+}
+
+#[test]
+fn test_image_load_uri_path_rebuilds_a_unc_share_from_its_host() {
+    // The loader's own rule on Windows: a URI whose text after the scheme does
+    // not begin with a slash is a host, and becomes a UNC path. Elsewhere the
+    // text is the path itself, and one that already holds the two backslashes was
+    // written as it stands either way.
+    assert_eq!(
+        uri_path(r"file://\\server\share\shot.png").as_deref(),
+        Some(std::path::Path::new(r"\\server\share\shot.png")),
+        "a path that starts with one of its own keeps it"
+    );
+    let host = uri_path("file://server/share/shot.png");
+    if cfg!(windows) {
+        assert_eq!(
+            host.as_deref(),
+            Some(std::path::Path::new(r"\\server/share/shot.png"))
+        );
+    } else {
+        assert_eq!(
+            host.as_deref(),
+            Some(std::path::Path::new("server/share/shot.png"))
+        );
+    }
+    assert_eq!(
+        uri_path("file://").as_deref(),
+        Some(std::path::Path::new("")),
+        "an empty authority names the empty path, not a host"
     );
 }

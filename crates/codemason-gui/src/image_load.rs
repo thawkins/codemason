@@ -43,13 +43,25 @@ fn is_drive_path(text: &str) -> bool {
 /// The `file://` URI of the image file at `path`.
 ///
 /// egui_extras' file loader reads a `file://` URI back as a path with only
-/// minimal translation: on Windows, text after the scheme that does not begin
-/// with `/` is taken for a UNC *host*, so `format!("file://{}", path.display())`
-/// turns `C:\shots\screen.png` into `\\C:\shots\screen.png` and never finds the
-/// file. A drive path is therefore written with the third slash the URI syntax
-/// calls for (`file:///C:/shots/screen.png`); a plain absolute path already
-/// begins with the separator (`file:///home/me/shot.png`), so it is written as
-/// it stands and the loader reads it back unchanged.
+/// minimal translation: text after the scheme that begins with `/` is that
+/// path with the one slash dropped, and text that does not is taken for a UNC
+/// *host* with two backslashes put in front of it. `format!("file://{}",
+/// path.display())` therefore turns `C:\shots\screen.png` into
+/// `\\C:\shots\screen.png` and never finds the file. The forms a path can take
+/// are written the way the URI syntax and that rule pair up:
+///
+/// - a drive path takes the third slash of an empty authority
+///   (`file:///C:/shots/screen.png`), which the loader drops again;
+/// - a UNC path puts its host where an authority goes
+///   (`\\server\share\screen.png` becomes `file://server\share\screen.png`),
+///   which the loader turns back into the share path by putting the two
+///   backslashes in front of the host itself;
+/// - a plain absolute path already begins with the separator
+///   (`file:///home/me/shot.png`), so it is written as it stands.
+///
+/// A relative path has no authority to put after the scheme, so it keeps the
+/// scheme's two slashes: resolve a path before it becomes a URI rather than
+/// relying on the working directory.
 ///
 /// The path is not percent-encoded, matching the loader's own fallback: it
 /// tries the raw path before the decoded one, so a file literally named
@@ -59,9 +71,25 @@ pub fn file_uri(path: &Path) -> String {
     let text = path.display().to_string();
     if is_drive_path(&text) {
         format!("file:///{text}")
+    } else if is_unc_path(&text) {
+        // The host follows the scheme: the loader writes the two backslashes
+        // back in front of it, so `\\server\share` round-trips. The two are
+        // removed by their byte count, which is why the check is a byte one.
+        format!("file://{}", &text[2..])
     } else {
         format!("file://{text}")
     }
+}
+
+/// Whether `text` is a Windows UNC path (`\\server\share\screen.png`, and the
+/// `\\?\C:\...` / `\\?\UNC\server\...` extended-length forms).
+///
+/// Two leading backslashes with the rest of a path after them. One backslash
+/// begins an ordinary relative path, and a slash-led path is already written as
+/// the URI's own absolute form, so neither names a host.
+fn is_unc_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() > 2 && bytes[0] == b'\\' && bytes[1] == b'\\'
 }
 
 /// The `file://` URI prefix a path relative to `dir` is appended to: `dir`'s
@@ -70,8 +98,8 @@ pub fn file_uri(path: &Path) -> String {
 /// A relative image in markdown is resolved by prefixing it with this, so the
 /// prefix has to be built by the same rule as [`file_uri`] or a Windows drive
 /// takes the drive's `C:` for a UNC host. `file:///C:/shots/` keeps the third
-/// slash on a drive path, and a plain directory already begins with the
-/// separator.
+/// slash on a drive path, a plain directory already begins with the separator,
+/// and a UNC share keeps its host after the scheme.
 #[must_use]
 pub fn file_uri_dir(dir: &Path) -> String {
     let mut uri = file_uri(dir);
@@ -85,14 +113,28 @@ pub fn file_uri_dir(dir: &Path) -> String {
 ///
 /// The inverse of [`file_uri`], and the rule the loader itself applies: the
 /// slash that follows the scheme of a drive URI (`file:///C:/...`) is part of
-/// the scheme's form and is dropped before the path is built, so a round trip
-/// returns `path` unchanged. A URI naming anything else keeps its text as it
-/// is. Percent escapes are not decoded, as [`file_uri`] does not write them.
+/// the scheme's form and is dropped before the path is built, so a drive path
+/// round-trips unchanged and a plain absolute path (`file:///home/me/shot.png`)
+/// keeps the separator it was written with.
+///
+/// A URI whose text does not begin with a slash names a *host*. The loader
+/// rebuilds a UNC path from it on Windows only, and so does this, by putting
+/// two backslashes in front of the text unless it already begins with them;
+/// elsewhere the text is the path the loader reads, so a relative
+/// `file://shots/screen.png` stays relative. Percent escapes are not decoded, as
+/// [`file_uri`] does not write them.
 #[must_use]
 pub fn uri_path(uri: &str) -> Option<PathBuf> {
     let text = uri.strip_prefix("file://")?;
-    let drive = text.strip_prefix('/').filter(|rest| is_drive_path(rest));
-    Some(PathBuf::from(drive.unwrap_or(text)))
+    if let Some(rest) = text.strip_prefix('/') {
+        return Some(PathBuf::from(if is_drive_path(rest) { rest } else { text }));
+    }
+    let unc = cfg!(windows) && !text.is_empty() && !is_unc_path(text);
+    Some(if unc {
+        PathBuf::from(format!(r"\\{text}"))
+    } else {
+        PathBuf::from(text)
+    })
 }
 
 /// Whether `uri` names an SVG image.
