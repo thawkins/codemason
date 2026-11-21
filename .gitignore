@@ -87,6 +87,9 @@ __pycache__/
 *.pyc
 
 # Code index data
+# `.ragent/` holds the Tantivy index cache the agent's code index writes; it is
+# rebuilt from the sources and can be hundreds of megabytes.
+.ragent/
 .codemason/
 !.codemason/skills/
 !.codemason/blueprints/
