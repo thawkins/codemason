@@ -1071,7 +1071,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.176** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.177** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered

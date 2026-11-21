@@ -17,7 +17,7 @@ struct ScratchThemes {
 }
 
 impl ScratchThemes {
-    fn new() -> Self {
+    fn scrub_themes() -> Self {
         let lock = crate::global_env_lock();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
         std::fs::create_dir_all(&root).expect("scratch root");
@@ -54,7 +54,7 @@ const RED: Rgb = Rgb(200, 10, 10);
 
 #[test]
 fn test_theme_editor_open_ignores_system_and_unknown() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("system");
     assert!(app.theme_editor.is_none());
@@ -69,7 +69,7 @@ fn test_theme_editor_open_ignores_system_and_unknown() {
 
 #[test]
 fn test_theme_editor_set_colour_updates_draft_and_preview() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("codemason-light");
     app.set_theme_colour("accent", RED);
@@ -88,7 +88,7 @@ fn test_theme_editor_set_colour_updates_draft_and_preview() {
 
 #[test]
 fn test_theme_editor_contrast_warnings_follow_the_draft() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("codemason-light");
     assert_eq!(
@@ -106,7 +106,7 @@ fn test_theme_editor_contrast_warnings_follow_the_draft() {
 
 #[test]
 fn test_theme_editor_invalid_key_leaves_draft() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("nord");
     let before = app.theme_editor.as_ref().expect("open").draft.clone();
@@ -116,7 +116,7 @@ fn test_theme_editor_invalid_key_leaves_draft() {
 
 #[test]
 fn test_theme_editor_cancel_restores() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("nord");
     app.set_theme_colour("accent", RED);
@@ -128,7 +128,7 @@ fn test_theme_editor_cancel_restores() {
 
 #[test]
 fn test_theme_editor_save_writes_and_reloads() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("nord");
     app.set_theme_colour("accent", RED);
@@ -147,7 +147,7 @@ fn test_theme_editor_save_writes_and_reloads() {
 
 #[test]
 fn test_theme_editor_save_goes_back_to_the_source_file() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     let project = scratch.dir.path().join("project-themes");
     let mut theme = (*app.themes.get("nord").expect("nord")).clone();
@@ -169,7 +169,7 @@ fn test_theme_editor_save_goes_back_to_the_source_file() {
 
 #[test]
 fn test_theme_editor_save_failure_keeps_editor() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     // The themes directory path is taken by a file, so the save must fail.
     std::fs::write(scratch.themes(), "not a directory").expect("write");
@@ -188,7 +188,7 @@ fn test_theme_editor_save_failure_keeps_editor() {
 
 #[test]
 fn test_theme_editor_reset_restores_builtin_and_deletes_file() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("nord");
     app.set_theme_colour("accent", RED);
@@ -210,7 +210,7 @@ fn test_theme_editor_reset_restores_builtin_and_deletes_file() {
 
 #[test]
 fn test_theme_editor_reset_ignores_user_theme() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     let mut theme = (*app.themes.get("nord").expect("nord")).clone();
     theme.name = "mine".to_string();
@@ -226,7 +226,7 @@ fn test_theme_editor_reset_ignores_user_theme() {
 
 #[tokio::test]
 async fn test_theme_editor_esc_cancels() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_picker();
     app.open_theme_editor("nord");
@@ -242,7 +242,7 @@ async fn test_theme_editor_esc_cancels() {
 
 #[test]
 fn test_theme_editor_close_returns_preview_to_selection() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("codemason-light");
     assert_eq!(app.active_theme_tokens(true).name, "codemason-light");
@@ -252,7 +252,7 @@ fn test_theme_editor_close_returns_preview_to_selection() {
 
 #[test]
 fn test_theme_editor_reset_never_deletes_a_project_theme_file() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     let project = scratch.dir.path().join(".codemason").join("themes");
     let mut theme = (*app.themes.get("nord").expect("nord")).clone();
@@ -274,7 +274,7 @@ fn test_theme_editor_reset_never_deletes_a_project_theme_file() {
 
 #[test]
 fn test_theme_editor_reset_reports_a_remaining_override() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     // Two user files define `nord`; resetting deletes the one in use and
     // the other still replaces the built-in theme.
@@ -296,7 +296,7 @@ fn test_theme_editor_reset_reports_a_remaining_override() {
 
 #[tokio::test]
 async fn test_theme_editor_esc_with_unsaved_edits_asks_first() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
     app.open_theme_editor("nord");
     app.set_theme_colour("accent", RED);

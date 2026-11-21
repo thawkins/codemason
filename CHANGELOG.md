@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.177] - 2026-11-21
+
+The theme editor, and a test run no longer reads your own themes.
+
+Every theme row of the `/theme` picker except `system` gains an edit button
+that opens the theme editor: each colour by group with a swatch and a hex
+field, a live preview of the edited theme, and its contrast warnings at the
+top. Save writes the theme back to the file it was loaded from, or, for a
+built-in theme, to `~/.config/codemason/themes/<name>.json`, which replaces the
+built-in from then on. Reset to default (built-in themes only) deletes that
+copy and restores the built-in colours; Cancel edit drops the edit, and so does
+Esc (with unsaved edits the first Esc only warns).
+
+Also in this release: a test process stopped reading the developer's own
+`~/.config/codemason/themes/`.
+
+### Added
+
+- Added: the GUI's `/theme` picker row for every theme except `system` has an edit button that opens the theme editor (`App::theme_editor`, `crates/codemason-app-core/src/app/theme_editor.rs`, drawn by `crates/codemason-gui/src/dialogs/theme_editor.rs`). It lists every colour by its dotted key (`ThemeTokens::colours`, Material roles included) with a swatch (egui colour picker) and a hex field, previews the edited theme live, and reports the draft's contrast failures. **Save** writes the theme through `save_theme` (atomic) back to the file it was loaded from or, for a built-in theme, to `~/.config/codemason/themes/<name>.json`, which replaces the built-in from then on. **Reset to default** (built-in themes only) deletes the user's copy and reloads the catalog, never a project's `.codemason/themes/` file, and names any file that still replaces the theme. **Cancel edit** and Esc discard the edit; with unsaved edits the first Esc only warns.
+
+### Changed
+
+- Changed: `ThemeTokens` and its token groups serialise, so a theme can be written back as a theme file. `ThemeTokens::colours`/`set_colour` address every colour by its dotted key, the catalog records which file each theme was loaded from (`ThemeCatalog::sources`), and `save_theme` writes atomically into the user themes directory (`user_themes_dir`, `theme_file_name`). Editing a theme whose file has no `m3` block and changing one of its `m3` colours stores the whole block in the saved file.
+
+### Fixed
+
+- Fixed: a test process built its `App` against the developer's own `~/.config/codemason/themes/`, so a theme saved with the new theme editor loaded with its contrast warnings, which `App::new` pushes into the log and which broke eight "log is empty" assertions (`test_agent_switching`, `test_hook_warning_flagged` twice, `test_run_cost_banner`, `test_session_resume`, `test_slash_commands` three times). `theme_tokens::use_scratch_themes_dir_for_tests` pins the themes directory to the git-ignored `target/temp/themes` and `use_scratch_log_root_for_tests` calls it, so a test run is independent of the machine it runs on; a test that keeps its own scratch directory still sets `set_user_themes_dir_override` and takes precedence.
+- Fixed: the two theme-editor test helpers were named `ScratchThemes::new`, which put `new` in `scripts/check-test-env-isolation.py`'s set of locking helpers and made every unrelated test calling anything named `new(` look like a self-deadlock. They are `ScratchThemes::scrub_themes`.
+
 ## [1.0.176] - 2026-11-21
 
 Jump to the end of the transcript from the prompt row.

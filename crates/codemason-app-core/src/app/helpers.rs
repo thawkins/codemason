@@ -527,6 +527,10 @@ pub fn set_log_root_override(root: impl Into<std::path::PathBuf>) {
 /// Resolves `<workspace>/target/temp/log` from the crate's own
 /// `CARGO_MANIFEST_DIR`, so the path is correct whatever directory the test
 /// binary runs in. Git-ignored, so a test run never dirties the repository.
+///
+/// This also pins the user themes directory to `target/temp/themes`, because
+/// building an [`crate::app::App`] loads the user's themes and a theme the
+/// developer saved would add its contrast warnings to the app's log.
 #[doc(hidden)]
 pub fn use_scratch_log_root_for_tests() {
     set_log_root_override(
@@ -534,6 +538,7 @@ pub fn use_scratch_log_root_for_tests() {
             .join("../..")
             .join("target/temp/log"),
     );
+    crate::theme_tokens::use_scratch_themes_dir_for_tests();
 }
 
 /// The directory TUI log spools live under (`<working dir>/log` by default).

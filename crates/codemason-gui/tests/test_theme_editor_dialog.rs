@@ -27,7 +27,7 @@ struct ScratchThemes {
 }
 
 impl ScratchThemes {
-    fn new() -> Self {
+    fn scrub_themes() -> Self {
         let lock = crate::global_env_lock();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
         std::fs::create_dir_all(&root).expect("scratch root");
@@ -86,7 +86,7 @@ fn dialog_shown(harness: &Harness<'static, Shell>, title: &str) -> bool {
 
 #[test]
 fn test_theme_picker_shows_edit_button_per_theme() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let (_rt, mut harness) = rig(&scratch, |_| {});
     harness.run();
     for name in ThemeCatalog::builtin().names() {
@@ -104,7 +104,7 @@ fn test_theme_picker_shows_edit_button_per_theme() {
 
 #[test]
 fn test_theme_edit_button_opens_editor() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let (_rt, mut harness) = rig(&scratch, |_| {});
     harness.run();
     harness.get_by_label(&edit_theme_label("nord")).click();
@@ -122,7 +122,7 @@ fn test_theme_edit_button_opens_editor() {
 
 #[test]
 fn test_theme_editor_save_button_persists() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let (_rt, mut harness) = rig(&scratch, |app| {
         app.open_theme_editor("nord");
         app.set_theme_colour("accent", Rgb(200, 10, 10));
@@ -138,7 +138,7 @@ fn test_theme_editor_save_button_persists() {
 
 #[test]
 fn test_theme_editor_cancel_button_closes() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let (_rt, mut harness) = rig(&scratch, |app| {
         app.open_theme_editor("nord");
         app.set_theme_colour("accent", Rgb(200, 10, 10));
@@ -154,7 +154,7 @@ fn test_theme_editor_cancel_button_closes() {
 
 #[test]
 fn test_theme_editor_reset_hidden_for_user_theme() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let mut theme = (*ThemeCatalog::builtin().get("nord").expect("nord")).clone();
     theme.name = "mine".to_string();
     save_theme(&theme, &scratch.themes().join("mine.json")).expect("save");
@@ -195,7 +195,7 @@ fn draft_accent(harness: &Harness<'static, Shell>) -> Rgb {
 
 #[test]
 fn test_theme_editor_hex_field_sets_valid_colour_only() {
-    let scratch = ScratchThemes::new();
+    let scratch = ScratchThemes::scrub_themes();
     let (_rt, mut harness) = rig(&scratch, |app| app.open_theme_editor("nord"));
     harness.run();
     let before = draft_accent(&harness);

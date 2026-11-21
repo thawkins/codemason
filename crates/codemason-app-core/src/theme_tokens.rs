@@ -953,15 +953,44 @@ pub fn set_user_themes_dir_override(dir: Option<PathBuf>) {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = dir;
 }
 
+/// The one-shot test pin of [`user_themes_dir`], set by
+/// [`use_scratch_themes_dir_for_tests`].
+static THEMES_DIR_PIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Point [`user_themes_dir`] at the workspace scratch tree for this test
+/// process.
+///
+/// A test that builds an [`crate::app::App`] loads the user's themes
+/// directory, so a theme the developer saved with the theme editor would add
+/// its contrast warnings to the app's log and break "log is empty" assertions.
+/// Pinning the directory to a git-ignored `target/temp/themes` path keeps a
+/// test run independent of the machine it runs on. The first call wins and the
+/// pin outlives later [`set_user_themes_dir_override`] resets, so a test that
+/// keeps its own scratch directory still sets the override and takes
+/// precedence.
+#[doc(hidden)]
+pub fn use_scratch_themes_dir_for_tests() {
+    let _ = THEMES_DIR_PIN.set(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("target/temp/themes"),
+    ); // INTENTIONAL: first set wins; later calls are no-ops
+}
+
 /// The user's theme directory, `~/.config/codemason/themes`, where an edited
 /// built-in theme is saved; `None` when no config directory can be found.
+///
+/// The [`set_user_themes_dir_override`] value wins, then the test pin, so a
+/// test run never reads the machine's own themes.
 #[must_use]
 pub fn user_themes_dir() -> Option<PathBuf> {
     let forced = user_themes_dir_override()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    forced.or_else(|| codemason_config::Config::global_config_dir().map(|d| d.join("themes")))
+    forced
+        .or_else(|| THEMES_DIR_PIN.get().cloned())
+        .or_else(|| codemason_config::Config::global_config_dir().map(|d| d.join("themes")))
 }
 
 /// The file name a theme called `name` is saved under: every character
