@@ -44,7 +44,7 @@ impl App {
     ///
     /// Returns the catalog, the selection and one warning per skipped theme
     /// file, contrast failure or unknown startup theme.
-    fn load_themes(
+    pub(crate) fn load_themes(
         cwd_path: &std::path::Path,
     ) -> (
         crate::theme_tokens::ThemeCatalog,
@@ -53,8 +53,8 @@ impl App {
     ) {
         let mut themes = crate::theme_tokens::ThemeCatalog::builtin();
         let mut warnings = Vec::new();
-        if let Some(dir) = codemason_config::Config::global_config_dir() {
-            warnings.extend(themes.load_dir(&dir.join("themes")));
+        if let Some(dir) = crate::theme_tokens::user_themes_dir() {
+            warnings.extend(themes.load_dir(&dir));
         }
         warnings.extend(themes.load_dir(&cwd_path.join(".codemason").join("themes")));
         let theme = match crate::theme_tokens::startup() {
@@ -436,6 +436,7 @@ impl App {
             history_file_path: None,
             history_picker: None,
             theme_picker: None,
+            theme_editor: None,
             palette: None,
             frontend_action: None,
             config_save_picker: None,

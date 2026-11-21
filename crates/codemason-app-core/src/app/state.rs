@@ -1466,6 +1466,21 @@ pub struct ThemePickerState {
     pub original: crate::theme_tokens::ThemeSelection,
 }
 
+/// State of the theme editor overlay, opened from a theme picker row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeEditorState {
+    /// The name of the theme being edited.
+    pub name: String,
+    /// The theme as it was when the editor opened; Cancel keeps it.
+    pub original: std::sync::Arc<crate::theme_tokens::ThemeTokens>,
+    /// The edited theme; the window previews it while the editor is open.
+    pub draft: crate::theme_tokens::ThemeTokens,
+    /// The draft's contrast failures, recomputed after every edit.
+    pub warnings: Vec<String>,
+    /// Whether the theme is built in, so Reset to default applies.
+    pub builtin: bool,
+}
+
 /// State of the `/config list` save-picker overlay.
 ///
 /// Lists timestamped backup files discovered in the global config `saves/`
@@ -3874,6 +3889,8 @@ pub struct App {
     pub history_picker: Option<HistoryPickerState>,
     /// The `/theme` picker overlay, while it is open.
     pub theme_picker: Option<ThemePickerState>,
+    /// The theme editor overlay, while it is open.
+    pub theme_editor: Option<ThemeEditorState>,
     /// The command palette, while it is open.
     pub palette: Option<crate::palette::PaletteState>,
     /// An action a palette row asked the frontend to run.

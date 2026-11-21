@@ -31,6 +31,7 @@ mod event_handler;
 mod init;
 mod input_handler;
 mod loop_dialog;
+mod theme_editor;
 pub use self::md_worker::MdWorker;
 pub mod md_worker;
 
