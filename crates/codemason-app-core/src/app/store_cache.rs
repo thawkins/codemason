@@ -40,8 +40,17 @@ pub struct CachedIndex<E, U> {
     pub failed_marketplaces: Vec<String>,
     /// Non-fatal warnings from the fetch.
     pub warnings: Vec<String>,
-    /// True once the warnings were surfaced to the user.
-    pub warnings_shown: bool,
+}
+
+/// A fetch that failed while the slot kept showing an earlier index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshError {
+    /// Generation of the failed fetch.
+    pub generation: u64,
+    /// Human-readable cause.
+    pub cause: String,
+    /// True once the failure was surfaced to the user.
+    pub shown: bool,
 }
 
 /// How far an open browser has consumed a cache slot: the generation of the
@@ -77,6 +86,12 @@ pub struct CacheSlot<E, U> {
     pub data: SlotData<E, U>,
     /// Generation of the in-flight fetch, if any.
     pub in_flight: Option<u64>,
+    /// The warnings last surfaced to the user for this slot, so a re-fetch
+    /// that reports the same warnings does not post them again.
+    pub posted_warnings: Vec<String>,
+    /// The last fetch that failed over a `Ready` index; cleared when a later
+    /// fetch fills the slot.
+    pub refresh_error: Option<RefreshError>,
 }
 
 impl<E, U> Default for CacheSlot<E, U> {
@@ -84,6 +99,8 @@ impl<E, U> Default for CacheSlot<E, U> {
         Self {
             data: SlotData::Empty,
             in_flight: None,
+            posted_warnings: Vec::new(),
+            refresh_error: None,
         }
     }
 }
@@ -131,6 +148,7 @@ impl<E, U> CacheSlot<E, U> {
         if self.in_flight == Some(generation) {
             self.data = SlotData::Ready(ready);
             self.in_flight = None;
+            self.refresh_error = None;
         }
     }
 
@@ -155,7 +173,13 @@ impl<E, U> CacheSlot<E, U> {
             return;
         }
         self.in_flight = None;
-        if !matches!(self.data, SlotData::Ready(_)) {
+        if matches!(self.data, SlotData::Ready(_)) {
+            self.refresh_error = Some(RefreshError {
+                generation,
+                cause,
+                shown: false,
+            });
+        } else {
             self.data = SlotData::Failed { generation, cause };
         }
     }
@@ -163,13 +187,18 @@ impl<E, U> CacheSlot<E, U> {
     fn invalidate(&mut self) {
         self.data = SlotData::Empty;
         self.in_flight = None;
+        self.refresh_error = None;
     }
 
-    fn mark_warnings_shown(&mut self, generation: u64) {
-        if let SlotData::Ready(ix) = &mut self.data
-            && ix.generation == generation
+    fn mark_warnings_shown(&mut self, warnings: &[String]) {
+        self.posted_warnings = warnings.to_vec();
+    }
+
+    fn mark_refresh_error_shown(&mut self, generation: u64) {
+        if let Some(error) = self.refresh_error.as_mut()
+            && error.generation == generation
         {
-            ix.warnings_shown = true;
+            error.shown = true;
         }
     }
 }
@@ -189,7 +218,6 @@ fn index<E, U>(
         enriched: false,
         failed_marketplaces,
         warnings,
-        warnings_shown: false,
     }
 }
 
@@ -293,7 +321,9 @@ impl StoreCache {
         }
     }
 
-    /// Records a failed fetch. An existing `Ready` index is kept; ignored when stale.
+    /// Records a failed fetch; ignored when stale. An existing `Ready` index is
+    /// kept and the failure is recorded as the slot's
+    /// [`CacheSlot::refresh_error`].
     pub fn fail(&mut self, key: StoreCacheKey, generation: u64, cause: String) {
         match key {
             StoreCacheKey::Plugins(kind) => self.plugin_mut(kind).fail(generation, cause),
@@ -301,12 +331,23 @@ impl StoreCache {
         }
     }
 
-    /// Records that the warnings of the index at `generation` for `key` were
-    /// surfaced to the user; ignored when stale.
-    pub fn mark_warnings_shown(&mut self, key: StoreCacheKey, generation: u64) {
+    /// Records that `warnings` were surfaced to the user for `key`, so a later
+    /// index reporting the same warnings does not post them again.
+    pub fn mark_warnings_shown(&mut self, key: StoreCacheKey, warnings: &[String]) {
         match key {
-            StoreCacheKey::Plugins(kind) => self.plugin_mut(kind).mark_warnings_shown(generation),
-            StoreCacheKey::Connectors => self.connectors.mark_warnings_shown(generation),
+            StoreCacheKey::Plugins(kind) => self.plugin_mut(kind).mark_warnings_shown(warnings),
+            StoreCacheKey::Connectors => self.connectors.mark_warnings_shown(warnings),
+        }
+    }
+
+    /// Records that the refresh failure at `generation` for `key` was surfaced
+    /// to the user; ignored when stale.
+    pub fn mark_refresh_error_shown(&mut self, key: StoreCacheKey, generation: u64) {
+        match key {
+            StoreCacheKey::Plugins(kind) => {
+                self.plugin_mut(kind).mark_refresh_error_shown(generation);
+            }
+            StoreCacheKey::Connectors => self.connectors.mark_refresh_error_shown(generation),
         }
     }
 

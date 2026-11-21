@@ -76,6 +76,9 @@ pub fn recover_poisoned<'a, T>(
 enum CacheRead<E, U> {
     /// Nothing new: leave the browser as it is.
     Unchanged,
+    /// The slot's last fetch failed with no earlier data and a retry is in
+    /// flight: the browser shows its loading state again.
+    Retrying,
     /// The slot's fetch failed with no earlier data and no retry in flight.
     Failed {
         /// Generation of the failed fetch.
@@ -93,8 +96,15 @@ enum CacheRead<E, U> {
         updates: Vec<U>,
         /// Whether the index's enrichment finished.
         enriched: bool,
-        /// Warnings to post: the index's warnings the first time it is shown.
-        warnings: Vec<String>,
+        /// The index's warnings, when it is fresh to the browser and they differ
+        /// from what was last posted for the slot (possibly empty, which only
+        /// records that nothing is outstanding).
+        warnings: Option<Vec<String>>,
+        /// Whether a re-fetch is in flight over the shown index.
+        refreshing: bool,
+        /// A re-fetch that failed over the shown index and was not surfaced
+        /// yet: its generation and cause.
+        refresh_error: Option<(u64, String)>,
     },
 }
 
@@ -107,7 +117,9 @@ fn read_cache_slot<E: Clone, U: Clone>(
     match &slot.data {
         SlotData::Empty => CacheRead::Unchanged,
         SlotData::Failed { generation, cause } => {
-            if slot.in_flight.is_some() || view.map(|v| v.generation) == Some(*generation) {
+            if slot.in_flight.is_some() {
+                CacheRead::Retrying
+            } else if view.map(|v| v.generation) == Some(*generation) {
                 CacheRead::Unchanged
             } else {
                 CacheRead::Failed {
@@ -122,37 +134,41 @@ fn read_cache_slot<E: Clone, U: Clone>(
                 .is_none()
                 .then(|| (index.entries.clone(), index.skipped));
             let applied = shown.map_or(0, |v| v.applied_updates);
-            let warnings = if fresh.is_some() && !index.warnings_shown {
-                index.warnings.clone()
-            } else {
-                Vec::new()
-            };
+            let warnings = (fresh.is_some() && index.warnings != slot.posted_warnings)
+                .then(|| index.warnings.clone());
+            let refresh_error = slot
+                .refresh_error
+                .as_ref()
+                .filter(|error| !error.shown)
+                .map(|error| (error.generation, error.cause.clone()));
             CacheRead::Ready {
                 generation: index.generation,
                 fresh,
                 updates: index.updates.get(applied..).unwrap_or(&[]).to_vec(),
                 enriched: index.enriched,
                 warnings,
+                refreshing: slot.in_flight.is_some(),
+                refresh_error,
             }
         }
     }
 }
 
-/// Record in `cache` that the warnings `read` is about to post were shown, so a
-/// later open of the same index does not post them again.
-fn mark_read_warnings_shown<E, U>(
-    cache: &mut StoreCache,
-    key: StoreCacheKey,
-    read: &CacheRead<E, U>,
-) {
+/// Record in `cache` what `read` is about to surface (its warnings and any
+/// refresh failure), so a later poll or open does not surface them again.
+fn mark_read_shown<E, U>(cache: &mut StoreCache, key: StoreCacheKey, read: &CacheRead<E, U>) {
     if let CacheRead::Ready {
-        generation,
         warnings,
+        refresh_error,
         ..
     } = read
-        && !warnings.is_empty()
     {
-        cache.mark_warnings_shown(key, *generation);
+        if let Some(warnings) = warnings {
+            cache.mark_warnings_shown(key, warnings);
+        }
+        if let Some((generation, _)) = refresh_error {
+            cache.mark_refresh_error_shown(key, *generation);
+        }
     }
 }
 
@@ -1603,8 +1619,9 @@ impl App {
 
     /// Force a re-fetch of the index shown by whichever store browser is open
     /// (plugin store or connector catalogue). The browser keeps showing the
-    /// cached index until the new one lands; a no-op while a fetch for that index
-    /// is already in flight or when no browser is open.
+    /// cached index (with a refreshing note) until the new one lands, or shows
+    /// its loading state again when the last fetch had failed; a no-op while a
+    /// fetch for that index is already in flight or when no browser is open.
     pub fn refresh_open_store(&mut self) {
         if let Some(kind) = self.plugin_store.as_ref().map(|browser| browser.kind) {
             self.start_store_fetch(StoreCacheKey::Plugins(kind));
@@ -1612,6 +1629,7 @@ impl App {
         if self.connector_store.is_some() {
             self.start_store_fetch(StoreCacheKey::Connectors);
         }
+        self.poll_store_cache();
     }
 
     /// Fill the open store browsers from [`App::store_cache`] (called on open and
@@ -1619,13 +1637,17 @@ impl App {
     ///
     /// For the open plugin-store browser (the slot of its store kind) and the open
     /// connector-catalogue browser: an index the browser has not shown yet replaces
-    /// its listing and applies any pending `--category`, posting the index's
-    /// warnings to the message window the first time they are shown; manifest
-    /// updates the browser has not applied yet are applied once each; the
-    /// `loading details...` hint follows the index's enrichment state. A failed
-    /// fetch with no earlier data and no retry in flight shows the inline error.
-    /// Otherwise (nothing fetched yet, or a retry in flight) the browser is left
-    /// as it is. No path panics.
+    /// its listing and applies any pending `--category`; when the browser already
+    /// showed an index, the re-fetched one keeps the cursor on the same entry and
+    /// carries forward the enriched metadata of entries still listed. The index's
+    /// warnings are posted to the message window only when they differ from what
+    /// was last posted for the slot. Manifest updates the browser has not applied
+    /// yet are applied once each; the browser's `enriching` flag follows the
+    /// index's enrichment state and its `refreshing` flag whether a re-fetch is in
+    /// flight. A re-fetch that failed over the shown index is posted once and kept
+    /// as a footer note. A failed fetch with no earlier data shows the inline error,
+    /// and switches back to loading while a retry is in flight. Otherwise (nothing
+    /// fetched yet) the browser is left as it is. No path panics.
     pub fn poll_store_cache(&mut self) {
         self.poll_plugin_store_cache();
         self.poll_connector_store_cache();
@@ -1640,11 +1662,17 @@ impl App {
         let read = {
             let mut cache = recover_poisoned(self.store_cache.lock(), "store_cache");
             let read = read_cache_slot(cache.plugin(kind), self.plugin_store_view);
-            mark_read_warnings_shown(&mut cache, key, &read);
+            mark_read_shown(&mut cache, key, &read);
             read
         };
         match read {
             CacheRead::Unchanged => {}
+            CacheRead::Retrying => {
+                if let Some(browser) = self.plugin_store.as_mut() {
+                    browser.set_loading();
+                    browser.refreshing = false;
+                }
+            }
             CacheRead::Failed { generation, cause } => {
                 self.plugin_store_view = Some(CacheView {
                     generation,
@@ -1658,19 +1686,36 @@ impl App {
                 updates,
                 enriched,
                 warnings,
+                refreshing,
+                refresh_error,
             } => {
-                for warning in warnings {
+                for warning in warnings.unwrap_or_default() {
                     self.push_log_no_agent(LogLevel::Warn, warning);
+                }
+                if let Some((_, cause)) = &refresh_error {
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!(
+                            "refreshing the {} plugin store failed: {cause}; \
+                             showing the cached index",
+                            kind.token()
+                        ),
+                    );
                 }
                 let Some(browser) = self.plugin_store.as_mut() else {
                     return;
                 };
                 if let Some((entries, skipped)) = fresh {
-                    browser.set_index(StoreIndex {
+                    let index = StoreIndex {
                         store: None,
                         entries,
                         skipped,
-                    });
+                    };
+                    if browser.shows_index() {
+                        browser.refresh_index(index);
+                    } else {
+                        browser.set_index(index);
+                    }
                     // A `--category <name>` launch is validated against the
                     // categories the index actually declares (spec `catnav` FR-022).
                     browser.apply_pending_category();
@@ -1679,6 +1724,10 @@ impl App {
                         applied_updates: 0,
                     });
                 }
+                if let Some((_, cause)) = refresh_error {
+                    browser.refresh_error = Some(cause);
+                }
+                browser.refreshing = refreshing;
                 let applied = updates.len();
                 for update in updates {
                     browser.apply_manifest_update(update);
@@ -1704,11 +1753,17 @@ impl App {
         let read = {
             let mut cache = recover_poisoned(self.store_cache.lock(), "store_cache");
             let read = read_cache_slot(cache.connectors(), self.connector_store_view);
-            mark_read_warnings_shown(&mut cache, key, &read);
+            mark_read_shown(&mut cache, key, &read);
             read
         };
         match read {
             CacheRead::Unchanged => {}
+            CacheRead::Retrying => {
+                if let Some(browser) = self.connector_store.as_mut() {
+                    browser.set_loading();
+                    browser.refreshing = false;
+                }
+            }
             CacheRead::Failed { generation, cause } => {
                 self.connector_store_view = Some(CacheView {
                     generation,
@@ -1722,17 +1777,32 @@ impl App {
                 updates,
                 enriched,
                 warnings,
+                refreshing,
+                refresh_error,
             } => {
                 // A refused added marketplace (FR-043) never blinds the panel; it is
                 // surfaced as a warning line so the dropped marketplace is visible.
-                for warning in warnings {
+                for warning in warnings.unwrap_or_default() {
                     self.push_log_no_agent(LogLevel::Warn, warning);
+                }
+                if let Some((_, cause)) = &refresh_error {
+                    self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!(
+                            "refreshing the connector catalogue failed: {cause}; \
+                             showing the cached catalogue"
+                        ),
+                    );
                 }
                 let Some(browser) = self.connector_store.as_mut() else {
                     return;
                 };
                 if let Some((entries, skipped)) = fresh {
-                    browser.set_entries(entries, skipped);
+                    if browser.shows_index() {
+                        browser.refresh_entries(entries, skipped);
+                    } else {
+                        browser.set_entries(entries, skipped);
+                    }
                     // A launch category the catalogue does not carry is refused
                     // here and reported in the footer (FR-041).
                     browser.apply_pending_category();
@@ -1741,6 +1811,10 @@ impl App {
                         applied_updates: 0,
                     });
                 }
+                if let Some((_, cause)) = refresh_error {
+                    browser.refresh_error = Some(cause);
+                }
+                browser.refreshing = refreshing;
                 let applied = updates.len();
                 for update in updates {
                     browser.apply_manifest_update(update);
@@ -2017,6 +2091,7 @@ impl App {
             && browser.kind == kind
         {
             browser.set_failed(detail);
+            browser.finish_enrichment();
         }
     }
 

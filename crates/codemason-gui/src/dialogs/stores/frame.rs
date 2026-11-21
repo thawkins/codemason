@@ -660,8 +660,8 @@ pub fn detail_heading(ui: &mut egui::Ui, palette: &Palette, name: &str) {
     );
 }
 
-/// The footer bar: the shown count and search, the last install result and
-/// Refresh.
+/// The footer bar: the shown count and search, the refresh note and last
+/// install result ([`StoreSnapshot::footer`]) and Refresh.
 fn footer(
     ui: &mut egui::Ui,
     palette: &Palette,

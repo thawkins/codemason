@@ -1,7 +1,8 @@
 //! Tests for the wide three-pane Plugin Store dialog
 //! (`codemason_gui::dialogs::stores`): its size rule, the result rows and
 //! the details pane, the per-row Install, the Codex | Claude switcher, the
-//! footer's Refresh and the status states.
+//! footer's Refresh (with its refreshing and failure notes) and the status
+//! states.
 //!
 //! Each test draws `show_plugin_store` over an App with a filled
 //! `PluginStoreBrowser` in an egui_kittest harness, and collects the key
@@ -10,13 +11,13 @@
 
 use std::sync::Arc;
 
-use codemason_app_core::app::{App, PluginStoreBrowser, StorePane};
+use codemason_app_core::app::{App, PluginStoreBrowser, StoreCacheKey, StorePane};
 use codemason_app_core::input_event::{Key, KeyInput};
 use codemason_gui::dialogs::stores::frame::dialog_size;
 use codemason_gui::dialogs::stores::snapshot::StoreSnapshot;
 use codemason_gui::dialogs::stores::{
-    CATEGORIES_LABEL, DETAILS_LABEL, INSTALL, PLUGIN_STORE_TITLE, REFRESH, RESULTS_LABEL, RETRY,
-    show_plugin_store,
+    CATEGORIES_LABEL, DETAILS_LABEL, INSTALL, PLUGIN_STORE_TITLE, REFRESH, REFRESH_FAILED,
+    REFRESHING, RESULTS_LABEL, RETRY, show_plugin_store,
 };
 use codemason_gui::dialogs::take_keys;
 use codemason_plugins::{
@@ -360,5 +361,109 @@ fn test_store_dialog_failed_state_has_retry() {
         harness.run();
     }
     assert!(codex_in_flight(&harness.state().app).is_some());
+    finish(rt, harness);
+}
+
+/// An App whose Codex cache slot holds `entries` and whose Codex store is
+/// opened from that cache (no fetch starts: the slot is `Ready`).
+fn cached_app(runtime: &tokio::runtime::Runtime, entries: Vec<StoreEntry>) -> App {
+    let _enter = runtime.enter();
+    let mut app = support::make_app();
+    app.set_plugin_store_fetcher(Arc::new(StalledFetcher));
+    {
+        let mut cache = app.store_cache.lock().expect("store cache");
+        let generation = cache.begin(StoreCacheKey::Plugins(StoreKind::Codex));
+        cache.fill_plugins(
+            StoreKind::Codex,
+            generation,
+            entries,
+            0,
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+    app.open_plugin_store(StoreKind::Codex, "", false);
+    app
+}
+
+#[test]
+fn test_store_dialog_retry_shows_loading_while_in_flight() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut app = {
+        let _enter = rt.enter();
+        support::make_app()
+    };
+    app.set_plugin_store_fetcher(Arc::new(StalledFetcher));
+    {
+        let key = StoreCacheKey::Plugins(StoreKind::Codex);
+        let mut cache = app.store_cache.lock().expect("store cache");
+        let generation = cache.begin(key);
+        cache.fail(key, generation, "network down".to_string());
+    }
+    // Opened outside the runtime, the retry-on-open cannot start, so the
+    // failure shows.
+    app.open_plugin_store(StoreKind::Codex, "", false);
+    let mut harness = rig(WIDE, app);
+    harness.get_by_label("network down");
+    {
+        let _enter = rt.enter();
+        harness.get_by_role_and_label(Role::Button, RETRY).click();
+        // The loading state's progress bar keeps repainting, so step rather
+        // than wait for the UI to settle.
+        harness.run_steps(2);
+    }
+    assert!(codex_in_flight(&harness.state().app).is_some());
+    harness.get_by_label("Loading the store index...");
+    assert!(harness.query_by_label("network down").is_none());
+    finish(rt, harness);
+}
+
+#[test]
+fn test_store_dialog_refresh_shows_refreshing_note() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut harness = rig(WIDE, cached_app(&rt, three()));
+    assert!(harness.query_by_label(REFRESHING).is_none());
+    {
+        let _enter = rt.enter();
+        harness.get_by_role_and_label(Role::Button, REFRESH).click();
+        harness.run();
+    }
+    harness.get_by_label(REFRESHING);
+    harness.get_by_role_and_label(Role::ListItem, "alpha");
+    finish(rt, harness);
+}
+
+#[test]
+fn test_store_dialog_failed_refresh_keeps_entries_and_reports_once() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let app = cached_app(&rt, three());
+    {
+        let key = StoreCacheKey::Plugins(StoreKind::Codex);
+        let mut cache = app.store_cache.lock().expect("store cache");
+        let generation = cache.begin(key);
+        cache.fail(key, generation, "offline".to_string());
+    }
+    let mut harness = rig(WIDE, app);
+    harness.state_mut().app.poll_store_cache();
+    harness.run();
+    harness.state_mut().app.poll_store_cache();
+    harness.run();
+
+    harness.get_by_label(&format!("{REFRESH_FAILED}: offline"));
+    harness.get_by_role_and_label(Role::ListItem, "alpha");
+    let posted = harness
+        .state()
+        .app
+        .log_entries
+        .iter()
+        .filter(|e| {
+            e.message
+                .contains("refreshing the codex plugin store failed")
+        })
+        .count();
+    assert_eq!(
+        posted, 1,
+        "the failure is posted to the message window once"
+    );
     finish(rt, harness);
 }

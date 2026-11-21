@@ -186,7 +186,10 @@ impl super::App {
 
         let t0 = Instant::now();
         self.start_background_services();
-        timings.record("Code index spawn & spec/cron setup", t0.elapsed());
+        timings.record(
+            "Code index spawn, spec/cron setup & store prefetch",
+            t0.elapsed(),
+        );
 
         let t0 = Instant::now();
         self.resume_startup_session(startup);
@@ -211,7 +214,11 @@ impl super::App {
     /// 2. the spec manager over `<cwd>/specs`, on the App and the processor;
     /// 3. the cron scheduler (FR-010, FR-017);
     /// 4. the automation scheduler, only when the config enables automation
-    ///    (spec `openhands` FR-014).
+    ///    (spec `openhands` FR-014);
+    /// 5. the marketplace index prefetch ([`Self::prefetch_store_indexes`]):
+    ///    background fetches of the Codex and Claude plugin stores and, when
+    ///    connectors are enabled, the connector catalogue into the in-memory
+    ///    store cache, so the store browsers open without waiting.
     ///
     /// Must be called inside a tokio runtime.
     pub fn start_background_services(&mut self) {

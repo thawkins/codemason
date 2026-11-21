@@ -17,7 +17,7 @@ use codemason_app_core::app::{
 use codemason_connectors::{CatalogueBrowser, CataloguePane, ConnectorAuthShape};
 use codemason_plugins::StoreKind;
 
-use super::{CONNECTORS_TITLE, PLUGIN_STORE_TITLE};
+use super::{CONNECTORS_TITLE, PLUGIN_STORE_TITLE, REFRESH_FAILED, REFRESHING};
 
 /// One filter-rail row: its label and how many entries it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +151,8 @@ pub struct StoreSnapshot {
     pub rows: Vec<RowSnapshot>,
     /// The highlighted result.
     pub cursor: usize,
-    /// The last install result and the skipped-entry count, if any.
+    /// The refresh note, the last install result and the skipped-entry
+    /// count, if any.
     pub footer: Option<String>,
 }
 
@@ -225,7 +226,11 @@ impl StoreSnapshot {
             marketplace_cursor: browser.marketplace_cursor_row(),
             rows,
             cursor: browser.cursor,
-            footer: footer(browser.last_install.as_deref(), browser.skipped),
+            footer: footer(
+                refresh_note(browser.refreshing, browser.refresh_error.as_deref()),
+                browser.last_install.as_deref(),
+                browser.skipped,
+            ),
         }
     }
 
@@ -316,7 +321,11 @@ impl StoreSnapshot {
             marketplace_cursor: browser.marketplace_cursor_row(),
             rows,
             cursor: browser.cursor,
-            footer: footer(browser.last_install.as_deref(), browser.skipped),
+            footer: footer(
+                refresh_note(browser.refreshing, browser.refresh_error.as_deref()),
+                browser.last_install.as_deref(),
+                browser.skipped,
+            ),
         }
     }
 }
@@ -331,13 +340,23 @@ fn plugin_subtitle(version: &str, marketplace: &str) -> String {
     }
 }
 
-/// The footer's right-hand text: the last install result and any skipped
-/// entries.
-fn footer(last_install: Option<&str>, skipped: usize) -> Option<String> {
-    let skipped = (skipped > 0).then(|| format!("{skipped} malformed entries skipped"));
-    match (last_install, skipped) {
-        (Some(install), Some(skipped)) => Some(format!("{install} - {skipped}")),
-        (Some(install), None) => Some(install.to_string()),
-        (None, skipped) => skipped,
+/// The footer note a forced re-fetch shows: [`REFRESHING`] while it runs,
+/// otherwise the cause of a re-fetch that failed over the shown index.
+fn refresh_note(refreshing: bool, refresh_error: Option<&str>) -> Option<String> {
+    if refreshing {
+        Some(REFRESHING.to_string())
+    } else {
+        refresh_error.map(|cause| format!("{REFRESH_FAILED}: {cause}"))
     }
+}
+
+/// The footer's right-hand text: the refresh note, the last install result and
+/// any skipped entries, joined by `" - "`.
+fn footer(note: Option<String>, last_install: Option<&str>, skipped: usize) -> Option<String> {
+    let skipped = (skipped > 0).then(|| format!("{skipped} malformed entries skipped"));
+    let parts: Vec<String> = [note, last_install.map(str::to_string), skipped]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" - "))
 }

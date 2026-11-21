@@ -139,3 +139,33 @@ fn kinds_are_independent() {
     ));
     assert!(matches!(cache.connectors().data, SlotData::Empty));
 }
+
+#[test]
+fn failed_refresh_over_ready_records_error_until_next_fill() {
+    let mut cache = StoreCache::default();
+    let key = StoreCacheKey::Plugins(StoreKind::Codex);
+    let g1 = cache.begin(key);
+    fill(&mut cache, StoreKind::Codex, g1);
+    let g2 = cache.begin(key);
+    cache.fail(key, g2, "offline".to_string());
+    let error = cache
+        .plugin(StoreKind::Codex)
+        .refresh_error
+        .clone()
+        .expect("refresh error recorded");
+    assert_eq!(error.generation, g2);
+    assert_eq!(error.cause, "offline");
+    assert!(!error.shown);
+    cache.mark_refresh_error_shown(key, g2);
+    assert!(
+        cache
+            .plugin(StoreKind::Codex)
+            .refresh_error
+            .as_ref()
+            .is_some_and(|e| e.shown)
+    );
+
+    let g3 = cache.begin(key);
+    fill(&mut cache, StoreKind::Codex, g3);
+    assert_eq!(cache.plugin(StoreKind::Codex).refresh_error, None);
+}

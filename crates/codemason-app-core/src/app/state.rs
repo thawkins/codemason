@@ -2197,6 +2197,12 @@ pub struct PluginStoreBrowser {
     /// a still-blank description reads as pending rather than missing. It is set
     /// `true` once the enrichment for the currently loaded index has drained.
     pub enriching: bool,
+    /// Whether a forced re-fetch (Refresh) is in flight over the shown index;
+    /// the dialog footer shows a `Refreshing...` note while it is.
+    pub refreshing: bool,
+    /// The cause of the last re-fetch that failed over the shown index, shown
+    /// as a footer note until a later fetch lands.
+    pub refresh_error: Option<String>,
 }
 
 impl PluginStoreBrowser {
@@ -2231,11 +2237,65 @@ impl PluginStoreBrowser {
             marketplace_viewport: 0,
             pending_category: None,
             enriching: false,
+            refreshing: false,
+            refresh_error: None,
         };
         if !prefill.is_empty() {
             browser.set_query(prefill.to_string());
         }
         browser
+    }
+
+    /// Whether the browser shows a fetched index (loaded, possibly empty), as
+    /// opposed to its loading or failed state.
+    #[must_use]
+    pub fn shows_index(&self) -> bool {
+        matches!(
+            self.status,
+            PluginStoreStatus::Ready | PluginStoreStatus::Empty
+        )
+    }
+
+    /// Show the loading state again (a retry after a failed fetch is in flight).
+    pub fn set_loading(&mut self) {
+        self.status = PluginStoreStatus::Loading;
+    }
+
+    /// Replace a shown index with a re-fetched one without disturbing the user.
+    ///
+    /// Like [`Self::set_index`], but an entry that is still listed keeps the
+    /// version and description the earlier index (or its enrichment) filled in
+    /// where the new index leaves them blank, so enriched rows do not blank and
+    /// refill. The query and the category/marketplace filters are kept as
+    /// `set_index` keeps them, and the cursor stays on the same entry id (with
+    /// the scroll offset left alone) while that entry still matches; otherwise
+    /// it falls back to the first result. Clears any refresh failure note.
+    pub fn refresh_index(&mut self, mut index: StoreIndex) {
+        let selected = self.selected().map(|entry| entry.id.clone());
+        let scroll = self.scroll;
+        let previous: std::collections::HashMap<String, StoreEntry> = std::mem::take(&mut self.all)
+            .into_iter()
+            .map(|entry| (entry.id.clone(), entry))
+            .collect();
+        for entry in &mut index.entries {
+            if let Some(old) = previous.get(&entry.id) {
+                if entry.version.trim().is_empty() {
+                    entry.version = old.version.clone();
+                }
+                if entry.description.trim().is_empty() {
+                    entry.description = old.description.clone();
+                }
+            }
+        }
+        self.set_index(index);
+        if let Some(position) = selected.and_then(|id| {
+            self.filtered
+                .iter()
+                .position(|&i| self.all.get(i).is_some_and(|entry| entry.id == id))
+        }) {
+            self.cursor = position;
+            self.scroll = scroll;
+        }
     }
 
     /// The result list in ascending alphabetical order of entry id, case-insensitively
@@ -2405,6 +2465,7 @@ impl PluginStoreBrowser {
     /// reads the store cache ([`App::poll_store_cache`]) marks the panel
     /// [`Self::enriching`] while the cached index is still being enriched.
     pub fn set_index(&mut self, index: StoreIndex) {
+        self.refresh_error = None;
         self.all = index.entries;
         self.skipped = index.skipped;
         self.status = if self.all.is_empty() {

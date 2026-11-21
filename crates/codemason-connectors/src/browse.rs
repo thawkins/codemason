@@ -547,6 +547,12 @@ pub struct CatalogueBrowser {
     /// a still-blank description reads as pending rather than missing. It is set
     /// `true` once the enrichment for the currently loaded catalogue has drained.
     pub enriching: bool,
+    /// Whether a forced re-fetch (Refresh) is in flight over the shown
+    /// catalogue; the dialog footer shows a `Refreshing...` note while it is.
+    pub refreshing: bool,
+    /// The cause of the last re-fetch that failed over the shown catalogue,
+    /// shown as a footer note until a later fetch lands.
+    pub refresh_error: Option<String>,
 }
 
 impl Default for CatalogueBrowser {
@@ -585,6 +591,8 @@ impl CatalogueBrowser {
             marketplace_viewport: 0,
             pending_category: None,
             enriching: false,
+            refreshing: false,
+            refresh_error: None,
         };
         if !prefill.is_empty() {
             browser.set_query(prefill.to_string());
@@ -664,6 +672,7 @@ impl CatalogueBrowser {
     /// filter is derived, so the displayed order is independent of the fetch order
     /// and a category filter narrows the already-sorted set.
     pub fn set_entries(&mut self, entries: Vec<ConnectorDescriptor>, skipped: usize) {
+        self.refresh_error = None;
         self.all = entries;
         crate::descriptor::sort_connectors(&mut self.all);
         self.skipped = skipped;
@@ -1138,6 +1147,55 @@ impl CatalogueBrowser {
     /// Record a failed fetch for inline rendering.
     pub fn set_failed(&mut self, detail: String) {
         self.status = CatalogueBrowseStatus::Failed(detail);
+    }
+
+    /// Whether the browser shows a fetched catalogue (loaded, possibly empty),
+    /// as opposed to its loading or failed state.
+    #[must_use]
+    pub fn shows_index(&self) -> bool {
+        matches!(
+            self.status,
+            CatalogueBrowseStatus::Ready | CatalogueBrowseStatus::Empty
+        )
+    }
+
+    /// Show the loading state again (a retry after a failed fetch is in flight).
+    pub fn set_loading(&mut self) {
+        self.status = CatalogueBrowseStatus::Loading;
+    }
+
+    /// Replace a shown catalogue with a re-fetched one without disturbing the
+    /// user.
+    ///
+    /// Like [`Self::set_entries`], but a connector that is still listed keeps
+    /// the description the earlier catalogue (or its enrichment) filled in
+    /// where the new catalogue leaves it blank, so enriched rows do not blank
+    /// and refill. The query and the category/marketplace filters are kept as
+    /// `set_entries` keeps them, and the cursor stays on the same connector id
+    /// while that connector still matches; otherwise it falls back to the first
+    /// result. Clears any refresh failure note.
+    pub fn refresh_entries(&mut self, mut entries: Vec<ConnectorDescriptor>, skipped: usize) {
+        let selected = self.selected().map(|entry| entry.id.as_str().to_string());
+        let previous: std::collections::HashMap<String, ConnectorDescriptor> =
+            std::mem::take(&mut self.all)
+                .into_iter()
+                .map(|entry| (entry.id.as_str().to_string(), entry))
+                .collect();
+        for entry in &mut entries {
+            if let Some(old) = previous.get(entry.id.as_str())
+                && entry.description.trim().is_empty()
+            {
+                entry.description = old.description.clone();
+            }
+        }
+        self.set_entries(entries, skipped);
+        if let Some(position) = selected.and_then(|id| {
+            self.filtered
+                .iter()
+                .position(|&i| self.all.get(i).is_some_and(|entry| entry.id.as_str() == id))
+        }) {
+            self.cursor = position;
+        }
     }
 
     /// Replace the derived installed-connector-id set.

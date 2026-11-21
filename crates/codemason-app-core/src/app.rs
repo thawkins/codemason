@@ -59,8 +59,8 @@ mod reverse;
 pub use self::project_services::ProjectServices;
 pub mod store_cache;
 pub use self::store_cache::{
-    CacheSlot, CacheView, CachedIndex, ConnectorSlot, PluginSlot, SharedStoreCache, SlotData,
-    StoreCache, StoreCacheKey,
+    CacheSlot, CacheView, CachedIndex, ConnectorSlot, PluginSlot, RefreshError, SharedStoreCache,
+    SlotData, StoreCache, StoreCacheKey,
 };
 mod session_ops;
 mod session_registry;

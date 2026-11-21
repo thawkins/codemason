@@ -9,15 +9,15 @@
 //! it and focuses the results, Enter over the results installs the
 //! highlighted entry; `c` clears the focused navigator; typed characters
 //! edit the search query, Backspace removes one and Esc on an empty query
-//! closes. The keys reach the App through the router, as in the TUI.
+//! closes. The keys reach the App through the router like any other key.
 //!
 //! Each frame reads one [`snapshot::StoreSnapshot`] of the open browser and
 //! [`frame`] draws it: the header (title, the Codex | Claude switcher for
 //! plugins, the search field, close), the filter rail, the result list,
 //! the details pane and the footer. [`plugin`] draws the plugin-specific
 //! row and detail parts, [`connector`] the connector-specific ones.
-//! Clicks do what the TUI's mouse handler does: a filter row selects that
-//! filter and focuses its pane, a result row moves the highlight; a double
+//! Clicks mirror the keyboard: a filter row selects that filter and
+//! focuses its pane, a result row moves the highlight; a double
 //! click on a result, a row's Install or the details' Install moves the
 //! highlight there, focuses the results and sends Enter. Clear search,
 //! Close, Refresh, Retry and the switcher call the App's own actions.
@@ -67,6 +67,12 @@ pub const REFRESH: &str = "Refresh";
 
 /// The button a failed fetch shows to fetch again.
 pub const RETRY: &str = "Retry";
+
+/// The footer note shown while a Refresh re-fetches the shown index.
+pub const REFRESHING: &str = "Refreshing...";
+
+/// The footer note's prefix when a Refresh failed over the shown index.
+pub const REFRESH_FAILED: &str = "Refresh failed";
 
 /// The plugin store's title.
 pub const PLUGIN_STORE_TITLE: &str = "Plugin Store";

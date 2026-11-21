@@ -46,9 +46,11 @@ fn queue_outstanding<T>(slot: &Arc<Mutex<Vec<T>>>) -> bool {
 }
 
 /// Whether a browser showing `slot` up to `view` still waits on it: a fetch in
-/// flight, an index still being enriched, or data the browser has not applied.
+/// flight (including a forced re-fetch over the shown index, so its refreshing
+/// note renders and clears), a refresh failure not surfaced yet, an index still
+/// being enriched, or data the browser has not applied.
 fn cache_slot_outstanding<E, U>(slot: &CacheSlot<E, U>, view: Option<CacheView>) -> bool {
-    if slot.in_flight.is_some() {
+    if slot.in_flight.is_some() || slot.refresh_error.as_ref().is_some_and(|e| !e.shown) {
         return true;
     }
     match &slot.data {
