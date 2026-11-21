@@ -597,6 +597,45 @@ async fn test_missing_image_is_named_not_drawn() {
 }
 
 #[tokio::test]
+async fn test_loading_image_is_not_drawn_as_a_failed_one() {
+    // A decode that has started but not finished is not a picture. Building an
+    // `Image` from one makes egui paint its own failed-image mark once the
+    // decode fails, which this window's fonts cannot draw at all.
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/test_messages_pending");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let path = dir.join("shot.png");
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 40, 40, 255]))
+        .save(&path)
+        .expect("write png");
+    let mut app = support::make_app();
+    app.session.messages = vec![image_message(&path)];
+    let mut harness = shell_harness(app);
+    egui_extras::install_image_loaders(&harness.ctx);
+    // One step: the decode has only just been asked for. No `run`, which would
+    // wait for it and hide the state under test.
+    harness.step();
+    assert!(
+        harness
+            .ctx
+            .try_load_image(
+                &codemason_gui::image_load::file_uri(&path),
+                egui::load::SizeHint::default()
+            )
+            .is_ok(),
+        "the picture was asked for"
+    );
+    assert!(
+        harness.query_by_label("Image: shot.png").is_none(),
+        "a picture that is still loading is not drawn"
+    );
+    assert!(
+        harness.query_by_label("[image: shot.png]").is_none(),
+        "and it is not named as a broken one either"
+    );
+}
+
+#[tokio::test]
 async fn test_streaming_reply_ends_with_a_caret() {
     let mut app = support::make_app();
     app.session.messages = vec![Message::assistant_text("s1", "partial")];
