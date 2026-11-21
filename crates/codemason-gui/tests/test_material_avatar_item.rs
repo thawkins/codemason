@@ -95,3 +95,19 @@ fn test_material_avatar_item_meta_click_selects_the_item() {
     harness.run();
     assert_eq!(harness.state().item, 2);
 }
+
+#[test]
+fn test_material_avatar_item_meta_line_fits_inside_the_item() {
+    let harness = harness();
+    let item = harness
+        .get_by_role_and_label(Role::ListItem, "bravo")
+        .rect();
+    let chip = harness.get_by_label("tag-one").rect();
+    // The headline, the supporting line and a dense chip all fit in the
+    // item's text area (its height less the top and bottom insets).
+    let inset = codemason_gui::metrics::space::XS;
+    assert!(
+        chip.top() >= item.top() + inset && chip.bottom() <= item.bottom() - inset + 0.5,
+        "chip {chip:?} is clipped in item {item:?}"
+    );
+}

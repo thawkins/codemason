@@ -196,7 +196,7 @@ fn a_refused_override_is_refused_for_either_store() {
 
 #[test]
 fn no_config_launch_resolves_both_defaults_without_error() {
-    // The launch path (`spawn_plugin_store_fetch`) resolves the endpoint from
+    // The launch path (`App::start_store_fetch`) resolves the endpoint from
     // `store_and_config(..).1.stores_or_default()`. A config with no `plugins`
     // key at all yields `PluginsConfig::default()`, so this is exactly what the
     // no-config launch hands the resolver (FR-030, NFR-002).

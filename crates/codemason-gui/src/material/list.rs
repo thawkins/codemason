@@ -128,8 +128,10 @@ pub fn list_item(
     response
 }
 
-/// Height of an avatar list item, in points.
-pub const AVATAR_ITEM_HEIGHT: f32 = 64.0;
+/// Height of an avatar list item, in points: the 4 pt top and bottom insets
+/// around the headline, the supporting line and a meta line of 20 pt dense
+/// chips (about 63 pt of content), with a little room to spare.
+pub const AVATAR_ITEM_HEIGHT: f32 = 72.0;
 
 /// Diameter of an avatar list item's letter avatar, in points.
 const AVATAR_SIZE: f32 = 40.0;
