@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.176] - 2026-11-21
+
+Jump to the end of the transcript from the prompt row.
+
+A **Scroll to the bottom of the transcript** button joins **Collapse all
+expanded blocks** at the prompt's left end, so a long transcript can be brought
+back to its newest line without reaching for the scroll bar.
+
+### Added
+
+- Added: a **Scroll to the bottom of the transcript** button (`messages::scroll_to_bottom`, `arrow_downward`) sits at the prompt's left end, immediately left of **Collapse all expanded blocks**. Clicking it moves the transcript to its end so its last line sits at the bottom of the pane, and the view stays there as more arrives. The button holds no `MessagesView`, so it records the request in the egui context and the next `MessagesView::show_messages` takes it, one frame after the click; it is drawn whether or not there is anything to scroll, so the prompt field never moves.
 
 ## [1.0.175] - 2026-11-21
 

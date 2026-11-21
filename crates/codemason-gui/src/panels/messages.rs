@@ -433,6 +433,14 @@ impl MessagesView {
             .ctx()
             .fonts_mut(|fonts| fonts.row_height(&FontId::proportional(FONT_SIZE)));
         let mut max_offset = 0.0;
+        // The prompt's jump-to-the-bottom button raises a request the
+        // transcript takes here, on the frame after the click.
+        let jump = take_scroll_to_bottom(ui.ctx());
+        let scroll_to = if jump {
+            Some(ScrollTo::Bottom)
+        } else {
+            scroll_to
+        };
         let frame = egui::Frame::NONE
             .fill(palette.background)
             .inner_margin(MARGIN)
@@ -1154,6 +1162,39 @@ pub const THINKING_LABEL: &str = "Thinking";
 
 /// The accessible label of the control that collapses every open block.
 pub const COLLAPSE_ALL_LABEL: &str = "Collapse all expanded blocks";
+
+/// The accessible label of the control that jumps to the end of the
+/// transcript.
+pub const SCROLL_TO_BOTTOM_LABEL: &str = "Scroll to the bottom of the transcript";
+
+/// egui id of the pending jump-to-the-bottom request.
+fn scroll_to_bottom_id() -> egui::Id {
+    egui::Id::unique("transcript_scroll_to_bottom")
+}
+
+/// Move the transcript to its end, so the last line sits at the bottom of the
+/// window, and keep it there as more arrives.
+///
+/// The caller that raises the request is the prompt's own button, which holds
+/// no [`MessagesView`]; the next [`MessagesView::show_messages`] takes it, so
+/// a request made after the transcript was drawn this frame lands on the next.
+///
+/// # Arguments
+///
+/// * `ctx` - the context whose memory holds the request.
+pub fn scroll_to_bottom(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(scroll_to_bottom_id(), true));
+    // The prompt is drawn after the transcript, so the request this frame is
+    // taken by the next one: ask for it.
+    ctx.request_repaint();
+}
+
+/// Take a pending jump-to-the-bottom request, if one was raised since the last
+/// call.
+fn take_scroll_to_bottom(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.remove_temp::<bool>(scroll_to_bottom_id()))
+        .unwrap_or(false)
+}
 
 /// egui id of the collapse epoch: a counter [`collapse_all`] bumps, which
 /// closes every disclosure row that has not been opened since.

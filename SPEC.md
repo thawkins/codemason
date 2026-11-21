@@ -1,7 +1,7 @@
 <div style="page-break-after: always; text-align: center; padding-top: 15em;">
 
 <h1 style="font-size: 3em; margin-bottom: 0.2em;">codemason</h1>
-<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.171</p>
+<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.176</p>
         <p style="font-size: 1.1em;">
           <strong>Date:</strong> 2026-11-13
       </p>
@@ -2234,7 +2234,13 @@ shows the thought's line count at its right. The same applies to a `think` tool 
 header line stays) and to an activity group that holds only reasoning, which
 is drawn as its thinking blocks with no row of its own. Whether a row is open is kept per block
 (`messages::block_id`, from the message id and block index) and survives
-streaming and scrolling. A dense icon button at the prompt's left end
+streaming and scrolling. Two dense icon buttons sit at the prompt's left end.
+The first (`messages::scroll_to_bottom`, labelled "Scroll to the bottom of the
+transcript") moves the transcript to its end so its last line sits at the
+bottom of the pane and stays there as more arrives: the button holds no
+`MessagesView`, so it records the request in the context and the next
+`MessagesView::show_messages` takes it (the prompt is drawn after the
+transcript, so the jump lands one frame later). The second
 (`messages::collapse_all`, labelled "Collapse all expanded blocks") closes
 every open row in one action: each row keeps its open choice with the collapse
 epoch it was settled in, so bumping the epoch closes the rows already on

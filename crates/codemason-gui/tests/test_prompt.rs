@@ -866,6 +866,71 @@ fn test_collapse_button_sits_left_of_the_prompt_and_collapses_the_transcript() {
 }
 
 #[test]
+fn test_scroll_to_bottom_button_sits_left_of_the_collapse_button() {
+    use codemason_gui::panels::messages::{COLLAPSE_ALL_LABEL, SCROLL_TO_BOTTOM_LABEL};
+
+    let (_rt, mut harness) = rig(|_| {});
+    harness.run();
+
+    let jump = harness.get_by_label(SCROLL_TO_BOTTOM_LABEL).rect();
+    let collapse = harness.get_by_label(COLLAPSE_ALL_LABEL).rect();
+    let editor = prompt(&harness).rect();
+    // Left of the collapse button, which is itself left of the field.
+    assert!(
+        jump.right() <= collapse.left() + 0.5,
+        "jump {jump:?} collapse {collapse:?}"
+    );
+    assert!(
+        collapse.right() <= editor.left() + 0.5,
+        "collapse {collapse:?} editor {editor:?}"
+    );
+    assert!((jump.center().y - editor.center().y).abs() <= editor.height() / 2.0);
+}
+
+#[test]
+fn test_scroll_to_bottom_button_jumps_the_transcript_to_its_end() {
+    use codemason_agent::message::Message;
+    use codemason_gui::panels::messages::SCROLL_TO_BOTTOM_LABEL;
+
+    // Scrolling animates over a few frames, so let the harness settle it.
+    let (_rt, mut harness) = rig_with(
+        |app| {
+            app.session.messages = (0..300)
+                .map(|i| Message::assistant_text("s1", format!("message {i}")))
+                .collect();
+        },
+        Harness::builder().with_max_steps(64),
+    );
+    harness.run();
+    harness.get_by_label_contains("message 299");
+
+    // Scroll the transcript up to its start.
+    harness.hover_at(egui::pos2(400.0, 300.0));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Page,
+        delta: egui::vec2(0.0, 100_000.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run();
+    harness.get_by_label("message 0");
+    assert!(
+        harness.query_by_label_contains("message 299").is_none(),
+        "the end of the transcript is out of view"
+    );
+
+    harness.get_by_label(SCROLL_TO_BOTTOM_LABEL).click();
+    harness.run();
+
+    harness.get_by_label_contains("message 299");
+    assert!(
+        harness.query_by_label("message 0").is_none(),
+        "the start of the transcript is out of view again"
+    );
+}
+
+#[test]
 fn test_prompt_row_height_is_not_inflated_by_the_collapse_button() {
     let (_rt, mut harness) = rig(|_| {});
     harness.run();

@@ -65,13 +65,16 @@
 //! shows it at full size. A right-click opens
 //! the Cut/Copy/Paste context menu ([`crate::dialogs::context_menu`]).
 //!
-//! # The collapse button
+//! # The buttons left of the field
 //!
-//! Left of the field, first in the row, a dense Material icon button
-//! ([`COLLAPSE_ALL_LABEL`]) closes every open block in the transcript
-//! ([`crate::panels::messages::collapse_all`]). It is drawn whether or not
-//! anything is open, so the field never moves, and it sits before the queue
-//! counter so neither shifts the other.
+//! Left of the field, first in the row, two dense Material icon buttons: the
+//! one nearest the field ([`SCROLL_TO_BOTTOM_LABEL`]) jumps the transcript to
+//! its end, so the last line sits at the bottom of the window
+//! ([`crate::panels::messages::scroll_to_bottom`]), and the one before it
+//! ([`COLLAPSE_ALL_LABEL`]) closes every open block
+//! ([`crate::panels::messages::collapse_all`]). Both are drawn whether or not
+//! they have anything to act on, so the field never moves, and they sit before
+//! the queue counter so neither shifts the other.
 //!
 //! Dependencies: `codemason-app-core` (the App state), `craft-ui` (the IME
 //! composer), this crate's Material components, and `egui`.
@@ -88,7 +91,7 @@ use crate::icons::Icon;
 use crate::keys::{Focus, is_key_text, is_prompt_app_key, is_prompt_edit_key, to_key_input};
 use crate::material;
 use crate::material::icon_button::{IconButtonKind, icon_button_inline};
-use crate::panels::messages::COLLAPSE_ALL_LABEL;
+use crate::panels::messages::{COLLAPSE_ALL_LABEL, SCROLL_TO_BOTTOM_LABEL};
 
 /// Accessible label of the prompt input.
 pub const PROMPT_LABEL: &str = "Prompt";
@@ -571,10 +574,22 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
         .unwrap_or_default();
     let scrolls = text_height > max_height;
     let palette = crate::palette::palette_for(app, ui.ctx());
-    let collapse = |ui: &mut egui::Ui| {
-        // Left of the field and first in the row, so it never moves when the
-        // queue counter appears, and its row stays one text row tall.
-        let clicked = icon_button_inline(
+    let controls = |ui: &mut egui::Ui| {
+        // Left of the field and first in the row, so they never move when the
+        // queue counter appears, and their row stays one text row tall.
+        if icon_button_inline(
+            ui,
+            &palette,
+            IconButtonKind::Standard,
+            Icon::ArrowDownward,
+            SCROLL_TO_BOTTOM_LABEL,
+            None,
+        )
+        .clicked()
+        {
+            crate::panels::messages::scroll_to_bottom(ui.ctx());
+        }
+        if icon_button_inline(
             ui,
             &palette,
             IconButtonKind::Standard,
@@ -582,8 +597,8 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
             COLLAPSE_ALL_LABEL,
             None,
         )
-        .clicked();
-        if clicked {
+        .clicked()
+        {
             crate::panels::messages::collapse_all(ui.ctx());
         }
     };
@@ -603,7 +618,7 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
             egui::vec2(ui.available_width(), max_height),
             egui::Layout::left_to_right(egui::Align::TOP),
             |ui| {
-                collapse(ui);
+                controls(ui);
                 counter(ui);
                 let scrolled = egui::ScrollArea::vertical()
                     .id_salt("prompt_scroll")
@@ -617,7 +632,7 @@ pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
     } else {
         let output = ui
             .horizontal(|ui| {
-                collapse(ui);
+                controls(ui);
                 counter(ui);
                 editor(ui, app, id, editable)
             })

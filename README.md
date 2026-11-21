@@ -182,7 +182,10 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   diff's **Open diff** button shows the message's diffs in a modal overlay with
   the pane's own view. The prompt field sits on the dock's bottom edge and grows
   upwards only, so a long prompt or a row of attachment thumbnails moves its top
-  rather than pushing the transcript down. `Ctrl+P` opens a command palette over
+  rather than pushing the transcript down; at its left end, beside the button
+  that collapses every expanded block, a down-arrow **Scroll to the bottom of
+  the transcript** button brings the transcript back to its newest line.
+  `Ctrl+P` opens a command palette over
   actions, slash commands, themes, agents and sessions; every shortcut can be
   rebound in
   `gui-keys.json`; a leader key (`Ctrl+G`) starts two-key sequences with a
@@ -1068,7 +1071,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.175** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.176** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered
