@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed: `save_theme` wrote through a fixed `<name>.json.tmp` path, which a project could plant as a symlink to an unrelated writable file. It now writes through a uniquely named, exclusively created temporary file in the destination directory and renames it into place.
+- Fixed: `save_theme` saved a theme whose pretty-printed JSON was over the 64 KiB limit `read_theme` enforces, so the theme was skipped at the next start. It now refuses such a theme before writing.
+- Fixed: the theme editor's Reset to default resolved the full source path, so a project theme that was a symlink into the user's themes folder passed the check and the project's symlink was deleted. It now checks the canonical parent directory of the entry and rejects a parent that cannot be resolved.
+- Fixed: `App::is_input_locked` did not include the theme editor, so the editor opened without the picker left the prompt editable.
+- Fixed: in the GUI, modal key routing removed Tab, Enter and Space under the theme editor, so Save and Reset could not be reached or pressed from the keyboard. `Focus::Modal` gains `widget_keys`, set while the theme editor is open, which leaves those keys to egui; Esc and other keys still reach the App.
+
 ## [1.0.177] - 2026-11-21
 
 The theme editor, and a test run no longer reads your own themes.
