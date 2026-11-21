@@ -1306,12 +1306,13 @@ impl App {
             return;
         }
         // The theme editor sits on top of the theme picker and takes every
-        // key while it is open: Esc cancels the edit, the rest is swallowed
+        // key while it is open: Esc cancels the edit (asking once when there
+        // are unsaved edits), the rest is swallowed
         // (its fields are typed into by the frontend). The global quit keys
         // still work.
         if self.theme_editor.is_some() && !input::is_global_quit_key(key) {
             if key.key == Key::Esc {
-                self.cancel_theme_edit();
+                self.escape_theme_edit();
             }
             self.assert_ui_invariants();
             self.debug_log_input_transition("key-theme-editor", &before_input, before_cursor);

@@ -1479,6 +1479,9 @@ pub struct ThemeEditorState {
     pub warnings: Vec<String>,
     /// Whether the theme is built in, so Reset to default applies.
     pub builtin: bool,
+    /// Whether one Esc already warned about unsaved edits, so the next Esc
+    /// discards them. Any further edit clears it.
+    pub discard_armed: bool,
 }
 
 /// State of the `/config list` save-picker overlay.

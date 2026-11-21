@@ -230,7 +230,6 @@ async fn test_theme_editor_esc_cancels() {
     let mut app = make_app(&scratch);
     app.open_theme_picker();
     app.open_theme_editor("nord");
-    app.set_theme_colour("accent", RED);
     let _ = app
         .handle_key(KeyInput {
             key: Key::Esc,
@@ -249,4 +248,66 @@ fn test_theme_editor_close_returns_preview_to_selection() {
     assert_eq!(app.active_theme_tokens(true).name, "codemason-light");
     app.cancel_theme_edit();
     assert_eq!(app.active_theme_tokens(true).name, "nord");
+}
+
+#[test]
+fn test_theme_editor_reset_never_deletes_a_project_theme_file() {
+    let scratch = ScratchThemes::new();
+    let mut app = make_app(&scratch);
+    let project = scratch.dir.path().join(".codemason").join("themes");
+    let mut theme = (*app.themes.get("nord").expect("nord")).clone();
+    theme.accent = RED;
+    let source = project.join("nord.json");
+    save_theme(&theme, &source).expect("save");
+    app.themes.load_dir(&project);
+
+    app.open_theme_editor("nord");
+    app.reset_theme_to_default();
+    assert!(source.is_file(), "a project theme file is never deleted");
+    assert!(app.theme_editor.is_some());
+    assert!(
+        app.status.starts_with("theme not reset: "),
+        "{}",
+        app.status
+    );
+}
+
+#[test]
+fn test_theme_editor_reset_reports_a_remaining_override() {
+    let scratch = ScratchThemes::new();
+    let mut app = make_app(&scratch);
+    // Two user files define `nord`; resetting deletes the one in use and
+    // the other still replaces the built-in theme.
+    let mut theme = (*app.themes.get("nord").expect("nord")).clone();
+    theme.accent = RED;
+    save_theme(&theme, &scratch.themes().join("a-nord.json")).expect("save");
+    save_theme(&theme, &scratch.themes().join("b-nord.json")).expect("save");
+    app.themes.load_dir(&scratch.themes());
+
+    app.open_theme_editor("nord");
+    app.reset_theme_to_default();
+    assert!(!scratch.themes().join("b-nord.json").exists());
+    assert!(
+        app.status.contains("still replaced by") && app.status.contains("a-nord.json"),
+        "{}",
+        app.status
+    );
+}
+
+#[tokio::test]
+async fn test_theme_editor_esc_with_unsaved_edits_asks_first() {
+    let scratch = ScratchThemes::new();
+    let mut app = make_app(&scratch);
+    app.open_theme_editor("nord");
+    app.set_theme_colour("accent", RED);
+    let esc = KeyInput {
+        key: Key::Esc,
+        mods: Modifiers::default(),
+    };
+    let _ = app.handle_key(esc).await;
+    let editor = app.theme_editor.as_ref().expect("first Esc keeps the edit");
+    assert_eq!(editor.draft.accent, RED);
+    assert!(app.status.contains("Esc again"), "{}", app.status);
+    let _ = app.handle_key(esc).await;
+    assert!(app.theme_editor.is_none(), "second Esc discards");
 }

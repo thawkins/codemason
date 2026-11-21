@@ -27,6 +27,7 @@ impl App {
             draft: (*theme).clone(),
             warnings: theme.contrast_failures(),
             builtin: self.themes.is_builtin(&theme.name),
+            discard_armed: false,
             original: theme,
         });
     }
@@ -40,12 +41,29 @@ impl App {
         };
         if editor.draft.set_colour(key, value) {
             editor.warnings = editor.draft.contrast_failures();
+            editor.discard_armed = false;
         }
     }
 
     /// Closes the theme editor, dropping the edit.
     pub fn cancel_theme_edit(&mut self) {
         self.theme_editor = None;
+    }
+
+    /// Serves Esc in the theme editor: closes it when nothing was edited;
+    /// with unsaved edits the first Esc only warns in the status line and the
+    /// next one discards them. (Esc also reaches the editor when the user
+    /// only meant to leave a hex field or close the colour picker.)
+    pub fn escape_theme_edit(&mut self) {
+        let Some(editor) = self.theme_editor.as_mut() else {
+            return;
+        };
+        if editor.draft == *editor.original || editor.discard_armed {
+            self.cancel_theme_edit();
+        } else {
+            editor.discard_armed = true;
+            self.status = "unsaved theme edits: press Esc again to discard them".to_string();
+        }
     }
 
     /// Saves the edited theme and closes the editor.
@@ -84,8 +102,12 @@ impl App {
     /// Resets the edited built-in theme to its default: deletes the file that
     /// replaces it, reloads the catalog and closes the editor.
     ///
-    /// Does nothing for a theme that is not built in. A file that cannot be
-    /// deleted leaves the editor open, and the status line says why.
+    /// Does nothing for a theme that is not built in. Only a file in the user
+    /// themes directory is deleted: a theme replaced from anywhere else (a
+    /// project's `.codemason/themes/`) is not reset, and the editor stays
+    /// open. A file that cannot be deleted leaves the editor open too, and
+    /// the status line says why. When another file still replaces the theme
+    /// after the reload, the status line names it.
     pub fn reset_theme_to_default(&mut self) {
         let Some(editor) = self.theme_editor.as_ref() else {
             return;
@@ -94,18 +116,40 @@ impl App {
             return;
         }
         let name = editor.name.clone();
-        if let Some(path) = self.themes.source(&name)
-            && let Err(err) = std::fs::remove_file(path)
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(theme = %name, error = %err, "failed to reset the theme");
-            self.status = format!("theme not reset: {err}");
-            return;
+        if let Some(path) = self.themes.source(&name).map(std::path::Path::to_path_buf) {
+            // Only the user's own copy is deleted: a project's theme file is
+            // part of the repository, not an edit to undo.
+            let in_user_dir = user_themes_dir().is_some_and(|dir| {
+                let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+                std::fs::canonicalize(&path)
+                    .unwrap_or_else(|_| path.clone())
+                    .starts_with(dir)
+            });
+            if !in_user_dir {
+                self.status = format!(
+                    "theme not reset: {name} comes from {}, outside your themes folder",
+                    path.display()
+                );
+                return;
+            }
+            if let Err(err) = std::fs::remove_file(&path)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(theme = %name, error = %err, "failed to reset the theme");
+                self.status = format!("theme not reset: {err}");
+                return;
+            }
         }
         let (themes, _, _) = Self::load_themes(&self.cwd_path);
         self.themes = themes;
         self.theme_editor = None;
-        self.status = format!("theme reset: {name}");
+        self.status = match self.themes.source(&name) {
+            Some(other) => format!(
+                "theme reset: {name}, but it is still replaced by {}",
+                other.display()
+            ),
+            None => format!("theme reset: {name}"),
+        };
     }
 
     /// The theme the window draws with: the theme being edited while the
