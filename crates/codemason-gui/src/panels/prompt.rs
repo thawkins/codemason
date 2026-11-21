@@ -810,6 +810,8 @@ fn attachments_row(ui: &mut egui::Ui, app: &mut App) {
             .response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, ATTACHMENTS_LABEL));
         });
+    // A gap between the thumbnails and the editor below them.
+    ui.add_space(crate::metrics::space::SM);
     if let Some(index) = removed {
         app.remove_pending_attachment(index);
     }

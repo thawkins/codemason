@@ -522,7 +522,12 @@ impl MessagesView {
             crate::dialogs::image_view::open(ctx, image);
         }
         if let Some((files, selected)) = self.pending_diff.take() {
+            // Shown in the overlay, not the Diff pane: the pane stays as it
+            // was (open or not) and shows the same files if it is open.
+            let pane_shown = app.diff_pane.shown;
             app.diff_pane.open(files, selected);
+            app.diff_pane.shown = pane_shown;
+            crate::dialogs::diff_view::open(ctx);
         }
     }
 
@@ -821,7 +826,7 @@ struct BlockStyle<'a> {
     /// How bold text is drawn.
     bold: Bold,
     /// Whether the message is the reply still streaming (it ends with a
-    /// caret, and its thinking blocks start open).
+    /// caret).
     streaming: bool,
     /// How thinking blocks are shown.
     thinking: ThinkingDisplay,
@@ -1324,26 +1329,49 @@ fn disclosure(
     open
 }
 
+/// The most lines a thought may have and still open by itself; a longer
+/// one stays closed until the user opens it.
+pub const THINKING_AUTO_OPEN_LINES: usize = 3;
+
+/// The count shown to the right of a thinking row, e.g. "12 lines".
+#[must_use]
+pub fn thinking_lines_label(count: usize) -> String {
+    if count == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{count} lines")
+    }
+}
+
 /// A thinking block, as [`ThinkingDisplay`] asks: hidden, in full, or under
-/// a "Thinking" row that is open while the reply streams.
+/// a "Thinking" row that shows the thought's line count. A thought of up to
+/// [`THINKING_AUTO_OPEN_LINES`] lines starts open; a longer one is always
+/// under a closed row, which only the user opens.
 fn thinking_ui(ui: &mut egui::Ui, id: egui::Id, lines: &[StyledLine], style: BlockStyle<'_>) {
     let full = |ui: &mut egui::Ui| {
         let job = styled_to_layout_job(lines, style.palette, ui.available_width(), style.bold);
         ui.add(egui::Label::new(job).wrap());
     };
+    let long = lines.len() > THINKING_AUTO_OPEN_LINES;
+    let row = |ui: &mut egui::Ui, default_open: bool| {
+        let count = thinking_lines_label(lines.len());
+        disclosure(
+            ui,
+            id,
+            THINKING_LABEL,
+            None,
+            style.palette,
+            default_open,
+            |ui| {
+                ui.label(egui::RichText::new(count).color(style.palette.muted));
+            },
+        )
+    };
     match style.thinking {
         ThinkingDisplay::Hidden => {}
-        ThinkingDisplay::Expanded => full(ui),
-        ThinkingDisplay::Collapsed => {
-            if disclosure(
-                ui,
-                id,
-                THINKING_LABEL,
-                None,
-                style.palette,
-                style.streaming,
-                |_| {},
-            ) {
+        ThinkingDisplay::Expanded if !long => full(ui),
+        ThinkingDisplay::Expanded | ThinkingDisplay::Collapsed => {
+            if row(ui, !long) {
                 full(ui);
             }
         }

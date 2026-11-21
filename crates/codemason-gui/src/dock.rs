@@ -411,6 +411,47 @@ pub fn default_layout() -> Layout<PaneId> {
     }
 }
 
+/// Size the split holding the prompt pane so the pane is `height` points
+/// tall, measured up from the split's bottom edge: the prompt grows and
+/// shrinks at its top only.
+///
+/// # Arguments
+///
+/// * `layout` - the layout to change.
+/// * `height` - the prompt pane's wanted height, in points.
+///
+/// # Returns
+///
+/// `true` when the split's size changed.
+pub fn fit_prompt(layout: &mut Layout<PaneId>, height: f32) -> bool {
+    fn fit(node: &mut Node<PaneId>, height: f32) -> bool {
+        let Node::Split {
+            axis,
+            size,
+            first,
+            second,
+        } = node
+        else {
+            return false;
+        };
+        let holds_prompt =
+            matches!(&**second, Node::Tabs { panels, .. } if panels == &[PaneId::Prompt]);
+        if *axis == SplitAxis::Vertical && holds_prompt {
+            let fitted = SplitSize::FixedSecond(height);
+            let same = matches!(size, SplitSize::FixedSecond(now) if (*now - height).abs() <= 0.5);
+            if !same {
+                *size = fitted;
+            }
+            return !same;
+        }
+        fit(first, height) || fit(second, height)
+    }
+    if !height.is_finite() || height <= 0.0 {
+        return false;
+    }
+    layout.root.as_mut().is_some_and(|root| fit(root, height))
+}
+
 /// Hide `pane` if it is in `layout`, otherwise show it again.
 ///
 /// Hiding records the pane's [`Location`] in `hidden` before closing it.

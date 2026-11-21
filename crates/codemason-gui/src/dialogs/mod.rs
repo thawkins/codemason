@@ -41,6 +41,7 @@ pub mod about;
 pub mod banner;
 pub mod confirm;
 pub mod context_menu;
+pub mod diff_view;
 pub mod image_view;
 pub mod lists;
 pub mod loop_setup;

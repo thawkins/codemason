@@ -875,3 +875,45 @@ fn test_prompt_row_height_is_not_inflated_by_the_collapse_button() {
     // not push it to a Material 40-point target.
     assert!(height < 30.0, "one-row prompt is {height} points tall");
 }
+
+#[test]
+fn test_prompt_field_grows_upwards_only() {
+    let (_rt, mut harness) = rig(|_| {});
+    harness.run();
+    let one_line = prompt(&harness).rect();
+    let field = codemason_gui::page::field_height(&harness.ctx).expect("field drawn");
+    // Padding and outline on both sides, plus the inline button's overhang.
+    let chrome = 2.0f32.mul_add(codemason_gui::page::FIELD_PADDING + 1.0, 8.0);
+    assert!(
+        field <= one_line.height() + chrome,
+        "the field hugs its one-line editor: field {field}, editor {one_line:?}"
+    );
+
+    focus_prompt(&mut harness);
+    prompt(&harness).type_text("one\ntwo\nthree\nfour");
+    harness.run();
+    let four_lines = prompt(&harness).rect();
+
+    assert!(
+        four_lines.top() < one_line.top() - 1.0,
+        "a taller text moves the top up: {one_line:?} -> {four_lines:?}"
+    );
+    assert!(
+        (four_lines.bottom() - one_line.bottom()).abs() <= 0.5,
+        "the bottom stays put: {one_line:?} -> {four_lines:?}"
+    );
+}
+
+#[test]
+fn test_prompt_leaves_a_gap_below_the_attachment_thumbnails() {
+    let (_rt, mut harness) = rig(|app| {
+        app.session.pending_attachments = vec![PathBuf::from("shots/screen.png")];
+    });
+    harness.run();
+    let strip = harness.get_by_label(ATTACHMENTS_LABEL).rect();
+    let editor = prompt(&harness).rect();
+    assert!(
+        editor.top() - strip.bottom() >= codemason_gui::metrics::space::SM,
+        "8pt between thumbnails and editor: strip {strip:?}, editor {editor:?}"
+    );
+}

@@ -2,9 +2,11 @@
 //! pane.
 //!
 //! [`inline_diff_ui`] draws a [`FileDiff`] in the transcript: the path with
-//! its added and removed counts and an [`OPEN_DIFF`] button, then the first
-//! hunk, and how many hunks follow. The button opens the Diff pane
-//! (`App::diff_pane`, [`diff_pane_ui`]) on that file.
+//! its added and removed counts, then its first [`INLINE_MAX_LINES`] lines.
+//! A longer diff ends in a banner saying how many lines are left and an
+//! [`OPEN_DIFF`] button, which shows the whole diff in an overlay
+//! ([`crate::dialogs::diff_view`]) drawn with the Diff pane's own view
+//! ([`diff_view_ui`]).
 //!
 //! The Diff pane shows one file at a time, unified or split (old on the
 //! left, new on the right). Its header is the file's path, its added and
@@ -44,7 +46,7 @@ use crate::material::icon_button::{DENSE_SIZE, IconButtonKind, icon_button_dense
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 
-/// The button that opens a transcript diff in the Diff pane.
+/// The button that opens a transcript diff in the diff overlay.
 pub const OPEN_DIFF: &str = "Open diff";
 
 /// Accessible label of the Diff pane's content.
@@ -81,7 +83,13 @@ pub const OLD_COLUMN: &str = "Old";
 pub const NEW_COLUMN: &str = "New";
 
 /// Most lines of the first hunk an inline diff shows.
-const INLINE_MAX_LINES: usize = 40;
+pub const INLINE_MAX_LINES: usize = 10;
+
+/// The banner under an inline diff cut short at [`INLINE_MAX_LINES`].
+#[must_use]
+pub fn more_lines_label(count: usize) -> String {
+    format!("{count} more lines...")
+}
 
 /// The id that holds the keyboard focus while the Diff pane does.
 #[must_use]
@@ -253,20 +261,14 @@ fn line_ui(ui: &mut egui::Ui, line: &DiffLine, palette: &Palette, numbers: (bool
 }
 
 /// A hunk, unified: its header, then every line.
-fn unified_hunk_ui(ui: &mut egui::Ui, hunk: &DiffHunk, palette: &Palette, max_lines: usize) {
+fn unified_hunk_ui(ui: &mut egui::Ui, hunk: &DiffHunk, palette: &Palette) {
     ui.label(
         RichText::new(&hunk.header)
             .monospace()
             .color(palette.diff_line_number),
     );
-    for line in hunk.lines.iter().take(max_lines) {
+    for line in &hunk.lines {
         line_ui(ui, line, palette, (true, true));
-    }
-    if hunk.lines.len() > max_lines {
-        ui.label(
-            RichText::new(format!("... {} more lines", hunk.lines.len() - max_lines))
-                .color(palette.subtle),
-        );
     }
 }
 
@@ -339,6 +341,7 @@ fn split_hunk_ui(ui: &mut egui::Ui, hunk: &DiffHunk, palette: &Palette) {
 /// Whether [`OPEN_DIFF`] was clicked.
 pub fn inline_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) -> bool {
     let mut open = false;
+    let total: usize = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum();
     egui::Frame::NONE
         .fill(palette.raised1)
         .stroke(egui::Stroke::new(1.0, palette.border))
@@ -349,26 +352,37 @@ pub fn inline_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) -> 
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&diff.path).monospace().color(palette.text));
                 counts(ui, diff, palette);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            });
+            // A solid bar takes its own row under the lines; egui's default
+            // floating bar is drawn over the last line of a wide diff.
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            egui::ScrollArea::horizontal()
+                .id_salt(("inline_diff", &diff.path))
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    // The hunks in order, until the line budget is spent.
+                    let mut left = INLINE_MAX_LINES;
+                    for hunk in &diff.hunks {
+                        if left == 0 {
+                            break;
+                        }
+                        ui.label(
+                            RichText::new(&hunk.header)
+                                .monospace()
+                                .color(palette.diff_line_number),
+                        );
+                        for line in hunk.lines.iter().take(left) {
+                            line_ui(ui, line, palette, (true, true));
+                        }
+                        left = left.saturating_sub(hunk.lines.len());
+                    }
+                });
+            let more = total.saturating_sub(INLINE_MAX_LINES);
+            if more > 0 {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(more_lines_label(more)).color(palette.subtle));
                     open = ui.add(button(OPEN_DIFF)).clicked();
                 });
-            });
-            if let Some(hunk) = diff.hunks.first() {
-                egui::ScrollArea::horizontal()
-                    .id_salt(("inline_diff", &diff.path))
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        unified_hunk_ui(ui, hunk, palette, INLINE_MAX_LINES)
-                    });
-            }
-            let more = diff.hunks.len().saturating_sub(1);
-            if more > 0 {
-                let text = if more == 1 {
-                    "1 more hunk".to_string()
-                } else {
-                    format!("{more} more hunks")
-                };
-                ui.label(RichText::new(text).color(palette.subtle));
             }
         });
     open
@@ -389,7 +403,7 @@ pub fn full_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) {
                 counts(ui, diff, palette);
             });
             for hunk in &diff.hunks {
-                unified_hunk_ui(ui, hunk, palette, usize::MAX);
+                unified_hunk_ui(ui, hunk, palette);
             }
             if diff.truncated {
                 ui.label(RichText::new(TRUNCATED_NOTE).color(palette.warning));
@@ -417,11 +431,13 @@ fn pane_key_action(key: egui::Key) -> Option<PaneAction> {
     })
 }
 
-/// Apply the Diff pane's keys while it holds the keyboard focus: they are
+/// Apply the Diff pane's keys while it holds the keyboard focus, or while
+/// the diff overlay is open: they are
 /// taken out of this frame's input, so they neither type nor reach the
 /// App. Call before the keys are routed.
 pub fn take_pane_keys(ctx: &egui::Context, app: &mut App) {
-    if !app.diff_pane.shown || !ctx.memory(|m| m.has_focus(pane_focus_id())) {
+    let pane_focused = app.diff_pane.shown && ctx.memory(|m| m.has_focus(pane_focus_id()));
+    if !pane_focused && !crate::dialogs::diff_view::is_open(ctx) {
         return;
     }
     let mut actions = Vec::new();
@@ -474,7 +490,25 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         ui.data_mut(|d| d.insert_temp(claim, true));
     }
     focus.widget_info(|| WidgetInfo::labeled(Role::Pane, true, DIFF_PANE_LABEL));
-    let pane = &mut app.diff_pane;
+    if diff_view_ui(ui, &mut app.diff_pane, palette) {
+        app.diff_pane.shown = false;
+    }
+}
+
+/// The diff view the Diff pane and the diff overlay share: the file's path
+/// with its counts and a [`CLOSE_DIFF`] button at the top right, the row of
+/// step and layout buttons, then the hunks.
+///
+/// # Arguments
+///
+/// * `ui` - where to draw.
+/// * `pane` - the files shown and where the reader is in them.
+/// * `palette` - the colours.
+///
+/// # Returns
+///
+/// Whether [`CLOSE_DIFF`] was clicked.
+pub fn diff_view_ui(ui: &mut egui::Ui, pane: &mut DiffPaneState, palette: &Palette) -> bool {
     let hunks = pane.current().map_or(0, |file| file.hunks.len());
     // Laid out from the right first: the close button and the counts take
     // their width, and the path is what gives way. Hiding the pane is the
@@ -522,8 +556,7 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         },
     );
     if closed {
-        pane.shown = false;
-        return;
+        return true;
     }
     let Some(file) = pane.files.get(pane.selected).cloned() else {
         // On a line of its own, where it wraps to the pane's width: beside
@@ -534,7 +567,7 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                 .size(text_size::SMALL)
                 .color(palette.muted),
         );
-        return;
+        return false;
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = space::XS;
@@ -599,7 +632,7 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     });
     if pane.is_reviewed(&file) {
         ui.label(RichText::new(REVIEWED_NOTE).color(palette.muted));
-        return;
+        return false;
     }
     if file.truncated {
         ui.label(RichText::new(TRUNCATED_NOTE).color(palette.warning));
@@ -608,7 +641,8 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     let layout = pane.layout;
     // Scroll to the hunk only when it changes, so the reader can scroll.
     let at = (pane.selected, hunk_index);
-    let last_id = Id::unique("codemason_diff_pane_shown_hunk");
+    // Per view: the Diff pane and the overlay each scroll to the hunk.
+    let last_id = ui.scope_id().with("codemason_diff_shown_hunk");
     let moved = ui.data(|d| d.get_temp::<(usize, usize)>(last_id)) != Some(at);
     ui.data_mut(|d| d.insert_temp(last_id, at));
     egui::ScrollArea::both()
@@ -618,7 +652,7 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
             for (index, hunk) in file.hunks.iter().enumerate() {
                 let response = ui
                     .scope(|ui| match layout {
-                        DiffLayout::Unified => unified_hunk_ui(ui, hunk, palette, usize::MAX),
+                        DiffLayout::Unified => unified_hunk_ui(ui, hunk, palette),
                         DiffLayout::Split => split_hunk_ui(ui, hunk, palette),
                     })
                     .response;
@@ -632,4 +666,5 @@ pub fn diff_pane_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                 ui.add_space(space::SM);
             }
         });
+    false
 }
