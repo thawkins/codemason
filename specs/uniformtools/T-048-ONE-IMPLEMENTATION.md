@@ -167,9 +167,17 @@ not claim to prove it.
 - **`--self-test` still writes into the checkout.** It has to: it is the guard's
   own contract, and a self-test of a private copy would prove the copy. That one
   case is why the module keeps its nextest process group.
-- **The cost case is a 10 s budget, not a measurement.** The measured run is
-  about 2.2 s warm on the full tree; the budget leaves room for a loaded CI
-  runner while still failing a change that makes the guard walk the repository.
+- **The cost case is a 10 s budget on the guard's own CPU time, not wall clock.**
+  `scripts/check_tool_rename.py --json` reports `cpu_seconds`
+  (`time.process_time()` around the scan), and the case asserts that value is
+  above zero and below ten. It originally timed the subprocess from the test, and
+  that failed once the workspace grew: a scan costing ~2.8 s of CPU measures
+  ~11.6 s of wall clock while eight siblings saturate the machine, so the case
+  failed for the runner's load rather than for the guard's cost. CPU time is what
+  NFR-009's clause is about - a guard that grew into walking the repository
+  spends more of it - and it does not move when sibling test processes compete.
+  Verified both ways: 6.4 s under the guard's own group, and 11.9 s wall clock
+  beside eight spinning cores still passes.
 - **`tools.xlsx` absence is proven by a copy that lacks it, not by a chroot.**
   The import check is the second half: the module cannot open a workbook at all.
   The forbidden-spelling list in that case names the open-symbol in halves

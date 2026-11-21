@@ -143,6 +143,14 @@ struct GuardReport {
 
     /// The line a clean run prints.
     success: String,
+
+    /// The CPU time the guard's scan spent, in seconds, as it measured itself.
+    ///
+    /// Reported by the guard rather than timed by this file: `cpu_seconds` is
+    /// `time.process_time()`, which counts only work this process did, so the
+    /// cost clause is measured against the guard's own cost and not against how
+    /// busy the machine was (see `test_the_guard_finishes_in_a_few_seconds`).
+    cpu_seconds: f64,
 }
 
 /// One predicate hit from the JSON report.
@@ -388,6 +396,9 @@ fn parse_report(text: &str) -> GuardReport {
         root,
         hits,
         success,
+        cpu_seconds: field(&top, "cpu_seconds")
+            .and_then(|value| value.trim_end_matches(',').parse().ok())
+            .unwrap_or(0.0),
     }
 }
 
@@ -656,21 +667,35 @@ fn test_the_script_form_and_the_test_form_report_the_same_thing() {
 /// NFR-009's cost clause: "a few seconds so it can run on every `cargo test` and
 /// in the CI guard set without a timeout exception".
 ///
-/// Pinned rather than assumed, and pinned against a wall-clock budget generous
-/// enough for a loaded CI runner: the measured full-tree run is about two
-/// seconds, so ten leaves room for a slow machine while still failing a change
-/// that turns the guard into something that walks the whole repository.
+/// The budget is asserted against the **CPU time the guard reports for its own
+/// scan** (`cpu_seconds`, `time.process_time()` inside
+/// `scripts/check_tool_rename.py`), not against wall clock measured here. Wall
+/// clock was the wrong instrument: this workspace runs ~16k tests across every
+/// core, so a scan that costs ~2.8 s of CPU measures ~11.6 s of wall clock when
+/// eight of them are busy and the case fails for the machine's load rather than
+/// for the guard's cost. CPU time is what the clause is about - a guard that
+/// grew into something walking the whole repository spends more of it - and it
+/// is unaffected by how many sibling test processes are competing.
+///
+/// Pinned generously against a measured run: the full tree with the scratch copy
+/// costs about 3 s of CPU, so ten still fails a change that turns the guard into
+/// something that walks the whole repository while leaving room for a slower
+/// machine.
 #[test]
 fn test_the_guard_finishes_in_a_few_seconds() {
     let _guard = guard_lock();
     let tree = ScratchTree::new("t048_cost");
-    let start = std::time::Instant::now();
-    let (code, out) = tree.check();
-    let elapsed = start.elapsed();
-    assert_eq!(code, 0, "the scratch copy must be clean: {out}");
+    let (code, report) = tree.report();
+    assert_eq!(code, 0, "the scratch copy must be clean: {report:?}");
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
-        "the guard must finish in a few seconds (NFR-009); it took {elapsed:?}"
+        report.cpu_seconds > 0.0,
+        "the guard must report the CPU time its scan spent (0.0 means it did \
+         not measure, so the cost clause is unassertable): {report:?}"
+    );
+    assert!(
+        report.cpu_seconds < 10.0,
+        "the guard must finish in a few seconds (NFR-009); it spent {} s of CPU",
+        report.cpu_seconds
     );
 }
 

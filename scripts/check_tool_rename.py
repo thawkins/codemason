@@ -171,6 +171,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 from typing import Callable, NamedTuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -2127,8 +2128,9 @@ def report(root: pathlib.Path = ROOT) -> dict[str, object]:
     Returns:
         A mapping with ``ok`` (the exit verdict), ``error`` (a table-read failure
         message, else ``None``), ``root``, ``hits`` (one entry per violation),
-        ``problems`` (one entry per exemption problem) and ``success`` (the line a
-        clean run prints, so the test can compare the wording too).
+        ``problems`` (one entry per exemption problem), ``success`` (the line a
+        clean run prints, so the test can compare the wording too) and
+        ``cpu_seconds`` (the CPU time :func:`check` spent in this process).
     """
     result: dict[str, object] = {
         "ok": False,
@@ -2137,12 +2139,16 @@ def report(root: pathlib.Path = ROOT) -> dict[str, object]:
         "hits": [],
         "problems": [],
         "success": success_line(),
+        "cpu_seconds": 0.0,
     }
+    started = time.process_time()
     try:
         violations, problems = check(root)
     except TableError as exc:
         result["error"] = str(exc)
+        result["cpu_seconds"] = round(time.process_time() - started, 3)
         return result
+    result["cpu_seconds"] = round(time.process_time() - started, 3)
 
     result["hits"] = [
         {
