@@ -21,6 +21,7 @@ use crate::provider::thinking::{full_reasoning_levels, openrouter_reasoning_payl
 use crate::provider::wire::trace;
 use crate::{ModelInfo, Provider};
 use codemason_config::{Capabilities, Cost};
+use codemason_types::provider_auth::ProviderAuthSource;
 
 const DEFAULT_OPENROUTER_HOST: &str = "https://openrouter.ai";
 
@@ -29,7 +30,7 @@ pub struct OpenRouterProvider {
     base_url: String,
     /// Storage handle used to resolve database-backed API keys (FR-004b).
     /// Attached by the binary/TUI after storage is created.
-    storage: RwLock<Option<std::sync::Arc<codemason_storage::Storage>>>,
+    storage: RwLock<Option<std::sync::Arc<dyn ProviderAuthSource>>>,
 }
 
 impl OpenRouterProvider {
@@ -54,9 +55,9 @@ impl OpenRouterProvider {
     ///
     /// Called once after storage is initialized, mirroring
     /// [`crate::provider::router::RouterProvider::set_storage`].
-    pub fn set_storage(&self, storage: std::sync::Arc<codemason_storage::Storage>) {
+    pub fn set_storage<S: ProviderAuthSource + 'static>(&self, storage: std::sync::Arc<S>) {
         if let Ok(mut guard) = self.storage.write() {
-            *guard = Some(storage);
+            *guard = Some(storage as std::sync::Arc<dyn ProviderAuthSource>);
         }
     }
 
