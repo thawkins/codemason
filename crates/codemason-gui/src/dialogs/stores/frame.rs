@@ -16,7 +16,7 @@
 //! Dependencies: `egui` and this crate's `material` components and palette.
 
 use egui::{
-    Align, Align2, CornerRadius, Label, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke,
+    Align, CornerRadius, Label, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke,
     StrokeKind, UiBuilder, Vec2, WidgetInfo,
 };
 
@@ -31,10 +31,10 @@ use crate::material::badge::{BadgeTone, badge};
 use crate::material::button::{ButtonKind, button};
 use crate::material::feedback::{linear_progress, plain_tooltip};
 use crate::material::icon_button::{IconButtonKind, icon_button, icon_button_dense};
+use crate::material::list::{AvatarItem, avatar_list_item};
 use crate::material::segmented::segmented_buttons;
 use crate::material::sheet::drawer_item_with_count;
 use crate::material::text_field::outlined_value;
-use crate::material::{label_large, paint_state_layer};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::{Palette, rgb};
 use codemason_plugins::StoreKind;
@@ -52,7 +52,7 @@ pub const RAIL_WIDTH: f32 = 180.0;
 pub const DETAILS_WIDTH: f32 = 300.0;
 
 /// Height of a result row, in points.
-pub const ROW_HEIGHT: f32 = 64.0;
+pub const ROW_HEIGHT: f32 = crate::material::list::AVATAR_ITEM_HEIGHT;
 
 /// The most tag chips a result row shows.
 pub const MAX_ROW_TAGS: usize = 3;
@@ -71,16 +71,6 @@ const GAP: f32 = space::SM;
 
 /// Room the gaps between the three bars (or columns) take, in points.
 const TWO_GAPS: f32 = 2.0 * GAP;
-
-/// Diameter of a row's letter avatar, in points.
-const AVATAR: f32 = 40.0;
-
-/// Where a row's text starts, from its left edge: past the avatar and its
-/// padding, in points.
-const TEXT_INSET: f32 = space::LG + AVATAR + space::LG;
-
-/// Width of the selected row's leading accent bar, in points.
-const ACCENT_WIDTH: f32 = 3.0;
 
 /// Width of the focused pane's outline, in points.
 const FOCUS_STROKE: f32 = 2.0;
@@ -498,8 +488,9 @@ fn rows(
     click
 }
 
-/// One result row: avatar, name, subtitle and Installed badge, the
-/// description on one line, the dialog's extras, and the trailing button.
+/// One result row: a material avatar list item with the Installed badge and
+/// the dialog's extras on its meta line, and Install (or a disabled
+/// Installed) in its trailing slot.
 ///
 /// # Returns
 ///
@@ -512,11 +503,41 @@ fn result_row(
     index: usize,
     selected: bool,
 ) -> (Option<Click>, Rect) {
-    let m3 = &palette.m3;
-    let size = Vec2::new(ui.available_width(), ROW_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(Role::ListItem, true, selected, &row.name));
-    let mut click = if response.double_clicked() {
+    let item = AvatarItem {
+        headline: &row.name,
+        subtitle: &row.subtitle,
+        supporting: &row.description,
+        selected,
+    };
+    let (response, pressed) = avatar_list_item(
+        ui,
+        palette,
+        &item,
+        |ui| {
+            if row.installed {
+                badge(ui, palette, BadgeTone::Success, INSTALLED);
+            }
+            (look.row_extras)(ui, palette, row);
+        },
+        |ui| {
+            if row.installed {
+                ui.add_enabled_ui(false, |ui| {
+                    button(ui, palette, ButtonKind::Outlined, None, INSTALLED)
+                });
+                false
+            } else {
+                let kind = if selected {
+                    ButtonKind::Filled
+                } else {
+                    ButtonKind::Tonal
+                };
+                button(ui, palette, kind, None, INSTALL).clicked()
+            }
+        },
+    );
+    let click = if pressed {
+        Some(Click::RowInstall(index))
+    } else if response.double_clicked() {
         Some(Click::Result {
             index,
             install: true,
@@ -529,93 +550,7 @@ fn result_row(
     } else {
         None
     };
-    if !ui.is_rect_visible(rect) {
-        return (click, rect);
-    }
-    if selected {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::ZERO, rgb(m3.surface_container_highest));
-        let accent = Rect::from_min_size(rect.min, Vec2::new(ACCENT_WIDTH, ROW_HEIGHT));
-        ui.painter()
-            .rect_filled(accent, CornerRadius::ZERO, rgb(m3.primary));
-    }
-    paint_state_layer(ui, &response, CornerRadius::ZERO, rgb(m3.on_surface));
-    let centre = egui::pos2(rect.left() + space::LG + AVATAR / 2.0, rect.center().y);
-    ui.painter()
-        .circle_filled(centre, AVATAR / 2.0, rgb(m3.secondary_container));
-    let letter: String = row
-        .name
-        .chars()
-        .take(1)
-        .flat_map(char::to_uppercase)
-        .collect();
-    ui.painter().text(
-        centre,
-        Align2::CENTER_CENTER,
-        letter,
-        label_large(ui.ctx()),
-        rgb(m3.on_secondary_container),
-    );
-
-    let trailing_rect = Rect::from_min_max(
-        egui::pos2(rect.center().x, rect.top()),
-        egui::pos2(rect.right() - space::LG, rect.bottom()),
-    );
-    let mut trailing = ui.new_child(
-        UiBuilder::new()
-            .max_rect(trailing_rect)
-            .layout(Layout::right_to_left(Align::Center)),
-    );
-    if row.installed {
-        trailing.add_enabled_ui(false, |ui| {
-            button(ui, palette, ButtonKind::Outlined, None, INSTALLED)
-        });
-    } else {
-        let kind = if selected {
-            ButtonKind::Filled
-        } else {
-            ButtonKind::Tonal
-        };
-        if button(&mut trailing, palette, kind, None, INSTALL).clicked() {
-            click = Some(Click::RowInstall(index));
-        }
-    }
-    let button_left = trailing.min_rect().left();
-
-    let text_rect = Rect::from_min_max(
-        egui::pos2(rect.left() + TEXT_INSET, rect.top() + space::XS),
-        egui::pos2(
-            (button_left - space::MD).max(rect.left() + TEXT_INSET),
-            rect.bottom() - space::XS,
-        ),
-    );
-    let mut text = ui.new_child(
-        UiBuilder::new()
-            .max_rect(text_rect)
-            .layout(Layout::top_down(Align::Min)),
-    );
-    text.set_clip_rect(text_rect.intersect(ui.clip_rect()));
-    text.style_mut().interaction.selectable_labels = false;
-    text.spacing_mut().item_spacing = Vec2::new(space::SM, 2.0);
-    text.horizontal(|ui| {
-        ui.label(RichText::new(&row.name).strong().color(rgb(m3.on_surface)));
-        if row.installed {
-            badge(ui, palette, BadgeTone::Success, INSTALLED);
-        }
-        ui.add(
-            Label::new(
-                RichText::new(&row.subtitle)
-                    .size(text_size::SMALL)
-                    .color(rgb(m3.on_surface_variant)),
-            )
-            .truncate(),
-        );
-    });
-    text.add(
-        Label::new(RichText::new(&row.description).color(rgb(m3.on_surface_variant))).truncate(),
-    );
-    text.horizontal(|ui| (look.row_extras)(ui, palette, row));
-    (click, rect)
+    (click, response.rect)
 }
 
 /// The details pane: the highlighted entry in full and Install.

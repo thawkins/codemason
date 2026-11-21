@@ -126,6 +126,8 @@ mod test_main_thread;
 mod test_markdown;
 #[path = "test_markdown_table_border.rs"]
 mod test_markdown_table_border;
+#[path = "test_material_avatar_item.rs"]
+mod test_material_avatar_item;
 #[path = "test_material_badge.rs"]
 mod test_material_badge;
 #[path = "test_material_button.rs"]

@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use codemason_app_core::app::{App, PluginStoreBrowser, StorePane};
 use codemason_app_core::input_event::{Key, KeyInput};
+use codemason_gui::dialogs::stores::frame::dialog_size;
 use codemason_gui::dialogs::stores::snapshot::StoreSnapshot;
 use codemason_gui::dialogs::stores::{
     CATEGORIES_LABEL, DETAILS_LABEL, INSTALL, PLUGIN_STORE_TITLE, REFRESH, RESULTS_LABEL, RETRY,
@@ -182,6 +183,26 @@ fn test_store_dialog_small_window_clamps() {
         window.contains_rect(dialog),
         "dialog {dialog:?} in {small:?}"
     );
+    // The size rule asks for the whole window; the dialog keeps the usual
+    // margin inside it (80 pt: its padding and a gap).
+    assert!((dialog.width() - 720.0).abs() < 1.0, "dialog {dialog:?}");
+    assert!((dialog.height() - 420.0).abs() < 1.0, "dialog {dialog:?}");
+}
+
+#[test]
+fn test_store_dialog_size_rule() {
+    assert_eq!(
+        dialog_size(egui::vec2(800.0, 500.0)),
+        egui::vec2(800.0, 500.0)
+    );
+    assert_eq!(
+        dialog_size(egui::vec2(1000.0, 700.0)),
+        egui::vec2(960.0, 600.0)
+    );
+    assert_eq!(
+        dialog_size(egui::vec2(2000.0, 1000.0)),
+        egui::vec2(1700.0, 850.0)
+    );
 }
 
 #[test]
@@ -209,6 +230,15 @@ fn test_store_dialog_details_show_homepage_and_source() {
     let harness = rig(WIDE, app_with(&rt, three()));
     harness.get_by_role_and_label(Role::Button, "https://example.org/alpha/home");
     harness.get_by_label("https://example.org/alpha.zip");
+    // The highlighted row is the selected list item for screen readers.
+    let selected = |name: &str| {
+        harness
+            .get_by_role_and_label(Role::ListItem, name)
+            .accesskit_node()
+            .is_selected()
+    };
+    assert_eq!(selected("alpha"), Some(true));
+    assert_ne!(selected("bravo"), Some(true));
 }
 
 #[test]
