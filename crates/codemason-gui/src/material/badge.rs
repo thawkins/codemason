@@ -90,7 +90,7 @@ pub fn badge(ui: &mut egui::Ui, palette: &Palette, tone: BadgeTone, label: &str)
         egui::FontId::proportional(text_size::SMALL)
     };
     let text = text_galley(ui, label, font, content);
-    let size = Vec2::new(text.size().x + 2.0 * PADDING, HEIGHT);
+    let size = Vec2::new(PADDING.mul_add(2.0, text.size().x), HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, ui.is_enabled(), label));
     if ui.is_rect_visible(rect) {
