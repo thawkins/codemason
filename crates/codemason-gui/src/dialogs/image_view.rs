@@ -64,7 +64,7 @@ impl ImageRef {
     #[must_use]
     pub fn file(path: &std::path::Path) -> Self {
         Self {
-            uri: format!("file://{}", path.display()),
+            uri: crate::image_load::file_uri(path),
             name: path
                 .file_name()
                 .and_then(|n| n.to_str())

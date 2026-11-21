@@ -159,7 +159,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   cycling, streaming chat with markdown and syntax highlighting, step-numbered
   tool calls with pretty-printed JSON in the log pane, a live permission
   countdown timer (120-second timeout with EXPIRED state), native file dialogs
-  for attaching images and opening projects, and a message input queue (`Alt+Q`
+  for attaching images and opening projects (an image staged for the next
+  message shows as a removable thumbnail above the editor, its close mark drops
+  just that image and leaves the file on disk, and double-clicking the
+  thumbnail opens it at full size in the same viewer the transcript uses), and a
+  message input queue (`Alt+Q`
   menu / `/queue`) that keeps the prompt editable while the agent executes; side
   panes for memory (`Alt+M` | `Cmd+Shift+M`), the log, the profiler, tasks
   (`Alt+I` | `Cmd+Shift+I`), the context panel (`Alt+C`, what the next request

@@ -6,9 +6,68 @@
 
 - Added: resting the pointer on a session row with requests opens a list beside it: each request's title, state, `owner/repo #N` and, for GitHub, `+added -removed`, newest first; click one to open it in the browser. An eye marks the request Auto-fix is watching.
 - Added: the PR/MR history stores each GitHub request's diff size (schema 14, `additions`/`deletions` on `session_request_history`). The history refresh reads it with the state of open requests, and once for any other request without one; GitLab reports no line counts. A refresh that changes a row now reloads the sidebar.
+- Added: images staged for the next message are drawn as **removable thumbnails**
+  above the prompt (`material::thumbnail`, `panels::prompt::attachments_row`).
+  Each is a 64-point picture in a Material outline frame with a filled
+  `Icon::Cross` close mark (a 32-point hit target, `Remove image`) over its
+  top-right corner; the mark drops that one entry from
+  `SessionView::pending_attachments` (`App::remove_pending_attachment`) and
+  leaves the file itself alone, because an attachment is usually the user's own
+  image. A **double click** on a loaded picture opens it at full size in the same
+  viewer a transcript image opens (`dialogs::image_view`, so Close, Actual size
+  and Fit to window behave identically), and the attachment stays staged.
+  An index past the end of the list removes nothing and is not an error, since a
+  click can outrun the list by a frame. The strip is one horizontally scrolling
+  row, so many attachments stay above the prompt instead of pushing the editor
+  off the pane. The picture senses a click without taking focus
+  (`Sense::CLICK`, not `Sense::click()`), so `Tab` never lands on a thumbnail and
+  the prompt keeps the keyboard. An image the window cannot decode is drawn as
+  its file name inside the same frame, so a broken attachment can still be seen
+  and removed; having no picture, it reports no double click. Previously the row
+  listed the raw file names as plain text with no way to remove one.
 
 ### Fixed
 
+- Fixed: an image whose decode had only started was drawn as a broken one. Both
+  the attachment thumbnail (`material::thumbnail`) and the transcript's images
+  (`panels::messages`) counted an image loadable as soon as a loader accepted
+  the URI, which `egui_extras` also reports for bytes still on their way
+  (`ImagePoll::Pending`). Building an `egui::Image` from one makes egui paint its
+  own failed-image mark once the decode then errors, and this window's fonts
+  cannot draw that mark at all. Both now share `image_load::picture_state`, whose
+  tri-state `Ready`/`Pending`/`Unavailable` is drawn as a picture, a placeholder
+  or its file name; only a `Ready` picture senses a click, so a thumbnail still
+  loading opens no empty viewer, and a transcript image still in flight is drawn
+  next frame instead of being labelled `(cannot be shown)`. The attachment strip
+  also culls before loading, so a thumbnail scrolled out of sight starts no
+  decode and stats no file, and a thumbnail's documented hover text is now
+  actually set (`on_hover_text`, which needs no sense of its own).
+- Fixed: image files were read from a `file://` URI the loader could not resolve
+  on Windows. `format!("file://{}", path.display())` leaves the text after the
+  scheme beginning with a drive letter, which `egui_extras` reads as a UNC
+  *host*, so `C:\shots\screen.png` became `\\C:\shots\screen.png` and the file was
+  never found. One `image_load::file_uri` now writes the third slash a URI puts
+  after an empty authority (`file:///C:/shots/screen.png`) and leaves a plain
+  absolute path as it stands, with `image_load::uri_path` as its inverse and
+  `image_load::file_uri_dir` for the prefix a relative markdown image is
+  appended to; every site goes through them (`dialogs::image_view`,
+  `panels::prompt`, `panels::messages`, `material::thumbnail`, and the markdown
+  viewer's implicit scheme), and none encodes the path, so a file named
+  `My%20Doc.png` still resolves. The tests that load through the loader read
+  their URIs from `file_uri` too, so they exercise the form the widgets build
+  rather than a hand-written `file://C:\...` the loader reads as a host.
+- Fixed: a UNC image path (`\\server\share\shots\screen.png`, including the
+  `\\?\C:\...` extended-length form) was likewise written as
+  `file://\\server\share\...`, which the loader prefixes to four backslashes and
+  never finds. `image_load::file_uri` now puts the share where a URI's authority
+  goes (`file://server\share\shots\screen.png`), which is the form the loader
+  turns back into the share path, and `image_load::uri_path` rebuilds the two
+  backslashes from that host, so a UNC path round-trips as a UNC path. Both
+  branches are gated on Windows, the one platform where the loader applies that
+  rule, so elsewhere a URI's text stays the path it names and the pair remain
+  exact inverses there too. A relative path still has no authority to put
+  there, so it keeps the scheme's two slashes and both `file_uri` and `uri_path`
+  read it as a host: resolve a path before it becomes a URI.
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
 
 ## [1.0.173] - 2026-11-21

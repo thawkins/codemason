@@ -341,7 +341,7 @@ impl Shell {
         self
     }
 
-    /// Drive `native` (the macOS menu bar from [`menu::install`]) each
+    /// Drive `native` (the macOS menu bar from `menu::install`) each
     /// frame: its clicks run their App action, its key equivalents reach the
     /// key router as key presses, and its built-in Quit takes the close path.
     ///

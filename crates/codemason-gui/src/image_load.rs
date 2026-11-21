@@ -11,11 +11,15 @@
 //! - [`refresh_if_changed`] forgets a `file://` image whose file changed
 //!   (or appeared) since it was loaded, so a regenerated `chart.png` shows
 //!   the new chart instead of the cached one.
+//! - [`file_uri`] builds the `file://` URI of a path in the one form the
+//!   loader reads back unambiguously on every platform, [`file_uri_dir`]
+//!   does so for a directory a relative path is appended to, and
+//!   [`uri_path`] reverses it.
 //!
 //! Dependencies: `egui`, and `resvg`'s `usvg` (the version egui_extras
 //! already uses) to read an SVG's size.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use egui::Id;
@@ -23,6 +27,121 @@ use egui::load::{BytesPoll, SizeHint};
 
 /// The largest side, in pixels, an SVG is rasterised to.
 pub const MAX_DECODE_SIDE: u32 = 4096;
+
+/// Whether `text` is a Windows drive path (`C:\shots\screen.png`).
+///
+/// Byte comparison rather than `char`s: a drive letter is ASCII, and the
+/// separator is the third byte either way it is written.
+fn is_drive_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+/// The `file://` URI of the image file at `path`.
+///
+/// egui_extras' file loader reads a `file://` URI back as a path with only
+/// minimal translation: text after the scheme that begins with `/` is that
+/// path with the one slash dropped, and text that does not is taken for a UNC
+/// *host* with two backslashes put in front of it. `format!("file://{}",
+/// path.display())` therefore turns `C:\shots\screen.png` into
+/// `\\C:\shots\screen.png` and never finds the file. The forms a path can take
+/// are written the way the URI syntax and that rule pair up:
+///
+/// - a drive path takes the third slash of an empty authority
+///   (`file:///C:/shots/screen.png`), which the loader drops again;
+/// - a UNC path puts its host where an authority goes
+///   (`\\server\share\screen.png` becomes `file://server\share\screen.png`),
+///   which the loader turns back into the share path by putting the two
+///   backslashes in front of the host itself. Only Windows rebuilds a host, so
+///   that reading is Windows-only and the move is too: elsewhere the path is
+///   written as it stands and [`uri_path`] reads it back unchanged;
+/// - a plain absolute path already begins with the separator
+///   (`file:///home/me/shot.png`), so it is written as it stands.
+///
+/// A relative path has no authority to put after the scheme, so it keeps the
+/// scheme's two slashes: resolve a path before it becomes a URI rather than
+/// relying on the working directory.
+///
+/// The path is not percent-encoded, matching the loader's own fallback: it
+/// tries the raw path before the decoded one, so a file literally named
+/// `My%20Doc.png` still resolves.
+#[must_use]
+pub fn file_uri(path: &Path) -> String {
+    let text = path.display().to_string();
+    if is_drive_path(&text) {
+        format!("file:///{text}")
+    } else if is_unc_path(&text) && cfg!(windows) {
+        // The host follows the scheme: the loader writes the two backslashes
+        // back in front of it, so `\\server\share` round-trips. The two are
+        // removed by their byte count, which is why the check is a byte one.
+        // Gated on Windows to match `uri_path`, which rebuilds a host only
+        // where the loader does: elsewhere the share has no authority to move
+        // into, so the path is left as it stands and reads back unchanged.
+        format!("file://{}", &text[2..])
+    } else {
+        format!("file://{text}")
+    }
+}
+
+/// Whether `text` is a Windows UNC path (`\\server\share\screen.png`, and the
+/// `\\?\C:\...` / `\\?\UNC\server\...` extended-length forms).
+///
+/// Two leading backslashes with the rest of a path after them. One backslash
+/// begins an ordinary relative path, and a slash-led path is already written as
+/// the URI's own absolute form, so neither names a host.
+fn is_unc_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() > 2 && bytes[0] == b'\\' && bytes[1] == b'\\'
+}
+
+/// The `file://` URI prefix a path relative to `dir` is appended to: `dir`'s
+/// own [`file_uri`], ending in the separator that joins the two.
+///
+/// A relative image in markdown is resolved by prefixing it with this, so the
+/// prefix has to be built by the same rule as [`file_uri`] or a Windows drive
+/// takes the drive's `C:` for a UNC host. `file:///C:/shots/` keeps the third
+/// slash on a drive path, a plain directory already begins with the separator,
+/// and, on Windows, a UNC share keeps its host after the scheme.
+#[must_use]
+pub fn file_uri_dir(dir: &Path) -> String {
+    let mut uri = file_uri(dir);
+    if !uri.ends_with('/') {
+        uri.push('/');
+    }
+    uri
+}
+
+/// The file path a `file://` URI names, if it names one.
+///
+/// The inverse of [`file_uri`], and the rule the loader itself applies: the
+/// slash that follows the scheme of a drive URI (`file:///C:/...`) is part of
+/// the scheme's form and is dropped before the path is built, so a drive path
+/// round-trips unchanged and a plain absolute path (`file:///home/me/shot.png`)
+/// keeps the separator it was written with.
+///
+/// A URI whose text does not begin with a slash names a *host*. The loader
+/// rebuilds a UNC path from it on Windows only, and so does this, by putting
+/// two backslashes in front of the text unless it already begins with them;
+/// elsewhere the text is the path the loader reads, so a relative
+/// `file://shots/screen.png` stays relative and a share path is read as the
+/// path it already is. Percent escapes are not decoded, as [`file_uri`] does
+/// not write them.
+#[must_use]
+pub fn uri_path(uri: &str) -> Option<PathBuf> {
+    let text = uri.strip_prefix("file://")?;
+    if let Some(rest) = text.strip_prefix('/') {
+        return Some(PathBuf::from(if is_drive_path(rest) { rest } else { text }));
+    }
+    let unc = cfg!(windows) && !text.is_empty() && !is_unc_path(text);
+    Some(if unc {
+        PathBuf::from(format!(r"\\{text}"))
+    } else {
+        PathBuf::from(text)
+    })
+}
 
 /// Whether `uri` names an SVG image.
 #[must_use]
@@ -90,7 +209,7 @@ pub fn decode_hint(ctx: &egui::Context, uri: &str) -> Option<SizeHint> {
 /// went since this was last called for it, so the next load reads the file
 /// again. Other URIs are left alone.
 pub fn refresh_if_changed(ctx: &egui::Context, uri: &str) {
-    let Some(path) = uri.strip_prefix("file://") else {
+    let Some(path) = uri_path(uri) else {
         return;
     };
     let stamp: Option<(SystemTime, u64)> = std::fs::metadata(path)
@@ -104,5 +223,46 @@ pub fn refresh_if_changed(ctx: &egui::Context, uri: &str) {
     }
     if last != Some(stamp) {
         ctx.data_mut(|d| d.insert_temp(id, stamp));
+    }
+}
+
+/// What state an image's decode is in this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PictureState {
+    /// The image is decoded and can be drawn.
+    Ready,
+    /// Its bytes are still on their way; it can be drawn next frame.
+    Pending,
+    /// No loader can read it, so nothing will ever be drawn.
+    Unavailable,
+}
+
+/// Ask for `uri` to be decoded, after re-reading its file when it changed, and
+/// report what there is to draw this frame.
+///
+/// A caller must draw an image only in [`PictureState::Ready`]: building an
+/// `egui::Image` from a URI that is still loading makes egui paint its own
+/// failed-image mark when the decode then fails, over a picture that had only
+/// not arrived yet. It must also not report a click for one, which would open
+/// a viewer with nothing in it.
+///
+/// # Returns
+///
+/// The decode's state. [`PictureState::Pending`] asks for the next frame, which
+/// is the frame that finishes it.
+#[must_use]
+pub fn picture_state(ctx: &egui::Context, uri: &str) -> PictureState {
+    refresh_if_changed(ctx, uri);
+    let Some(hint) = decode_hint(ctx, uri) else {
+        ctx.request_repaint();
+        return PictureState::Pending;
+    };
+    match ctx.try_load_image(uri, hint) {
+        Ok(egui::load::ImagePoll::Ready { .. }) => PictureState::Ready,
+        Ok(egui::load::ImagePoll::Pending { .. }) => {
+            ctx.request_repaint();
+            PictureState::Pending
+        }
+        Err(_) => PictureState::Unavailable,
     }
 }

@@ -154,6 +154,8 @@ mod test_material_sheet;
 mod test_material_tabs;
 #[path = "test_material_text_field.rs"]
 mod test_material_text_field;
+#[path = "test_material_thumbnail.rs"]
+mod test_material_thumbnail;
 #[path = "test_menu.rs"]
 mod test_menu;
 #[path = "test_mermaid_gui.rs"]
