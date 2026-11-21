@@ -254,8 +254,7 @@ impl App {
             }
             "theme" => {
                 if let Some(selection) = self.themes.parse(name) {
-                    self.status = format!("theme: {}", selection.display_name());
-                    self.theme = selection;
+                    self.commit_theme(selection);
                 }
             }
             "agent" => Box::pin(self.run_palette_slash(format!("/agent {name}"))).await,

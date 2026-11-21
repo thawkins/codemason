@@ -24,6 +24,27 @@
   and removed; having no picture, it reports no double click. Previously the row
   listed the raw file names as plain text with no way to remove one.
 
+### Fixed
+
+- Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
+
+## [1.0.173] - 2026-11-21
+
+GUI clipboard and shutdown fixes.
+
+Pasting in the GUI no longer freezes the window on Wayland: app-core's
+clipboard reads on the UI thread (Ctrl+Shift+V, right-click Paste, Alt+V and
+the right-click menu's Paste check) used `arboard` through XWayland while the
+window served that same selection from the same thread. Copy transcript
+(`/clip`) works in the GUI again, and a slow GUI quit no longer makes the next
+start report a crash.
+
+### Fixed
+
+- Fixed: the GUI froze when pasting with **Ctrl+Shift+V**, right-click **Paste** or **Alt+V** after copying text in the window (on Wayland). App-core read the clipboard with `arboard` on the UI thread, through XWayland, while the window served that same selection from the same thread, so the read waited on itself. On the GUI's UI thread app-core's clipboard reads now leave a paste request (`clipboard::take_frontend_paste_request`) that the GUI answers with egui's non-blocking `RequestPaste`, and right-click Paste sends it directly. With text on the clipboard, Alt+V in the GUI now pastes it as text; an image still attaches. Opening the right-click menu no longer reads the clipboard (it was another UI-thread `arboard` read): Paste stays enabled and the window pastes only when Paste is chosen (`clipboard::clipboard_may_hold_text`), and Alt+V no longer logs a missing image before the window's paste arrives.
+- Fixed: **Copy transcript** (`/clip`) copied nothing in the GUI ("nothing to copy"). It read a line cache only the removed terminal renderer filled; `ensure_message_copy_lines` now renders every uncached message itself, unwrapped when no terminal width is set.
+- Fixed: a GUI quit whose teardown outran the 3-second safety net left the crash marker at `running`, so the next start reported a crash that never happened. The safety net now runs a hook first (`quit::set_force_exit_hook`) and the binary stamps the marker `forced exit`, which is not reported; the hook runs on its own thread with a bounded wait (`quit::FORCE_EXIT_HOOK_WAIT`, 500 ms), so a stalled filesystem cannot keep the process alive.
+
 ## [1.0.172] - 2026-11-20
 
 Sessions panel restyle, a Help tab with About, and Markdown tables for

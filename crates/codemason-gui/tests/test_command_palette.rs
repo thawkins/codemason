@@ -79,6 +79,7 @@ fn test_ctrl_p_opens_the_palette_with_the_search_focused() {
 
 #[test]
 fn test_typing_ranks_and_enter_runs_the_first_row() {
+    let _config = support::scratch_config_target();
     let (_rt, mut harness) = rig();
     open(&mut harness);
     harness

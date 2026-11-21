@@ -1070,12 +1070,23 @@ Two complementary mechanisms cover the two ways a codemason process can die.
 point runs. codemason therefore does not try. Instead, `src/crash_dump.rs` stamps
 `log/panics/last-crash.json` at startup (pid, exe, args, cwd, thread,
 `status: running`, and a platform-specific core-dump retrieval hint), overwrites
-it with `clean exit` on a normal return, and — when the next start finds a
+it with `clean exit` on a normal return (or `forced exit` when the GUI's quit
+safety net ends a slow teardown with `process::exit`, through the hook
+registered with `quit::set_force_exit_hook`), and — when the next start finds a
 still-`running` record whose pid is gone — prints a warning naming the marker,
 the dead pid, and the host's core-dump command. The hint is `coredumpctl
 list/info/debug <pid>` when `/proc/sys/kernel/core_pattern` pipes into a helper
 (typical `systemd-coredump` hosts), otherwise the `core_pattern` file path or
-the macOS `/cores` convention. A clean exit never reports.
+the macOS `/cores` convention. A clean or forced exit never reports.
+
+**GUI clipboard reads never use `arboard` on the UI thread.** On Wayland the
+window serves its own clipboard selection from the UI thread, so an `arboard`
+read there (through XWayland) waited on itself and froze the window. While the
+GUI routes the thread's clipboard (`clipboard::route_copies_to_frontend`),
+`get_clipboard_text` and `get_clipboard_image` return `None` and leave a paste
+request (`take_frontend_paste_request`) that the GUI answers with egui's
+non-blocking `ViewportCommand::RequestPaste`; right-click Paste sends it
+directly.
 
 **There is no stderr spool.** The GUI does not own the terminal's alternate
 screen, so the fd-2 redirection (`src/stderr_spool.rs`) was removed with the TUI;
@@ -2683,7 +2694,7 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
-| `/theme` | Switch the window's colour theme while it runs. A bare `/theme` opens the theme picker (Up/Down or a click previews, Enter keeps, Esc restores); `/theme list` reports the current theme and the catalog; `/theme <name>`, `/theme system`, `/theme dark` and `/theme light` switch directly. The `theme` config key sets the theme at startup (`"system"` when unset or unknown); `/theme` does not write it |
+| `/theme` | Switch the window's colour theme while it runs. A bare `/theme` opens the theme picker (Up/Down or a click previews, Enter keeps, Esc restores); `/theme list` reports the current theme and the catalog; `/theme <name>`, `/theme system`, `/theme dark` and `/theme light` switch directly. The `theme` config key sets the theme at startup (`"system"` when unset or unknown); choosing a theme (`/theme <name>`, Enter in the picker, or the command palette) writes it to the user-global config, so the choice survives a restart |
 | `/verbosity` | Set how much the transcript shows: `/verbosity low\|medium\|high` (default `low`); a bare `/verbosity` reports it. The `verbosity` config key sets the startup level; `/verbosity` does not write it |
 | `/thinking-display` | Set how thinking text shows: `/thinking-display show\|hide\|collapse` (expanded, hidden, collapsed; default collapsed); a bare form reports it. The `thinking_display` config key (`collapsed`, `expanded`, `hidden`) sets the startup mode. Distinct from `/thinking`, which sets the model's thinking level |
 | `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |

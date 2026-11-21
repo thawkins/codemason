@@ -155,6 +155,8 @@ mod test_busy_send_guard;
 mod test_cancel_slash;
 #[path = "test_clipboard.rs"]
 mod test_clipboard;
+#[path = "test_clipboard_routing.rs"]
+mod test_clipboard_routing;
 #[path = "test_clipboard_tempfile.rs"]
 mod test_clipboard_tempfile;
 #[path = "test_codeindex_backward_compat.rs"]
@@ -457,6 +459,8 @@ mod test_prompt_units;
 mod test_provider_detection;
 #[path = "test_question_answer_guard.rs"]
 mod test_question_answer_guard;
+#[path = "test_quit_force_exit_hook.rs"]
+mod test_quit_force_exit_hook;
 #[path = "test_remove_pending_attachment.rs"]
 mod test_remove_pending_attachment;
 #[path = "test_render_cost_scaling.rs"]
@@ -633,3 +637,53 @@ mod test_window_lifecycle;
 mod test_window_routing;
 #[path = "test_window_scroll_wheel.rs"]
 mod test_window_scroll_wheel;
+
+/// A scratch config file that receives config writes (such as the theme
+/// `/theme` saves) for as long as the guard lives, so a test never edits the
+/// developer's own config.
+///
+/// Holds the binary-wide `global_env_lock` for its lifetime, because the write
+/// target is a process-global; dropping it restores the previous target and
+/// deletes the scratch directory. A test that takes this guard must not take
+/// `global_env_lock()` itself.
+pub struct ScratchConfig {
+    path: std::path::PathBuf,
+    previous: Option<std::path::PathBuf>,
+    _dir: tempfile::TempDir,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ScratchConfig {
+    /// The scratch `codemason.json`; it does not exist until something is
+    /// written.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchConfig {
+    fn drop(&mut self) {
+        codemason_config::Config::set_config_write_target(self.previous.take());
+    }
+}
+
+/// Points config writes at a fresh `codemason.json` under `target/temp` until
+/// the returned guard is dropped.
+pub fn scratch_config_target() -> ScratchConfig {
+    let lock = global_env_lock();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
+    std::fs::create_dir_all(&root).expect("scratch root");
+    let dir = tempfile::Builder::new()
+        .prefix("config-writes-")
+        .tempdir_in(&root)
+        .expect("config scratch dir");
+    let path = dir.path().join("codemason.json");
+    let previous = codemason_config::Config::config_write_target();
+    codemason_config::Config::set_config_write_target(Some(path.clone()));
+    ScratchConfig {
+        path,
+        previous,
+        _dir: dir,
+        _lock: lock,
+    }
+}

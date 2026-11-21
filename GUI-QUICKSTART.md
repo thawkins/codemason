@@ -239,8 +239,9 @@ its header, closes it; the dock tab's own Close does too.
 The window follows the operating system's dark or light setting. `/theme`
 opens a picker that previews each theme as you move through the list: Enter
 keeps it, Esc goes back. `/theme <name>` switches directly, for example
-`/theme light`, `/theme high-contrast` or `/theme nord`. To keep a theme, set
-`"theme": "<name>"` in `codemason.json`. Your own themes are JSON files in
+`/theme light`, `/theme high-contrast` or `/theme nord`. The theme you choose
+is saved as `"theme"` in `~/.config/codemason/codemason.json`, so the next
+start opens in it. Your own themes are JSON files in
 `~/.config/codemason/themes/` or the project's `.codemason/themes/`; see
 [`docs/howtos/slashcommands/theme.md`](docs/howtos/slashcommands/theme.md).
 
@@ -430,7 +431,8 @@ shortcuts do not act behind it. On macOS the menu bar also carries About, Quit
 - **Code blocks** have **Copy**, **Wrap** and **Insert** buttons; Insert puts
   the code at the end of the prompt.
 - **`/clip`** — copies the entire rendered contents of the message window (the
-  plain-text transcript) to the system clipboard in one step.
+  plain-text transcript) to the system clipboard in one step. The ribbon's
+  **Copy transcript** runs it.
 
 ### Permission prompts
 

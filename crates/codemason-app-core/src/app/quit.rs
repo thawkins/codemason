@@ -17,10 +17,12 @@
 //! Neither step may hang the exit: the MCP shutdown is bounded by
 //! [`MCP_SHUTDOWN_TIMEOUT`], and both frontends arm the same safety net,
 //! [`arm_force_exit`], which ends the process [`FORCE_EXIT_AFTER`] after it
-//! is armed if teardown is still running.
+//! is armed if teardown is still running. Before ending the process it runs
+//! the hook registered with [`set_force_exit_hook`].
 //!
 //! Depends on `codemason_agent`'s `SessionProcessor` for the MCP shutdown.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use codemason_agent::session::processor::SessionProcessor;
@@ -30,6 +32,10 @@ use super::App;
 /// How long after [`arm_force_exit`] the process is ended if teardown still
 /// runs (a wedged tty, a blocked write, an MCP server that will not stop).
 pub const FORCE_EXIT_AFTER: Duration = Duration::from_secs(3);
+
+/// The longest the exit safety net waits for the hook registered with
+/// [`set_force_exit_hook`] before it ends the process anyway.
+pub const FORCE_EXIT_HOOK_WAIT: Duration = Duration::from_millis(500);
 
 /// The longest [`App::stop_services_on_quit`] waits for the MCP servers to
 /// stop. A running turn inside an MCP tool call holds the client's read lock
@@ -52,8 +58,45 @@ pub const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 pub fn arm_force_exit(after: Duration) {
     std::thread::spawn(move || {
         std::thread::sleep(after);
+        // The hook writes a file; on a stalled filesystem it must not keep
+        // the process alive, so it runs on its own thread with a bounded
+        // wait and the exit happens either way.
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            run_force_exit_hook();
+            // INTENTIONAL: the receiver is gone once the wait timed out.
+            let _ = done.send(());
+        });
+        // INTENTIONAL: a timeout means the hook is abandoned; exit anyway.
+        let _ = finished.recv_timeout(FORCE_EXIT_HOOK_WAIT);
         std::process::exit(0);
     });
+}
+
+/// The hook [`arm_force_exit`] runs just before it ends the process.
+static FORCE_EXIT_HOOK: OnceLock<fn()> = OnceLock::new();
+
+/// Register the hook the exit safety net runs just before it ends the
+/// process. `std::process::exit` skips everything after the program body,
+/// so the binary uses this to stamp its crash marker; without it a forced
+/// exit leaves the marker at `running` and the next start reports a crash
+/// that never happened. Only the first registration takes effect.
+///
+/// # Arguments
+///
+/// * `hook` - called once on the safety-net thread; must not block.
+pub fn set_force_exit_hook(hook: fn()) {
+    // INTENTIONAL: a second registration is ignored; the first hook stays.
+    let _ = FORCE_EXIT_HOOK.set(hook);
+}
+
+/// Run the hook registered with [`set_force_exit_hook`], if any. Exposed so
+/// tests can check the hook without ending the process.
+#[doc(hidden)]
+pub fn run_force_exit_hook() {
+    if let Some(hook) = FORCE_EXIT_HOOK.get() {
+        hook();
+    }
 }
 
 impl App {

@@ -909,6 +909,13 @@ impl App {
         image_paths: Vec<std::path::PathBuf>,
     ) {
         self.session.auto_compact_failed = false;
+        // A running sub-agent is already in a turn: the message joins it.
+        if self.send_to_focused_subagent(&text) {
+            if !image_paths.is_empty() {
+                self.status = format!("{} (images are not sent to sub-agents)", self.status);
+            }
+            return;
+        }
         let Some(sid) = self.session.session_id.clone() else {
             self.status = "[warn] No active session".to_string();
             return;
@@ -5132,6 +5139,12 @@ impl App {
     /// path, then falls back to raw pixel data which is saved to
     /// `target/temp/` with restrictive permissions.
     pub(crate) fn paste_image_from_clipboard(&mut self) {
+        // A frontend that owns the clipboard (the GUI) pastes it itself: an
+        // image arrives as a pasted image and is attached then, so nothing
+        // is read (or reported missing) here.
+        if crate::clipboard::request_frontend_paste() {
+            return;
+        }
         // --- Phase 1: look for a file reference in the text clipboard ---
         if let Some(text) = Self::get_clipboard() {
             let trimmed = text.trim();
@@ -5350,7 +5363,10 @@ impl App {
         selection_for_pane: bool,
     ) {
         let in_input = matches!(pane, SelectionPane::Input);
-        let has_clipboard = Self::get_clipboard().is_some_and(|s| !s.is_empty());
+        // A frontend that owns the clipboard (the GUI) is not read here:
+        // reading would request a paste just for opening the menu, so Paste
+        // stays enabled and the frontend pastes only when it is chosen.
+        let has_clipboard = crate::clipboard::clipboard_may_hold_text();
         let provider_setup_input = matches!(
             self.provider_setup,
             Some(ProviderSetupStep::EnterKey { .. })

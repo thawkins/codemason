@@ -51,8 +51,9 @@ pub struct Config {
     /// between dark and light), `"dark"`, `"light"`, or a theme name such as
     /// `"high-contrast"` or `"nord"`.
     ///
-    /// Unset or unrecognised means `"system"`. `/theme` switches the theme for
-    /// the running window without writing this key.
+    /// Unset or unrecognised means `"system"`. Choosing a theme with `/theme`,
+    /// its picker or the command palette writes this key in the user-global
+    /// config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Transcript verbosity at startup: `"low"`, `"medium"` or `"high"`.
