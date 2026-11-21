@@ -533,35 +533,23 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   `hooks.json` file and the group `{matcher, hooks: [...]}` shape are read, a
   plugin hook gets `CLAUDE_PLUGIN_ROOT` and the Claude event JSON on stdin, and
   a blocking Stop hook can feed findings back before the turn ends).
-  `/plugins codex` and `/plugins claude`
-  browse each store's official marketplace (`StoreProvider` normalises the Codex and
-  Claude document shapes); each panel carries a left-hand navigator column split into a
-  category navigator (top) and a marketplace navigator (bottom), each listing
-  `ALL` plus the distinct values the fetched index declares, operated by
-  keyboard (`Tab`/`BackTab` cycle focus, `Up`/`Down` move-and-apply, `Enter` apply,
-  `c` clear the focused navigator) and mouse (click
-  a row, wheel to scroll); the category navigator additionally carries an
-  `Installed` pseudo-category in row 1, directly below `ALL`, which filters the
-  results to the plugins already in the store scan (matching the plugin id, so an
-  installed plugin that declares no category still shows) and composes with the
-  query and marketplace filters; every navigator row appends the number of plugins under that
-  value as `Name (N)` (the `ALL` row counts the whole index, derived from the full
-  fetched index so the count is stable as a query or filter narrows the list); the
-  search query, category, and marketplace filters compose
-  so the list shows only entries matching all three; a launch may pre-select a category
-  with `--category <name>`; each result row shows the plugin id, version, the
-  **marketplace it came
-  from** (the added marketplace's name, or the store label for the base endpoint), and
-  its description, the description taking every column the marketplace leaves so it
-  runs to the panel's edge and is clipped there (the panel widens up to a 140-column
-  ceiling so the marketplace column has room); a row already installed carries a bold
-  green `*` in a one-column lane beside the `>` cursor gutter (every other row paints
-  a blank there, keeping the columns aligned); the result list is sorted
-  alphabetically by plugin id
-  (case-insensitive) and a query or category filter narrows the already-sorted set. A
-  search box sits along the panel's bottom edge with the live filter field on the left
-  and a click-to-clear `[x] clear` button on the right, so the active query can be wiped
-  with one click;
+  `/plugins codex` and `/plugins claude` open the Plugin Store dialog on each
+  store's marketplaces (`StoreProvider` normalises the Codex and Claude document
+  shapes), with a Codex / Claude switcher in its header. It is a wide three-pane
+  dialog: a filter rail with a category list and a marketplace list, each row
+  showing its entry count (the category list carries `ALL`, an `Installed`
+  pseudo-category that lists the plugins already installed, then the index's
+  categories); rich result rows showing each plugin's name, version, the
+  **marketplace it came from** (the added marketplace's name, or the store label
+  for the base endpoint), description and tags, with an Install button; and a
+  details pane for the highlighted plugin (version, marketplace, source and
+  homepage). The search query, category and marketplace filters compose, and the
+  results are sorted alphabetically by plugin id (case-insensitive); a launch may
+  pre-select a category with `--category <name>`. The footer shows `N of M` and a
+  Refresh button (`--refresh` does the same at launch); the plugin and connector
+  indexes are prefetched into an in-memory cache at startup, so the dialogs open
+  populated. Hints are tooltips. Keys: `Tab` changes pane, `Up`/`Down` move,
+  `Enter` installs, typing searches, `Esc` clears the search, then closes;
   `/plugins add` also accepts a
   `git+<https-url>#<ref>[:<subpath>]` git source; a freshly installed plugin is
   recorded enabled and loads at the next session start (no JavaScript runs during
@@ -572,12 +560,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   the `cdmn plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
   one section per store with a name/url/description table; `/plugins marketplace <codex|claude> add <source>` registers an additional marketplace from an
   `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory, in the
-  user-global `plugins.stores.marketplaces`, and the two browse panels fetch and
-  merge every configured marketplace into the one panel); a loaded index also has each
-  plugin's own version and description resolved from its manifest off the event loop
-  (the vendor listings omit them, Codex especially), with a `loading details...` title
-  hint and a `-` version marker while a value stays unknown; `plugins.enabled: false`
-  makes the subsystem inert
+  user-global `plugins.stores.marketplaces`, and the Plugin Store fetches and
+  merges every configured marketplace into the one dialog); a loaded index also has
+  each plugin's own version and description resolved from its manifest in the
+  background (the vendor listings omit them, Codex especially); `plugins.enabled:
+  false` makes the subsystem inert
 
 ![CodexPlugins](assets/screens/codemasonpluginscodex.png)
 
@@ -594,27 +581,23 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   `remove <id>`, `enable <id>`, `disable <id>`, `connect <id>`,
   `disconnect <id>`, `auth <id>`, `test <id>`, `stores [--check]`,
   `marketplace show|claude list|add|remove`, `help`) in the GUI and the
-  `cdmn connectors <sub>` CLI. `/connectors claude` opens an interactive,
-  off-the-event-loop catalogue browser wearing the same design language as
-  `/plugins claude` (filter by query, category, and marketplace; browse; install with
-  one key): a calm slate accent frame and a structured title line; a left column
-  split into a `Categories` navigator above a `Marketplace` navigator, each under a
-  reversed-video title band with every row labelled `Name (N)`; a fixed
-  dark-on-light column-heading row (`Id`, `Category`, `Marketplace`, `Description`)
-  pinned above the zebra-banded results; each row shows the connector id, its
-  category, the **marketplace it came from** (or `-` for a local install) and its
-  description running to the panel's right edge, with a bold green `*` in a
-  one-column lane on an installed connector; a centred footer of key hints and a
-  bottom `search:` box with a clickable `[x] clear` button. Every connector list
-  (`list`, `claude`, `search`) is sorted alphabetically by connector id
-  (case-insensitive) and the filters narrow the already-sorted rows; the category
-  navigator lists `ALL`, an `Installed` pseudo-category, then the catalogue's
-  distinct categories, operated by keyboard (`Tab`/`BackTab` cycle the results and the
-  two navigators, `Up`/`Down` move the focused pane, `Enter` applies, `c` clears) and
-  mouse (click a row in either navigator, wheel to scroll, click `[x] clear`); the
-  panel merges the base catalogue endpoint and every marketplace added with
-  `/connectors marketplace claude add`, and resolves each entry's blank description
-  from its own repository manifest off-loop with a `loading details...` title hint),
+  `cdmn connectors <sub>` CLI. `/connectors claude` opens the Connectors
+  dialog, the same wide three-pane layout as the Plugin Store without the store
+  switcher: a filter rail with a category list (`ALL`, an `Installed`
+  pseudo-category, then the catalogue's categories) and a marketplace list, each
+  row with its entry count; result rows showing the connector's name, category,
+  description and tags with an Install button; and a details pane showing the
+  connector's sign-in badge, the scopes it requests, its credential name (never
+  the value), its MCP servers and its source. The footer shows `N of M` and a
+  Refresh button; the catalogue is prefetched at startup, so the dialog opens
+  populated. Every connector list (`list`, `claude`, `search`) is sorted
+  alphabetically by connector id (case-insensitive) and the filters narrow the
+  already-sorted rows. The keyboard works as in the Plugin Store (`Tab` changes
+  pane, `Up`/`Down` move, `Enter` installs, typing searches, `Esc` clears, then
+  closes) and hints are tooltips. The dialog merges the base catalogue endpoint
+  and every marketplace added with `/connectors marketplace claude add`, and fills
+  each entry's blank description from its own repository manifest in the
+  background),
   `/connectors test <id>` runs an isolated connect-and-invoke harness
   that never touches the live session, and `/connectors stores [--check]`
   reports each catalogue endpoint and its provenance. Connectors install
