@@ -795,7 +795,7 @@ fn attachments_row(ui: &mut egui::Ui, app: &mut App) {
                     let shown = material::thumbnail::thumbnail(
                         ui,
                         &palette,
-                        &material::thumbnail::file_uri(path),
+                        &crate::image_load::file_uri(path),
                         &name,
                         material::thumbnail::SIZE,
                     );

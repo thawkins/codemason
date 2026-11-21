@@ -20,8 +20,6 @@
 //! Dependencies: `egui`, and this crate's image loading, icons, palette and
 //! metrics.
 
-use std::path::Path;
-
 use egui::{CornerRadius, Response, Role, Sense, Stroke, StrokeKind, Vec2, WidgetInfo};
 
 use super::icon_button::{DENSE_SIZE, IconButtonKind, icon_button_dense};
@@ -46,24 +44,31 @@ const CLOSE_INSET: f32 = 0.0;
 /// Width of the thumbnail's frame, in points.
 const FRAME_WIDTH: f32 = 1.0;
 
-/// The `file://` URI for an image file.
-#[must_use]
-pub fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+/// What there is to draw for a thumbnail's image.
+///
+/// The three decode states come from [`crate::image_load::picture_state`];
+/// [`Picture::OffScreen`] is this widget's own, for a thumbnail that is
+/// scrolled out of sight and so never asks for a decode at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Picture {
+    /// The image is decoded and can be drawn.
+    Ready,
+    /// Its bytes are still on their way; it may be drawn next frame.
+    Pending,
+    /// No loader could read it, so nothing will ever be drawn.
+    Unavailable,
+    /// The thumbnail is out of sight: nothing is loaded or drawn.
+    OffScreen,
 }
 
-/// Whether `uri` can be loaded as an image this frame.
-///
-/// A changed file is read again and an SVG is rasterised at a capped size
-/// ([`crate::image_load`]), as the transcript's images are.
-fn loadable(ui: &egui::Ui, uri: &str) -> bool {
-    let ctx = ui.ctx();
-    crate::image_load::refresh_if_changed(ctx, uri);
-    let Some(hint) = crate::image_load::decode_hint(ctx, uri) else {
-        ctx.request_repaint();
-        return false;
-    };
-    ctx.try_load_image(uri, hint).is_ok()
+impl From<crate::image_load::PictureState> for Picture {
+    fn from(state: crate::image_load::PictureState) -> Self {
+        match state {
+            crate::image_load::PictureState::Ready => Self::Ready,
+            crate::image_load::PictureState::Pending => Self::Pending,
+            crate::image_load::PictureState::Unavailable => Self::Unavailable,
+        }
+    }
 }
 
 /// What a thumbnail reported this frame.
@@ -85,7 +90,7 @@ pub struct ThumbnailResponse {
 ///   and its close mark takes no click.
 /// * `palette` - the colours.
 /// * `uri` - the image's URI, as [`egui::Image::new`] takes it (see
-///   [`file_uri`]).
+///   [`crate::image_load::file_uri`]).
 /// * `label` - the image's accessible description (its file name), used as
 ///   the picture's alt text and hover text.
 /// * `size` - the thumbnail's side, in points; widened to at least
@@ -95,8 +100,9 @@ pub struct ThumbnailResponse {
 ///
 /// [`ThumbnailResponse`]: the caller drops its entry when
 /// [`ThumbnailResponse::close`] was clicked, and shows the image at full size
-/// when [`ThumbnailResponse::picture`] was double-clicked. A picture that
-/// cannot be loaded senses nothing, so it reports no double click.
+/// when [`ThumbnailResponse::picture`] was double-clicked. Only a decoded
+/// picture senses a click, so a thumbnail whose image is still loading, or
+/// that no loader could read, reports no double click.
 pub fn thumbnail(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -104,30 +110,44 @@ pub fn thumbnail(
     label: &str,
     size: f32,
 ) -> ThumbnailResponse {
-    let loadable = loadable(ui, uri);
+    let side = size.max(CLOSE_SIZE);
+    // Cull before loading: the strip can be scrolled past, and a thumbnail
+    // that is not on screen has no reason to stat its file or start a decode.
+    // The next widget's place is where this one would go, so the test needs no
+    // allocation.
+    let place = ui.next_widget_position();
+    let picture = if ui.is_rect_visible(egui::Rect::from_min_size(place, Vec2::splat(side))) {
+        crate::image_load::picture_state(ui.ctx(), uri).into()
+    } else {
+        Picture::OffScreen
+    };
     // `Sense::CLICK` rather than `Sense::click()`: it reports a double click
     // without becoming focusable, so Tab never lands on a thumbnail and a
-    // focused mark cannot keep the prompt from taking typed text.
-    let sense = if loadable {
+    // focused mark cannot keep the prompt from taking typed text. Hover is
+    // sensed for free (its mask is empty), so the tooltip needs no sense of its
+    // own.
+    let sense = if picture == Picture::Ready {
         Sense::CLICK
     } else {
         Sense::hover()
     };
-    let (rect, picture) = ui.allocate_exact_size(Vec2::splat(size.max(CLOSE_SIZE)), sense);
-    picture.widget_info(|| WidgetInfo::labeled(Role::Image, ui.is_enabled(), label));
-    if ui.is_rect_visible(rect) {
+    let (rect, picture_response) = ui.allocate_exact_size(Vec2::splat(side), sense);
+    picture_response.widget_info(|| WidgetInfo::labeled(Role::Image, ui.is_enabled(), label));
+    let picture_response = picture_response.on_hover_text(label);
+    if picture != Picture::OffScreen {
         let corner = CornerRadius::same(radius::SM);
-        paint_picture(ui, palette, uri, label, rect, corner, loadable);
+        paint_picture(ui, palette, uri, label, rect, corner, picture);
         ui.painter().rect_stroke(
             rect,
             corner,
             Stroke::new(FRAME_WIDTH, rgb(palette.m3.outline_variant)),
             StrokeKind::Inside,
         );
-        paint_state_layer(ui, &picture, corner, rgb(palette.m3.on_surface));
+        paint_state_layer(ui, &picture_response, corner, rgb(palette.m3.on_surface));
     }
     // The close mark gets its own ui over the picture's top-right corner, so
-    // it keeps a full Material hit target inside the thumbnail's box.
+    // it keeps a full Material hit target inside the thumbnail's box. It stays
+    // live off screen: it is how a mis-attached image is dropped.
     let close_rect = egui::Rect::from_min_size(
         egui::pos2(
             rect.right() - CLOSE_SIZE - CLOSE_INSET,
@@ -147,11 +167,14 @@ pub fn thumbnail(
             )
         })
         .inner;
-    ThumbnailResponse { picture, close }
+    ThumbnailResponse {
+        picture: picture_response,
+        close,
+    }
 }
 
-/// Draw `uri` to fill `rect`, or `label` in its place when `loadable` is
-/// false.
+/// Draw `uri` to fill `rect`, a placeholder while it loads, or `label` in its
+/// place when it cannot be drawn.
 fn paint_picture(
     ui: &egui::Ui,
     palette: &Palette,
@@ -159,10 +182,10 @@ fn paint_picture(
     label: &str,
     rect: egui::Rect,
     corner: CornerRadius,
-    loadable: bool,
+    picture: Picture,
 ) {
     let content = rgb(palette.m3.on_surface_variant);
-    if !loadable {
+    if picture == Picture::Unavailable {
         // The name, on one line, clipped to the frame: an attachment that
         // cannot be drawn still shows which image it is, so the close mark
         // removes the right one.
@@ -172,6 +195,11 @@ fn paint_picture(
         ui.painter()
             .with_clip_rect(inner)
             .galley(egui::pos2(inner.left(), y), galley, content);
+        return;
+    }
+    if picture == Picture::Pending {
+        // Nothing to show yet, but the frame and the close mark are already in
+        // place, so the strip does not jump when the picture arrives.
         return;
     }
     egui::Image::new(uri)
