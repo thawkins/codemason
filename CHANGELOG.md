@@ -51,7 +51,9 @@
   appended to; every site goes through them (`dialogs::image_view`,
   `panels::prompt`, `panels::messages`, `material::thumbnail`, and the markdown
   viewer's implicit scheme), and none encodes the path, so a file named
-  `My%20Doc.png` still resolves.
+  `My%20Doc.png` still resolves. The tests that load through the loader read
+  their URIs from `file_uri` too, so they exercise the form the widgets build
+  rather than a hand-written `file://C:\...` the loader reads as a host.
 - Fixed: a UNC image path (`\\server\share\shots\screen.png`, including the
   `\\?\C:\...` extended-length form) was likewise written as
   `file://\\server\share\...`, which the loader prefixes to four backslashes and

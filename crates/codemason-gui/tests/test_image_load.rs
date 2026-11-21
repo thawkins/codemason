@@ -39,7 +39,10 @@ fn test_image_load_huge_svg_is_hinted_at_the_cap() {
     .expect("write svg");
     let ctx = egui::Context::default();
     egui_extras::install_image_loaders(&ctx);
-    let uri = format!("file://{}", path.display());
+    // Built by `file_uri`, not by hand: a hand-rolled `file://C:\...` is read as
+    // a UNC host on Windows, so the test would prove nothing about the path it
+    // wrote.
+    let uri = file_uri(&path);
     let mut hint = None;
     // The file loader reads on a thread: poll until the bytes are in.
     for _ in 0..200 {
@@ -79,7 +82,9 @@ fn test_image_load_changed_file_is_forgotten() {
     write(100);
     let ctx = egui::Context::default();
     egui_extras::install_image_loaders(&ctx);
-    let uri = format!("file://{}", path.display());
+    // The URI the widget would build, so this exercises the path `file_uri` and
+    // `uri_path` agree on rather than a form the loader reads differently.
+    let uri = file_uri(&path);
     let hint_of = |ctx: &egui::Context| {
         for _ in 0..200 {
             refresh_if_changed(ctx, &uri);
