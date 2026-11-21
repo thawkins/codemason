@@ -1,7 +1,10 @@
 //! Tests for `codemason_gui::image_load`: an SVG is rasterised at its own
-//! size capped at `MAX_DECODE_SIDE`, and a changed image file is read again.
+//! size capped at `MAX_DECODE_SIDE`, a changed image file is read again, and
+//! a path's `file://` URI is one the loader reads back as the same path.
 
-use codemason_gui::image_load::{MAX_DECODE_SIDE, capped, decode_hint, is_svg, refresh_if_changed};
+use codemason_gui::image_load::{
+    MAX_DECODE_SIDE, capped, decode_hint, file_uri, is_svg, refresh_if_changed, uri_path,
+};
 use egui::load::SizeHint;
 
 /// A scratch folder of `name` under the git-ignored `target/temp`.
@@ -100,5 +103,84 @@ fn test_image_load_changed_file_is_forgotten() {
             height: 250,
             maintain_aspect_ratio: true,
         }
+    );
+}
+
+#[test]
+fn test_image_load_file_uri_round_trips_an_absolute_path() {
+    let path = std::path::Path::new("/home/me/shots/screen.png");
+    let uri = file_uri(path);
+    assert_eq!(uri, "file:///home/me/shots/screen.png");
+    assert_eq!(uri_path(&uri).as_deref(), Some(path), "and back again");
+}
+
+#[test]
+fn test_image_load_file_uri_puts_the_third_slash_of_a_drive_path() {
+    // `file://C:/...` reads `C:` as a UNC host, so the file is never found;
+    // the drive needs the slash a URI puts after an empty authority.
+    let path = std::path::Path::new("C:\\shots\\screen.png");
+    let uri = file_uri(path);
+    assert_eq!(uri, "file:///C:\\shots\\screen.png");
+    // The loader drops that slash, and so does the inverse here.
+    assert_eq!(
+        uri_path(&uri).as_deref(),
+        Some(std::path::Path::new("C:\\shots\\screen.png"))
+    );
+    // A forward-slash drive path is the same path written the other way.
+    let forward = file_uri(std::path::Path::new("C:/shots/screen.png"));
+    assert_eq!(forward, "file:///C:/shots/screen.png");
+    assert_eq!(
+        uri_path(&forward).as_deref(),
+        Some(std::path::Path::new("C:/shots/screen.png"))
+    );
+}
+
+#[test]
+fn test_image_load_file_uri_leaves_a_relative_path_alone() {
+    // A relative path is not a drive, so it keeps the scheme's two slashes.
+    let uri = file_uri(std::path::Path::new("shots/screen.png"));
+    assert_eq!(uri, "file://shots/screen.png");
+    assert_eq!(
+        uri_path(&uri).as_deref(),
+        Some(std::path::Path::new("shots/screen.png"))
+    );
+}
+
+#[test]
+fn test_image_load_file_uri_is_not_percent_encoded() {
+    // The loader reads the raw path before the decoded one, so a space or a
+    // `%` in a file name is the file name: encoding it would name another file.
+    for path in [
+        std::path::Path::new("/home/me/my shots/screen shot.png"),
+        std::path::Path::new("/home/me/shots/My%20Doc.png"),
+        std::path::Path::new("/home/me/shots/100% done.png"),
+    ] {
+        let uri = file_uri(path);
+        assert!(
+            uri.ends_with(&path.display().to_string()),
+            "{uri} names {path:?} as it stands"
+        );
+        assert_eq!(uri_path(&uri).as_deref(), Some(path), "and back again");
+    }
+}
+
+#[test]
+fn test_image_load_uri_path_ignores_a_uri_that_is_not_a_file() {
+    assert_eq!(uri_path("bytes://diagram.svg"), None);
+    assert_eq!(uri_path("https://example.com/shot.png"), None);
+    assert_eq!(uri_path("/home/me/shot.png"), None);
+}
+
+#[test]
+fn test_image_load_uri_path_drops_only_the_scheme_slash() {
+    // A path that starts with a slash of its own keeps every one but the
+    // scheme's: only a drive path is read as `//C:/...` rather than `/C:/...`.
+    assert_eq!(
+        uri_path("file:////server/share/shot.png").as_deref(),
+        Some(std::path::Path::new("//server/share/shot.png"))
+    );
+    assert_eq!(
+        uri_path("file:///home/me/shot.png").as_deref(),
+        Some(std::path::Path::new("/home/me/shot.png"))
     );
 }

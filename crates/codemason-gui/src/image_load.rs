@@ -11,11 +11,14 @@
 //! - [`refresh_if_changed`] forgets a `file://` image whose file changed
 //!   (or appeared) since it was loaded, so a regenerated `chart.png` shows
 //!   the new chart instead of the cached one.
+//! - [`file_uri`] builds the `file://` URI of a path in the one form the
+//!   loader reads back unambiguously on every platform, and [`uri_path`]
+//!   reverses it.
 //!
 //! Dependencies: `egui`, and `resvg`'s `usvg` (the version egui_extras
 //! already uses) to read an SVG's size.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use egui::Id;
@@ -23,6 +26,56 @@ use egui::load::{BytesPoll, SizeHint};
 
 /// The largest side, in pixels, an SVG is rasterised to.
 pub const MAX_DECODE_SIDE: u32 = 4096;
+
+/// Whether `text` is a Windows drive path (`C:\shots\screen.png`).
+///
+/// Byte comparison rather than `char`s: a drive letter is ASCII, and the
+/// separator is the third byte either way it is written.
+fn is_drive_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+/// The `file://` URI of the image file at `path`.
+///
+/// egui_extras' file loader reads a `file://` URI back as a path with only
+/// minimal translation: on Windows, text after the scheme that does not begin
+/// with `/` is taken for a UNC *host*, so `format!("file://{}", path.display())`
+/// turns `C:\shots\screen.png` into `\\C:\shots\screen.png` and never finds the
+/// file. A drive path is therefore written with the third slash the URI syntax
+/// calls for (`file:///C:/shots/screen.png`); a plain absolute path already
+/// begins with the separator (`file:///home/me/shot.png`), so it is written as
+/// it stands and the loader reads it back unchanged.
+///
+/// The path is not percent-encoded, matching the loader's own fallback: it
+/// tries the raw path before the decoded one, so a file literally named
+/// `My%20Doc.png` still resolves.
+#[must_use]
+pub fn file_uri(path: &Path) -> String {
+    let text = path.display().to_string();
+    if is_drive_path(&text) {
+        format!("file:///{text}")
+    } else {
+        format!("file://{text}")
+    }
+}
+
+/// The file path a `file://` URI names, if it names one.
+///
+/// The inverse of [`file_uri`], and the rule the loader itself applies: the
+/// slash that follows the scheme of a drive URI (`file:///C:/...`) is part of
+/// the scheme's form and is dropped before the path is built, so a round trip
+/// returns `path` unchanged. A URI naming anything else keeps its text as it
+/// is. Percent escapes are not decoded, as [`file_uri`] does not write them.
+#[must_use]
+pub fn uri_path(uri: &str) -> Option<PathBuf> {
+    let text = uri.strip_prefix("file://")?;
+    let drive = text.strip_prefix('/').filter(|rest| is_drive_path(rest));
+    Some(PathBuf::from(drive.unwrap_or(text)))
+}
 
 /// Whether `uri` names an SVG image.
 #[must_use]
@@ -90,7 +143,7 @@ pub fn decode_hint(ctx: &egui::Context, uri: &str) -> Option<SizeHint> {
 /// went since this was last called for it, so the next load reads the file
 /// again. Other URIs are left alone.
 pub fn refresh_if_changed(ctx: &egui::Context, uri: &str) {
-    let Some(path) = uri.strip_prefix("file://") else {
+    let Some(path) = uri_path(uri) else {
         return;
     };
     let stamp: Option<(SystemTime, u64)> = std::fs::metadata(path)
@@ -104,5 +157,46 @@ pub fn refresh_if_changed(ctx: &egui::Context, uri: &str) {
     }
     if last != Some(stamp) {
         ctx.data_mut(|d| d.insert_temp(id, stamp));
+    }
+}
+
+/// What state an image's decode is in this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PictureState {
+    /// The image is decoded and can be drawn.
+    Ready,
+    /// Its bytes are still on their way; it can be drawn next frame.
+    Pending,
+    /// No loader can read it, so nothing will ever be drawn.
+    Unavailable,
+}
+
+/// Ask for `uri` to be decoded, after re-reading its file when it changed, and
+/// report what there is to draw this frame.
+///
+/// A caller must draw an image only in [`PictureState::Ready`]: building an
+/// `egui::Image` from a URI that is still loading makes egui paint its own
+/// failed-image mark when the decode then fails, over a picture that had only
+/// not arrived yet. It must also not report a click for one, which would open
+/// a viewer with nothing in it.
+///
+/// # Returns
+///
+/// The decode's state. [`PictureState::Pending`] asks for the next frame, which
+/// is the frame that finishes it.
+#[must_use]
+pub fn picture_state(ctx: &egui::Context, uri: &str) -> PictureState {
+    refresh_if_changed(ctx, uri);
+    let Some(hint) = decode_hint(ctx, uri) else {
+        ctx.request_repaint();
+        return PictureState::Pending;
+    };
+    match ctx.try_load_image(uri, hint) {
+        Ok(egui::load::ImagePoll::Ready { .. }) => PictureState::Ready,
+        Ok(egui::load::ImagePoll::Pending { .. }) => {
+            ctx.request_repaint();
+            PictureState::Pending
+        }
+        Err(_) => PictureState::Unavailable,
     }
 }
