@@ -230,6 +230,8 @@ impl PromptInput {
             return Focus::Modal {
                 field_focused,
                 field_selection: field_focused && focused_has_selection(ctx),
+                // The theme editor is driven with egui's own focus keys.
+                widget_keys: app.theme_editor.is_some(),
             };
         }
         // The focused sessions sidebar owns the keyboard, as in the TUI,
@@ -246,6 +248,7 @@ impl PromptInput {
             return Focus::Modal {
                 field_focused: false,
                 field_selection: false,
+                widget_keys: false,
             };
         }
         let mut focused = focused_id == Some(id);

@@ -1,5 +1,6 @@
 //! Theme editor dialog tests: the theme picker's edit buttons, the editor
-//! overlay's Save, Cancel and Reset to default buttons, and its hex fields.
+//! overlay's Save, Cancel and Reset to default buttons (by pointer and by
+//! keyboard), and its hex fields.
 
 mod support;
 
@@ -56,6 +57,15 @@ fn rig(
     scratch: &ScratchThemes,
     configure: impl FnOnce(&mut App),
 ) -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
+    rig_with(scratch, true, configure)
+}
+
+/// [`rig`], with the theme picker opened only when `picker` is set.
+fn rig_with(
+    scratch: &ScratchThemes,
+    picker: bool,
+    configure: impl FnOnce(&mut App),
+) -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let app = {
         let _enter = runtime.enter();
@@ -64,7 +74,9 @@ fn rig(
         app.theme = ThemeSelection::System;
         app.cwd_path = scratch.dir.path().to_path_buf();
         configure(&mut app);
-        app.open_theme_picker();
+        if picker {
+            app.open_theme_picker();
+        }
         app
     };
     let (_events_tx, events) = tokio::sync::mpsc::unbounded_channel();
@@ -217,4 +229,87 @@ fn test_theme_editor_hex_field_sets_valid_colour_only() {
         .type_text("#c80a0a");
     harness.run();
     assert_eq!(draft_accent(&harness), Rgb(200, 10, 10));
+}
+
+/// Press and release `key` with `modifiers`.
+fn press_with(harness: &mut Harness<'static, Shell>, key: egui::Key, modifiers: egui::Modifiers) {
+    for pressed in [true, false] {
+        harness.input_mut().events.push(egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers,
+        });
+    }
+    harness.run();
+}
+
+/// Saves an edited `nord` from the keyboard: Shift+Tab from Cancel edit
+/// reaches Save and Enter presses it.
+fn save_from_keyboard(scratch: &ScratchThemes, picker: bool) {
+    let (_rt, mut harness) = rig_with(scratch, picker, |app| {
+        app.open_theme_editor("nord");
+        app.set_theme_colour("accent", Rgb(200, 10, 10));
+    });
+    harness.run();
+    harness.get_by_label(CANCEL_EDIT).focus();
+    harness.run();
+    press_with(&mut harness, egui::Key::Tab, egui::Modifiers::SHIFT);
+    press_with(&mut harness, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(
+        harness.state().app().theme_editor.is_none(),
+        "Enter on the focused Save closes the editor"
+    );
+    let mut reread = ThemeCatalog::builtin();
+    reread.load_dir(&scratch.themes());
+    assert_eq!(reread.get("nord").expect("nord").accent, Rgb(200, 10, 10));
+}
+
+/// Resets a saved `nord` from the keyboard: Tab from Cancel edit reaches
+/// Reset to default and Space presses it.
+fn reset_from_keyboard(scratch: &ScratchThemes, picker: bool) {
+    let mut theme = (*ThemeCatalog::builtin().get("nord").expect("nord")).clone();
+    theme.accent = Rgb(200, 10, 10);
+    let file = scratch.themes().join("nord.json");
+    save_theme(&theme, &file).expect("save");
+    let themes_dir = scratch.themes();
+    let (_rt, mut harness) = rig_with(scratch, picker, |app| {
+        app.themes.load_dir(&themes_dir);
+        app.open_theme_editor("nord");
+    });
+    harness.run();
+    harness.get_by_label(CANCEL_EDIT).focus();
+    harness.run();
+    press_with(&mut harness, egui::Key::Tab, egui::Modifiers::NONE);
+    press_with(&mut harness, egui::Key::Space, egui::Modifiers::NONE);
+    assert!(
+        harness.state().app().theme_editor.is_none(),
+        "Space on the focused Reset to default closes the editor"
+    );
+    assert!(!file.exists(), "the user's copy is deleted");
+}
+
+#[test]
+fn test_theme_editor_keyboard_reaches_and_presses_save() {
+    let scratch = ScratchThemes::scrub_themes();
+    save_from_keyboard(&scratch, true);
+}
+
+#[test]
+fn test_theme_editor_keyboard_reaches_and_presses_reset() {
+    let scratch = ScratchThemes::scrub_themes();
+    reset_from_keyboard(&scratch, true);
+}
+
+#[test]
+fn test_theme_editor_without_picker_keyboard_presses_save() {
+    let scratch = ScratchThemes::scrub_themes();
+    save_from_keyboard(&scratch, false);
+}
+
+#[test]
+fn test_theme_editor_without_picker_keyboard_presses_reset() {
+    let scratch = ScratchThemes::scrub_themes();
+    reset_from_keyboard(&scratch, false);
 }

@@ -18,6 +18,7 @@
 //! (saving the chosen theme).
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -1013,27 +1014,41 @@ pub fn theme_file_name(name: &str) -> String {
 
 /// Writes `theme` to `path` as a theme file, creating the parent directory.
 ///
-/// The JSON goes to `<path>.tmp` first and is renamed over `path`, so a
-/// failed write never leaves a half-written theme behind.
+/// The JSON goes to a uniquely named temporary file that is created
+/// exclusively in the destination directory (never an existing file or a
+/// planted symlink) and written through its own handle; it is then renamed
+/// over `path`, so a failed write never leaves a half-written theme behind.
+/// A theme whose JSON is over the 64 KiB limit the loader enforces is refused
+/// before anything is written, so a saved theme always loads at the next
+/// start.
 ///
 /// # Errors
 ///
-/// Returns an error when the directory cannot be created or the file cannot
-/// be written or renamed.
+/// Returns an error when the JSON is over the size limit, the directory
+/// cannot be created, or the file cannot be written or renamed.
 pub fn save_theme(theme: &ThemeTokens, path: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
     let mut json = serde_json::to_string_pretty(theme)?;
     json.push('\n');
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    if let Err(err) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp); // INTENTIONAL: best-effort cleanup; the rename error is returned
-        return Err(err.into());
+    if json.len() as u64 > MAX_THEME_BYTES {
+        anyhow::bail!(
+            "{} bytes is over the {MAX_THEME_BYTES} byte limit",
+            json.len()
+        );
     }
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    std::fs::create_dir_all(dir)?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".theme-")
+        .suffix(".tmp")
+        .tempfile_in(dir)?;
+    tmp.write_all(json.as_bytes())?;
+    tmp.as_file().sync_all()?;
+    // On failure the returned error owns the temporary file and removes it
+    // when dropped.
+    tmp.persist(path).map_err(|err| err.error)?;
     Ok(())
 }
 

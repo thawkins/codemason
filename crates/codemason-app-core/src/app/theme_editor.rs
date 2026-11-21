@@ -118,13 +118,14 @@ impl App {
         let name = editor.name.clone();
         if let Some(path) = self.themes.source(&name).map(std::path::Path::to_path_buf) {
             // Only the user's own copy is deleted: a project's theme file is
-            // part of the repository, not an edit to undo.
-            let in_user_dir = user_themes_dir().is_some_and(|dir| {
-                let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-                std::fs::canonicalize(&path)
-                    .unwrap_or_else(|_| path.clone())
-                    .starts_with(dir)
-            });
+            // part of the repository, not an edit to undo. The directory the
+            // entry itself sits in is checked, not where it points, so a
+            // project symlink into the user's folder is not removed; a parent
+            // that cannot be resolved is not trusted.
+            let in_user_dir = user_themes_dir()
+                .and_then(|dir| std::fs::canonicalize(dir).ok())
+                .zip(path.parent().and_then(|p| std::fs::canonicalize(p).ok()))
+                .is_some_and(|(dir, parent)| parent.starts_with(dir));
             if !in_user_dir {
                 self.status = format!(
                     "theme not reset: {name} comes from {}, outside your themes folder",
