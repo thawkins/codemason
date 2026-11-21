@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.0.174] - 2026-11-21
+
+Session request history, shell-created pull requests, and attachment thumbnails.
+
+The GUI can now show a session's pull and merge requests without opening a
+browser: resting the pointer on a session row lists them with their state, forge
+reference and, for GitHub, added and removed line counts (stored in
+`session_request_history` at schema 14, so the counts survive a restart).
+A request the agent opens with `gh pr create` or `glab mr create` inside a `Bash`
+call is bound to the session like one opened by `github_create_pr`, and a bare
+`http(s)://` URL in an assistant reply is drawn as a link. Images staged for the
+next message are removable thumbnails, and an image whose decode is still in
+flight is drawn as a placeholder rather than as a broken picture. Also in this
+release: the colour theme is persisted across restarts, the request popup follows
+its row while scrolling and keeps a scroll position per session, and every
+`file://` URI is built through one helper, so Windows drive paths and UNC shares
+load.
+
 ### Added
 
 - Added: resting the pointer on a session row with requests opens a list beside it: each request's title, state, `owner/repo #N` and, for GitHub, `+added -removed`, newest first; click one to open it in the browser. An eye marks the request Auto-fix is watching.
@@ -71,6 +89,15 @@
   there, so it keeps the scheme's two slashes and both `file_uri` and `uri_path`
   read it as a host: resolve a path before it becomes a URI.
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
+- Fixed: the request popup's merged requests were drawn in a hard-coded purple that `check-theme-literals` rejects, and its `is_dark` heuristic guessed the background from the sum of its channels. The popup and its state glyph now use the theme's **fifth categorical colour** (`palette.color(ThemeColor::Categorical(4))`, the magenta every theme sets for its own background), so merged reads as the forges' purple on every theme without a brightness guess; `is_dark` is gone (`712c179`).
+- Fixed: the request popup drifted from its row. It followed its row's *current* rectangle only while the pointer was on it, so scrolling the sidebar or resizing it left the popup behind; `popup_target` now returns the row's live rectangle whenever the pointer is on that row, before the popup's own rect and the crossing bridge are consulted.
+- Fixed: one scroll position was shared by every session's request popup (a single `id_salt`), so a long history scrolled in one session opened another session's popup part-way down. Each popup's scroll area is salted with its session id.
+- Fixed: a request that left `open` kept its diff size in `session_request_history`, so the history refresh's backfill (`request_history_missing_stats`) skipped it and the row kept stale counts. A poll that changes a request out of `open` now clears `additions`/`deletions` in the same `UPDATE`, so the backfill reads the final size rather than a value from before the merge.
+- Fixed: a popup entry highlighted only the pointer, so keyboard focus was invisible. An entry now fills on `response.hovered() || response.has_focus()`, so `Tab` shows which request `Enter` opens.
+
+### Changed
+
+- Changed: `docs/reports/deep-refactor-audit.md` is re-audited at `5b9f1b1` (Version 1.0.170, 2026-11-15), superseding the version taken at `3de6683`; its open rows are reconciled in section 9 and every count carries the command and commit that produced it (`c23aa0a`).
 
 ## [1.0.173] - 2026-11-21
 

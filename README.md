@@ -294,7 +294,9 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   a pull-request icon with how many requests it has had; resting the
   pointer on it lists them (state, `+added -removed`, an eye on the one
   Auto-fix watches), and a click, or the
-  `PR/MRs` submenu, opens one in the browser
+  `PR/MRs` submenu, opens one in the browser. A request opened by
+  `gh pr create` / `glab mr create` in a Bash call is bound to the session
+  too, and a bare URL in a reply is drawn as a link
 - **Session management** — persistent conversation history stored in SQLite;
   list, resume, export-archive, and import sessions. A session's transcript can be
   aged out with `/db prune [--days N] [--dry-run]` (GUI) or `cdmn db prune`

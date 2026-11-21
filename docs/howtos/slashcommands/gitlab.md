@@ -80,6 +80,13 @@ Print command help:
 - `logout` deletes both the stored token and the config.
 - `setup` can be re-run to update the stored instance URL, username, or
   token.
+- A merge request the agent opens with `glab mr create` in a **Bash** call is
+  bound to the session, exactly as `gitlab_create_mr` and `autofix_add` are, so
+  the session's `PR/MRs` submenu, its sidebar count and Auto-fix all see it.
+  The binding reads the request URL from the call's output and its title and
+  source branch from that command's own `--title`/`-t` and
+  `--source-branch`/`-s` arguments. Only a call that exited `0` binds, and only
+  when `glab mr create` is the program of a simple command.
 
 ## Related
 

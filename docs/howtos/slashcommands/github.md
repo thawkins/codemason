@@ -94,6 +94,14 @@ Remove stored credentials:
 - The stored token lives in `~/.codemason/github_token`; `logout` removes
   stored credentials.
 - `/spec reverse` fetches repos through the GitHub API.
+- A pull request the agent opens with `gh pr create` in a **Bash** call is
+  bound to the session, exactly as `github_create_pr` and `autofix_add` are, so
+  the session's `PR/MRs` submenu, its sidebar count and Auto-fix all see it.
+  The binding reads the request URL from the call's output and its title and
+  head branch from that command's own `--title`/`-t` and `--head`/`-H`
+  arguments. Only a call that exited `0` binds, and only when `gh pr create` is
+  the program of a simple command, so `echo gh pr create <url>` and a `#`
+  comment do not.
 
 ## Related
 
