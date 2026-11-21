@@ -504,6 +504,11 @@ describing the changes. Set the base branch to "main".
 
 codemason calls `github_create_pr`. The head branch must already be pushed.
 
+A pull request the agent opens with `gh pr create` in a Bash call instead is
+still recorded against the session: the binding is taken from the call's
+output, so the session's `PR/MRs` submenu, its sidebar count and Auto-fix see
+it. Only a call that exited `0` binds.
+
 ### 7.6 Review and merge
 
 ```text

@@ -1105,6 +1105,15 @@ it, newest first. Each entry shows the title, then the state, repository
 and number (`thawkins/codemason #58`) and, for GitHub, the lines added and
 removed (`+1797 -1579`). An eye marks the request Auto-fix is watching.
 Move onto the list to scroll it; click an entry to open it in your browser.
+The list follows its row when you scroll or resize the sidebar, each
+session keeps its own scroll position, its entries highlight under the
+keyboard focus as well as the pointer, and a merged request takes the
+theme's magenta rather than a fixed purple.
+
+A bare `https://` address in a reply (a pull-request link, say) is drawn as
+a link you can click: CommonMark only links `<url>` and `[text](url)`, so
+codemason wraps bare addresses before rendering, leaving existing links,
+images and code alone and keeping trailing punctuation outside the link.
 
 Keys:
 
