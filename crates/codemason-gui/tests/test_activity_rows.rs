@@ -11,7 +11,7 @@ use codemason_app_core::app::App;
 use codemason_app_core::transcript_prefs::{ThinkingDisplay, Verbosity};
 use codemason_gui::palette::palette_for;
 use codemason_gui::panels::messages::{
-    ACTIVITY_RUNNING_LABEL, MessagesView, THINKING_LABEL, collapse_all,
+    ACTIVITY_RUNNING_LABEL, MessagesView, THINKING_LABEL, collapse_all, thinking_lines_label,
 };
 use egui::accesskit::Role as A11yRole;
 use egui_kittest::Harness;
@@ -159,19 +159,15 @@ async fn test_thinking_block_follows_the_display_setting() {
     app.session.messages = vec![thinking_reply()];
     let mut harness = harness(app);
     harness.run();
-    // Open while the reply streams.
+    // A short thought is open while the reply streams.
     assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
     harness.get_by_label_contains("weighing options");
 
-    // Closed once it completes.
+    // And stays open once it completes.
     harness.state_mut().app.session.is_processing = false;
     harness.run();
-    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
-    assert!(
-        harness
-            .query_by_label_contains("weighing options")
-            .is_none()
-    );
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
+    harness.get_by_label_contains("weighing options");
 
     harness.state_mut().app.transcript_prefs.thinking = ThinkingDisplay::Expanded;
     harness.run();
@@ -224,9 +220,10 @@ async fn test_think_call_follows_the_thinking_display() {
     // The call itself is still shown.
     harness.get_by_label_contains("Think: completed");
 
+    // Collapsed puts the one-line thought under a row, open.
     harness.state_mut().app.transcript_prefs.thinking = ThinkingDisplay::Collapsed;
     harness.run();
-    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
 }
 
 #[tokio::test]
@@ -316,15 +313,47 @@ async fn test_collapse_all_closes_thinking_rows() {
     app.session.messages = vec![thinking_reply()];
     let mut harness = harness(app);
     harness.run();
-    // Collapsed by default once the reply is complete.
-    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
-    harness
-        .get_by_role_and_label(A11yRole::Button, THINKING_LABEL)
-        .click();
-    harness.run();
+    // A short thought starts open.
     assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
 
     collapse_all(&harness.ctx);
     harness.run();
     assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
+}
+
+#[tokio::test]
+async fn test_long_think_call_stays_closed_until_opened() {
+    let mut app = support::make_app();
+    app.transcript_prefs.verbosity = Verbosity::High;
+    app.transcript_prefs.thinking = ThinkingDisplay::Expanded;
+    app.session.is_processing = true;
+    app.session.messages = vec![reply(vec![think_call(
+        "first idea\nsecond idea\nthird idea\nfourth idea",
+    )])];
+    let mut harness = harness(app);
+    harness.run();
+    // Longer than three lines: closed, even expanded and streaming.
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(false));
+    assert!(harness.query_by_label_contains("fourth idea").is_none());
+    harness.get_by_label(&thinking_lines_label(4));
+
+    harness
+        .get_by_role_and_label(A11yRole::Button, THINKING_LABEL)
+        .click();
+    harness.run();
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
+    harness.get_by_label_contains("fourth idea");
+}
+
+#[tokio::test]
+async fn test_short_think_call_opens_with_its_line_count() {
+    let mut app = support::make_app();
+    app.transcript_prefs.verbosity = Verbosity::High;
+    app.session.messages = vec![reply(vec![think_call("one idea\ntwo ideas\nthree ideas")])];
+    let mut harness = harness(app);
+    harness.run();
+    // Three lines or fewer opens, on a finished reply too.
+    assert_eq!(expanded(&harness, THINKING_LABEL), Some(true));
+    harness.get_by_label_contains("three ideas");
+    harness.get_by_label(&thinking_lines_label(3));
 }

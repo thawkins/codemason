@@ -8,8 +8,27 @@ use std::path::PathBuf;
 use craft_ui::docking::PanelState;
 
 use codemason_gui::dock::{
-    HiddenPanes, PaneId, default_layout, load_layout, save_layout, sync_visibility, toggle_pane,
+    HiddenPanes, PaneId, default_layout, fit_prompt, load_layout, save_layout, sync_visibility,
+    toggle_pane,
 };
+use craft_ui::docking::Node;
+use craft_ui::layout::SplitSize;
+
+/// The size of the split whose second child is the prompt pane.
+fn prompt_split_size(node: &Node<PaneId>) -> Option<SplitSize> {
+    match node {
+        Node::Split {
+            size,
+            first,
+            second,
+            ..
+        } => match &**second {
+            Node::Tabs { panels, .. } if panels == &[PaneId::Prompt] => Some(*size),
+            _ => prompt_split_size(first).or_else(|| prompt_split_size(second)),
+        },
+        _ => None,
+    }
+}
 
 /// A fresh per-test scratch directory under the workspace `target/temp/`.
 fn scratch_dir(name: &str) -> PathBuf {
@@ -27,6 +46,27 @@ fn test_dock_default_layout_contains_messages_and_prompt() {
     assert!(layout.validate().is_ok(), "default layout must validate");
     assert!(layout.contains(&PaneId::Messages));
     assert!(layout.contains(&PaneId::Prompt));
+}
+
+#[test]
+fn test_dock_fit_prompt_sets_the_prompt_split_from_its_bottom() {
+    let mut layout = default_layout();
+
+    assert!(
+        fit_prompt(&mut layout, 37.0),
+        "a new height changes the split"
+    );
+    let root = layout.root.as_ref().expect("default layout has a root");
+    assert_eq!(prompt_split_size(root), Some(SplitSize::FixedSecond(37.0)));
+    assert!(
+        !fit_prompt(&mut layout, 37.2),
+        "a sub-point change leaves the split alone"
+    );
+    assert!(!fit_prompt(&mut layout, 0.0), "a zero height is ignored");
+    assert!(
+        layout.validate().is_ok(),
+        "the fitted layout still validates"
+    );
 }
 
 #[test]

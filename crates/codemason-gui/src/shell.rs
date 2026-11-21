@@ -574,6 +574,7 @@ impl Shell {
         }
         dialogs::show(ui.ctx(), &mut self.app);
         dialogs::image_view::show(ui.ctx(), &palette);
+        dialogs::diff_view::show(ui.ctx(), &mut self.app, &palette);
         dialogs::about::show(ui.ctx(), &palette);
         self.close.show(ui.ctx(), &mut self.app);
         if matches!(self.frame, craft_window::policy::Frame::Integrated(_)) {
@@ -820,6 +821,14 @@ impl Shell {
         );
         if let Some(err) = output.error {
             tracing::warn!(%err, "dock layout not drawn");
+        }
+        // The prompt pane is as tall as its field, so the field's bottom
+        // stays level with the panes beside it and only its top moves.
+        if let Some(height) = crate::page::field_height(ui.ctx())
+            && dock::fit_prompt(&mut self.layout, height)
+        {
+            self.layout_dirty = true;
+            ui.ctx().request_repaint();
         }
         for action in output.actions {
             match action {

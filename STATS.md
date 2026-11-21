@@ -11,6 +11,14 @@
 
 **Update prompt:** Update @STATS.md to show the composition of the project, show breakdown by crate
 
+> **Prompt field, thinking rows and diff overlay (unreleased).** `codemason-gui`
+> gains one file, `dialogs/diff_view.rs` (the diff overlay); `page.rs`,
+> `dock.rs`, `shell.rs`, `panels/prompt.rs`, `panels/messages.rs` and
+> `panels/diff.rs` get edits. 8 tests are added across `test_prompt`,
+> `test_dock`, `test_activity_rows` and `test_diff_pane`. `cargo nextest run
+> -p codemason-gui` ran 617 tests, all passing. The tables below are not
+> re-measured.
+
 > **Shell-created PR binding and bare-URL links (unreleased).** No crate or
 > file is added or removed: `codemason-tools-vcs` (`binding.rs`),
 > `codemason-agent` (tool dispatcher), `codemason-app-core` (`markdown.rs`)

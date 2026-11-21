@@ -222,15 +222,19 @@ browser) and highlighted code blocks. Your own turns appear in a card marked
 Tool calls fold into one row per run, such as "Read 4 files, edited 2 files,
 ran 1 command (12 s)"; click it to see each call. `/verbosity medium` folds
 only the model's reasoning and `/verbosity high` shows every call. Reasoning
-appears under a "Thinking" row that is open while the reply streams;
-`/thinking-display show` keeps it open and `/thinking-display hide` removes it.
+appears under a "Thinking" row with its line count at the right; a thought of
+3 lines or fewer starts open, a longer one stays closed until you click it.
+`/thinking-display show` shows short thoughts without a row and
+`/thinking-display hide` removes them.
 
-Edits show their diff under the call; click **Open diff** to review a
-message's changed files in the Diff pane. Its row of buttons steps through the
+Edits show their diff under the call, up to 10 lines; a longer diff ends in a
+"n more lines..." banner whose **Open diff** button shows the message's changed
+files in an overlay (its close button is at the top right, or click outside
+it). The overlay and the Diff pane share one view. Its row of buttons steps through the
 files and the hunks and switches the layout and the reviewed mark; a button
 with nothing that way (the first hunk, the last file) is greyed out, and a
 readout at the right of the row says which hunk and which file you are on.
-Click in the pane and the same moves have keys: `]` and `[` for the next and
+In the overlay, or after a click in the pane, the same moves have keys: `]` and `[` for the next and
 previous hunk, `n` and `p` for the next and previous file, `v` to switch
 between unified and split, and `m` to mark a file reviewed. Every button names
 its key when you hover it. The pane's **Close diff** button, at the right of
