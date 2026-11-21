@@ -1,6 +1,6 @@
 //! The macOS app menu, built with craft-menu.
 //!
-//! On macOS the window gets a native menu bar ([`install`], `cfg(target_os =
+//! On macOS the window gets a native menu bar (`install`, `cfg(target_os =
 //! "macos")`): the app menu (About codemason, Services, Hide, Hide Others,
 //! Show All, Quit codemason with Cmd+Q), a View menu with the panel toggles
 //! the keymap defines (with their keymap chords as shortcuts), and AppKit's

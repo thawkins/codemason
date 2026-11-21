@@ -7452,3 +7452,11 @@ fn cron_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronEventRow
         stateful: stateful_i != 0,
     })
 }
+
+/// `codemason-llm` reads provider keys through this trait so it does not
+/// depend on `codemason-storage` (#10, LC-08).
+impl codemason_types::provider_auth::ProviderAuthSource for Storage {
+    fn get_provider_auth(&self, provider_id: &str) -> Result<Option<String>> {
+        Self::get_provider_auth(self, provider_id)
+    }
+}

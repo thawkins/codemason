@@ -96,7 +96,7 @@ pub fn widget_palette(palette: &Palette) -> WidgetPalette {
 /// warning and error colours, and the selection colour under body text.
 /// Corners use the radius scale: small for widgets, medium for menus, large
 /// for windows. A theme with its own Material roles (an `m3` block) is then
-/// re-coloured from them by [`apply_m3`].
+/// re-coloured from them by `apply_m3`.
 #[must_use]
 pub fn visuals_for(tokens: &ThemeTokens) -> egui::Visuals {
     let palette = Palette::from_tokens(tokens);

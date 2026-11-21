@@ -38,6 +38,7 @@ Dev-dependencies: tokio (full), serial_test, tempfile.
 - **message** — Conversation message types (`Message`, `MessagePart`, `Role`, `ToolCallState`, `ToolCallStatus`, `ImageData`).
 - **panic_guard** — Thread-local contained-panic marker cooperating with the global panic hook.
 - **permission** — Permission decision types (`PermissionDecision`) referenced by the event system.
+- **provider_auth** — `ProviderAuthSource`: the one-method read access to stored provider API keys that `codemason-llm` depends on instead of `codemason-storage` (`Storage` implements it).
 - **resource** — Process resource limits: bounded concurrency semaphores for child-process spawning and tool execution.
 - **sanitize** — Secret redaction utilities (pattern-based and exact-match registry).
 - **startup** — Startup timing instrumentation (`StartupTimings`).

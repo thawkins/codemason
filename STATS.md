@@ -19,6 +19,18 @@
 > codemason-tools-vcs -p codemason-app-core -p codemason-gui` ran 4,537 tests,
 > all passing.
 
+> **Removable attachment thumbnails (unreleased, branch `festive_easley`).**
+> Staged images above the prompt are now thumbnails (`material/thumbnail.rs`,
+> new, with `panels/prompt.rs::attachments_row` rewritten from a text row), each
+> removable and double-clickable to open full size. No crate is added or
+> removed. 3 test files are added or extended: `test_material_thumbnail.rs`
+> (new, 9 widget tests), `test_remove_pending_attachment.rs` (new, 6 tests in
+> `codemason-app-core`), and `test_prompt.rs` (4 new tests), so 19 tests are
+> added. The tables below are not re-measured. Four pre-existing rustdoc
+> link errors in `palette.rs`, `platform/menu.rs`, `shell.rs` and `theme.rs` are
+> fixed in a separate commit, so `cargo doc -p codemason-gui --no-deps` is clean
+> under `RUSTDOCFLAGS=-D warnings`.
+>
 > **Sessions panel heading sizes and Help/About (unreleased).** Two GUI passes:
 > the Sessions panel's project headings are drawn 20% larger than the session
 > rows' titles with a 40% shorter blank row above them (`heading_size`,

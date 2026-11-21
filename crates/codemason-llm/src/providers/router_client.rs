@@ -18,6 +18,7 @@ use super::router_config::{RouterConfig, TierConfig, TierEntry};
 use super::router_modifiers;
 use crate::llm::{ChatRequest, LlmClient, StreamEvent};
 use crate::provider::ProviderRegistry;
+use codemason_types::provider_auth::ProviderAuthSource;
 
 /// LLM client that routes requests based on prompt classification.
 ///
@@ -32,7 +33,7 @@ pub struct RouterClient {
     /// Optional storage handle used to resolve database-backed provider API keys.
     /// When `Some`, keys stored via `codemason auth` take precedence over
     /// environment variables.
-    storage: Option<Arc<codemason_storage::Storage>>,
+    storage: Option<Arc<dyn ProviderAuthSource>>,
     /// Optional event bus for publishing router lifecycle events (e.g.
     /// classification results) to the TUI log panel.
     event_bus: Option<Arc<codemason_types::event::EventBus>>,
@@ -52,7 +53,7 @@ impl RouterClient {
     pub fn new(
         config: RouterConfig,
         registry: Option<Arc<ProviderRegistry>>,
-        storage: Option<Arc<codemason_storage::Storage>>,
+        storage: Option<Arc<dyn ProviderAuthSource>>,
     ) -> Self {
         Self {
             config,

@@ -15,7 +15,6 @@ default = []
 [dependencies]
 codemason-types = { path = "../codemason-types" }
 codemason-config = { path = "../codemason-config" }
-codemason-storage = { path = "../codemason-storage" }
 async-trait = { workspace = true }
 
 # Core async runtime
@@ -45,6 +44,9 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 
 [dev-dependencies]
+# Only `tests/test_openrouter_provider.rs` builds a real `Storage`; the library
+# reads keys through `codemason_types::provider_auth::ProviderAuthSource`.
+codemason-storage = { path = "../codemason-storage" }
 tempfile = "3.14"
 # `test-util` lets the stall-guard test pause time instead of waiting 120 s.
 tokio = { version = "1.42", features = ["full", "test-util"] }
