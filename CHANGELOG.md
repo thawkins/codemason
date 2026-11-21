@@ -58,10 +58,12 @@
   never finds. `image_load::file_uri` now puts the share where a URI's authority
   goes (`file://server\share\shots\screen.png`), which is the form the loader
   turns back into the share path, and `image_load::uri_path` rebuilds the two
-  backslashes from that host, so a UNC path round-trips as a UNC path. A relative
-  path still has no authority to put there, so it keeps the scheme's two slashes
-  and both `file_uri` and `uri_path` read it as a host: resolve a path before it
-  becomes a URI.
+  backslashes from that host, so a UNC path round-trips as a UNC path. Both
+  branches are gated on Windows, the one platform where the loader applies that
+  rule, so elsewhere a URI's text stays the path it names and the pair remain
+  exact inverses there too. A relative path still has no authority to put
+  there, so it keeps the scheme's two slashes and both `file_uri` and `uri_path`
+  read it as a host: resolve a path before it becomes a URI.
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
 
 ## [1.0.173] - 2026-11-21

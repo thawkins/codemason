@@ -138,26 +138,27 @@ fn test_image_load_file_uri_puts_the_third_slash_of_a_drive_path() {
 
 #[test]
 fn test_image_load_file_uri_puts_a_unc_host_after_the_scheme() {
-    // A UNC path's share is the URI's authority: the loader puts the two
-    // backslashes back in front of the host, so `file://server/share` is the
-    // share path and `file://\\server\share` would be a path named `\\`.
+    // A UNC path's share is the URI's authority on Windows: the loader puts the
+    // two backslashes back in front of the host, so `file://server/share` is the
+    // share path and `file://\\server\share` would be a path named `\\`. Only
+    // Windows rebuilds a host, so elsewhere the share has no authority to move
+    // into and the path is written as it stands.
     let path = std::path::Path::new(r"\\server\share\shots\screen.png");
     let uri = file_uri(path);
-    assert_eq!(uri, r"file://server\share\shots\screen.png");
+    if cfg!(windows) {
+        assert_eq!(uri, r"file://server\share\shots\screen.png");
+    } else {
+        assert_eq!(uri, r"file://\\server\share\shots\screen.png");
+    }
+    // Either way the inverse is exact, which is what `refresh_if_changed` needs
+    // to stat the file the URI came from.
+    assert_eq!(uri_path(&uri).as_deref(), Some(path), "and back again");
     // The extended-length form is a share path too, and round-trips as it is.
     let long = std::path::Path::new(r"\\?\C:\shots\screen.png");
-    assert_eq!(file_uri(long), r"file://?\C:\shots\screen.png");
     if cfg!(windows) {
-        assert_eq!(uri_path(&uri).as_deref(), Some(path), "and back again");
-        assert_eq!(uri_path(&file_uri(long)).as_deref(), Some(long));
-    } else {
-        // Only the loader on Windows rebuilds a host; elsewhere the text after
-        // the scheme is the path, so nothing here claims a share it cannot name.
-        assert_eq!(
-            uri_path(&uri).as_deref(),
-            Some(std::path::Path::new(r"server\share\shots\screen.png"))
-        );
+        assert_eq!(file_uri(long), r"file://?\C:\shots\screen.png");
     }
+    assert_eq!(uri_path(&file_uri(long)).as_deref(), Some(long));
 }
 
 #[test]
@@ -211,15 +212,21 @@ fn test_image_load_file_uri_dir_keeps_a_drive_path_resolvable() {
         file_uri_dir(std::path::Path::new("/home/me/shots/")),
         "file:///home/me/shots/"
     );
-    // A share is the authority, so its host stays after the scheme.
+    // A share is the authority on Windows, so its host stays after the scheme.
     let share = file_uri_dir(std::path::Path::new(r"\\server\share\shots"));
-    assert_eq!(share, r"file://server\share\shots/");
-    if cfg!(windows) {
-        assert_eq!(
-            uri_path(&format!("{share}screen.png")).as_deref(),
-            Some(std::path::Path::new(r"\\server\share\shots/screen.png"))
-        );
-    }
+    assert_eq!(
+        share,
+        if cfg!(windows) {
+            r"file://server\share\shots/"
+        } else {
+            r"file://\\server\share\shots/"
+        }
+    );
+    assert_eq!(
+        uri_path(&format!("{share}screen.png")).as_deref(),
+        Some(std::path::Path::new(r"\\server\share\shots/screen.png")),
+        "a share prefix stays a share path"
+    );
 }
 
 #[test]

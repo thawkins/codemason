@@ -55,7 +55,9 @@ fn is_drive_path(text: &str) -> bool {
 /// - a UNC path puts its host where an authority goes
 ///   (`\\server\share\screen.png` becomes `file://server\share\screen.png`),
 ///   which the loader turns back into the share path by putting the two
-///   backslashes in front of the host itself;
+///   backslashes in front of the host itself. Only Windows rebuilds a host, so
+///   that reading is Windows-only and the move is too: elsewhere the path is
+///   written as it stands and [`uri_path`] reads it back unchanged;
 /// - a plain absolute path already begins with the separator
 ///   (`file:///home/me/shot.png`), so it is written as it stands.
 ///
@@ -71,10 +73,13 @@ pub fn file_uri(path: &Path) -> String {
     let text = path.display().to_string();
     if is_drive_path(&text) {
         format!("file:///{text}")
-    } else if is_unc_path(&text) {
+    } else if is_unc_path(&text) && cfg!(windows) {
         // The host follows the scheme: the loader writes the two backslashes
         // back in front of it, so `\\server\share` round-trips. The two are
         // removed by their byte count, which is why the check is a byte one.
+        // Gated on Windows to match `uri_path`, which rebuilds a host only
+        // where the loader does: elsewhere the share has no authority to move
+        // into, so the path is left as it stands and reads back unchanged.
         format!("file://{}", &text[2..])
     } else {
         format!("file://{text}")
@@ -99,7 +104,7 @@ fn is_unc_path(text: &str) -> bool {
 /// prefix has to be built by the same rule as [`file_uri`] or a Windows drive
 /// takes the drive's `C:` for a UNC host. `file:///C:/shots/` keeps the third
 /// slash on a drive path, a plain directory already begins with the separator,
-/// and a UNC share keeps its host after the scheme.
+/// and, on Windows, a UNC share keeps its host after the scheme.
 #[must_use]
 pub fn file_uri_dir(dir: &Path) -> String {
     let mut uri = file_uri(dir);
@@ -121,8 +126,9 @@ pub fn file_uri_dir(dir: &Path) -> String {
 /// rebuilds a UNC path from it on Windows only, and so does this, by putting
 /// two backslashes in front of the text unless it already begins with them;
 /// elsewhere the text is the path the loader reads, so a relative
-/// `file://shots/screen.png` stays relative. Percent escapes are not decoded, as
-/// [`file_uri`] does not write them.
+/// `file://shots/screen.png` stays relative and a share path is read as the
+/// path it already is. Percent escapes are not decoded, as [`file_uri`] does
+/// not write them.
 #[must_use]
 pub fn uri_path(uri: &str) -> Option<PathBuf> {
     let text = uri.strip_prefix("file://")?;
