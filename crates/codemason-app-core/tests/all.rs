@@ -575,6 +575,8 @@ mod test_statusbar_last_prompt;
 mod test_store_cache;
 #[path = "test_store_cache_fetch.rs"]
 mod test_store_cache_fetch;
+#[path = "test_store_cache_open.rs"]
+mod test_store_cache_open;
 #[path = "test_stream_metrics.rs"]
 mod test_stream_metrics;
 #[path = "test_styled.rs"]

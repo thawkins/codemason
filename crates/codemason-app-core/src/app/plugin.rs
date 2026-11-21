@@ -230,7 +230,7 @@ fn render_mcp_tool_report(app: &crate::app::App) -> String {
 /// may contain spaces. A missing `--category` value degrades to the unfiltered
 /// `ALL` selection so a malformed flag never filters everything out. The category
 /// value is validated against the categories the fetched index actually carries
-/// once the off-loop fetch lands (see [`crate::app::App::poll_plugin_store_result`]),
+/// once the off-loop fetch lands (see [`crate::app::App::poll_store_cache`]),
 /// so an unknown value renders the panel's inline refusal rather than an empty list.
 #[must_use]
 fn parse_store_launch(rest: &str) -> (String, CategoryFilter, bool) {

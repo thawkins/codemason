@@ -91,12 +91,7 @@ async fn drive_fetch(app: &mut App, kind: StoreKind, stores: &PluginStoresConfig
 
     let mut delivered = false;
     for _ in 0..300 {
-        if app
-            .plugin_store_result
-            .lock()
-            .map(|guard| guard.is_some())
-            .unwrap_or(false)
-        {
+        if support::store_fetch_landed(app) {
             delivered = true;
             break;
         }
@@ -104,7 +99,7 @@ async fn drive_fetch(app: &mut App, kind: StoreKind, stores: &PluginStoresConfig
     }
     assert!(delivered, "the off-loop fixture fetch delivered a result");
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 }
 
 /// Bounded wait for the off-loop install worker to deposit its result, then

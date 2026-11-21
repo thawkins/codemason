@@ -26,16 +26,15 @@ use codemason_tools_core::{Tool, ToolContext};
 
 // State types from app/state.rs
 use crate::app::state::{
-    App, ConnectorBrowseStatus, ConnectorCatalogueInstallResult, ConnectorCatalogueResult,
-    ConnectorEnrichResult, ContextAction, ContextMenuState, ContextPartitionSnapshot,
-    FileMenuEntry, FileMenuState, LlmRequestStat, LlmStatsSummary, LogEntry, LogLevel,
-    OutputViewState, OutputViewTarget, PluginStoreBrowser, PluginStoreFetchResult,
+    App, ConnectorCatalogueInstallResult, ContextAction, ContextMenuState,
+    ContextPartitionSnapshot, FileMenuEntry, FileMenuState, LlmRequestStat, LlmStatsSummary,
+    LogEntry, LogLevel, OutputViewState, OutputViewTarget, PluginStoreBrowser,
     PluginStoreInstallResult, ProviderSetupStep, QueuedInput, ScrollbarDragPane, SelectionPane,
-    StoreEnrichResult, StorePane, TextSelection, atomic_config_update, is_image_path,
-    percent_decode_path, save_clipboard_image_to_temp,
+    StorePane, TextSelection, atomic_config_update, is_image_path, percent_decode_path,
+    save_clipboard_image_to_temp,
 };
 
-use crate::app::StoreCacheKey;
+use crate::app::{CacheSlot, CacheView, SlotData, StoreCache, StoreCacheKey};
 
 // Helpers
 use crate::app::helpers::{MentionSpan, short_id, short_session_id};
@@ -73,36 +72,88 @@ pub fn recover_poisoned<'a, T>(
     }
 }
 
-/// Push one enrichment message onto the shared queue, recovering a poisoned lock
-/// (FR-025).
-///
-/// The off-loop enrichment worker calls this for each resolved update and once for
-/// the terminal [`StoreEnrichResult::Finished`]; the UI thread drains the queue in
-/// [`App::poll_store_enrichment`].
-fn push_enrich_result(slot: &std::sync::Mutex<Vec<StoreEnrichResult>>, message: StoreEnrichResult) {
-    push_enrich(slot, "store_enrich_result", message);
+/// What an open store browser should take from its cache slot on one poll.
+enum CacheRead<E, U> {
+    /// Nothing new: leave the browser as it is.
+    Unchanged,
+    /// The slot's fetch failed with no earlier data and no retry in flight.
+    Failed {
+        /// Generation of the failed fetch.
+        generation: u64,
+        /// The failure detail for the inline error.
+        cause: String,
+    },
+    /// The slot holds an index.
+    Ready {
+        /// Generation of the index.
+        generation: u64,
+        /// The entries and skip count, when the browser has not shown this index.
+        fresh: Option<(Vec<E>, usize)>,
+        /// Manifest updates the browser has not applied yet.
+        updates: Vec<U>,
+        /// Whether the index's enrichment finished.
+        enriched: bool,
+        /// Warnings to post: the index's warnings the first time it is shown.
+        warnings: Vec<String>,
+    },
 }
 
-/// Push one catalogue-enrichment message onto the shared queue, recovering a
-/// poisoned lock (spec `connectors` FR-044).
-///
-/// The off-loop enrichment worker calls this for each resolved update and once for
-/// the terminal [`ConnectorEnrichResult::Finished`]; the UI thread drains the queue
-/// in [`App::poll_connector_enrichment`].
-fn push_connector_enrich_result(
-    slot: &std::sync::Mutex<Vec<ConnectorEnrichResult>>,
-    message: ConnectorEnrichResult,
+/// Compare `slot` with how far a browser consumed it (`view`) and return what the
+/// browser has not taken yet.
+fn read_cache_slot<E: Clone, U: Clone>(
+    slot: &CacheSlot<E, U>,
+    view: Option<CacheView>,
+) -> CacheRead<E, U> {
+    match &slot.data {
+        SlotData::Empty => CacheRead::Unchanged,
+        SlotData::Failed { generation, cause } => {
+            if slot.in_flight.is_some() || view.map(|v| v.generation) == Some(*generation) {
+                CacheRead::Unchanged
+            } else {
+                CacheRead::Failed {
+                    generation: *generation,
+                    cause: cause.clone(),
+                }
+            }
+        }
+        SlotData::Ready(index) => {
+            let shown = view.filter(|v| v.generation == index.generation);
+            let fresh = shown
+                .is_none()
+                .then(|| (index.entries.clone(), index.skipped));
+            let applied = shown.map_or(0, |v| v.applied_updates);
+            let warnings = if fresh.is_some() && !index.warnings_shown {
+                index.warnings.clone()
+            } else {
+                Vec::new()
+            };
+            CacheRead::Ready {
+                generation: index.generation,
+                fresh,
+                updates: index.updates.get(applied..).unwrap_or(&[]).to_vec(),
+                enriched: index.enriched,
+                warnings,
+            }
+        }
+    }
+}
+
+/// Record in `cache` that the warnings `read` is about to post were shown, so a
+/// later open of the same index does not post them again.
+fn mark_read_warnings_shown<E, U>(
+    cache: &mut StoreCache,
+    key: StoreCacheKey,
+    read: &CacheRead<E, U>,
 ) {
-    push_enrich(slot, "connector_enrich_result", message);
-}
-
-/// Append one enrichment message to `slot`, recovering a poisoned lock.
-///
-/// The one shared body behind [`push_enrich_result`] and
-/// [`push_connector_enrich_result`], so the two panels' queues cannot diverge on
-/// the poisoned-lock discipline.
-fn push_enrich<T>(slot: &std::sync::Mutex<Vec<T>>, name: &str, message: T) {
-    recover_poisoned(slot.lock(), name).push(message);
+    if let CacheRead::Ready {
+        generation,
+        warnings,
+        ..
+    } = read
+        && !warnings.is_empty()
+    {
+        cache.mark_warnings_shown(key, *generation);
+    }
 }
 
 /// Run one plugin-store install through the existing `add` entry point and map
@@ -1500,16 +1551,17 @@ impl App {
     ///
     /// Both `/plugins codex` and `/plugins claude` drive the same browser,
     /// parameterised only by store (A2). The panel opens in the `Loading` state
-    /// and its index fetch is started off-loop ([`Self::spawn_plugin_store_fetch`])
-    /// so the event loop and any in-progress agent turn keep animating (FR-007,
-    /// FR-016, FR-026). Opening the panel installs nothing and touches no input
+    /// and reads its index from [`App::store_cache`]: a cached index fills it on the
+    /// open frame, otherwise (or with `refresh`, or after a partial failure) a
+    /// background fetch is started ([`Self::start_store_fetch`]) so the event loop
+    /// and any in-progress agent turn keep animating (FR-007, FR-016, FR-026). Opening the panel installs nothing and touches no input
     /// state (FR-022); while it is open the input field and the queue are locked
     /// (FR-015).
     ///
     /// `category` is the filter parsed from a `--category <name>` launch
     /// (`CategoryFilter::all()` when absent). It is applied once the fetch lands,
     /// against the categories the fetched index actually declares
-    /// ([`App::poll_plugin_store_result`]), so an unknown name is reported inline
+    /// ([`App::poll_store_cache`]), so an unknown name is reported inline
     /// rather than leaving a silently empty panel (FR-022).
     ///
     /// The installed-plugin-id set is derived once from the store scan on open
@@ -1526,29 +1578,176 @@ impl App {
         browser.set_installed(installed);
         browser.set_pending_category(category);
         self.plugin_store = Some(browser);
-        self.spawn_plugin_store_fetch(kind);
+        self.plugin_store_view = None;
+        let key = StoreCacheKey::Plugins(kind);
+        let needs_fetch =
+            recover_poisoned(self.store_cache.lock(), "store_cache").needs_fetch(key, refresh);
+        if needs_fetch {
+            self.start_store_fetch(key);
+        }
+        self.poll_store_cache();
     }
 
-    /// Start the store-index fetch for `kind` off the event loop (spec
-    /// `pluginstores` T-008; FR-007, FR-016, FR-026).
+    /// Reopen the plugin-store browser on the other store `kind`, with an empty
+    /// search and no refresh; the cached index for `kind` fills it immediately.
+    pub fn switch_plugin_store_kind(&mut self, kind: StoreKind) {
+        self.open_plugin_store(kind, "", false);
+    }
+
+    /// Force a re-fetch of the index shown by whichever store browser is open
+    /// (plugin store or connector catalogue). The browser keeps showing the
+    /// cached index until the new one lands; a no-op while a fetch for that index
+    /// is already in flight or when no browser is open.
+    pub fn refresh_open_store(&mut self) {
+        if let Some(kind) = self.plugin_store.as_ref().map(|browser| browser.kind) {
+            self.start_store_fetch(StoreCacheKey::Plugins(kind));
+        }
+        if self.connector_store.is_some() {
+            self.start_store_fetch(StoreCacheKey::Connectors);
+        }
+    }
+
+    /// Fill the open store browsers from [`App::store_cache`] (called on open and
+    /// each housekeeping frame).
     ///
-    /// Resolves the effective endpoint (configured override, else the compiled
-    /// default; T-015, FR-027..FR-029) and the fetch budgets from config on the
-    /// UI thread, then hands the blocking `reqwest` download to the TUI's
-    /// background path so the event loop never stalls. The parsed index (or the
-    /// contained [`StoreError`]) is delivered back through the
-    /// [`App::plugin_store_result`] slot and applied by
-    /// [`App::poll_plugin_store_result`] on a later frame, so the panel renders
-    /// its loading row until the result lands (FR-016).
-    ///
-    /// A refused endpoint (non-`https` or malformed, FR-024) is surfaced
-    /// immediately as the panel's inline error state instead of spawning, and
-    /// the fetch is skipped entirely when no async reactor is available. No path
-    /// panics (FR-025).
-    pub(crate) fn spawn_plugin_store_fetch(&mut self, kind: StoreKind) {
-        let (_dirs, plugins) = store_and_config(&self.cwd_path);
-        let stores = plugins.stores_or_default();
-        self.spawn_plugin_store_fetch_with_stores(kind, &stores);
+    /// For the open plugin-store browser (the slot of its store kind) and the open
+    /// connector-catalogue browser: an index the browser has not shown yet replaces
+    /// its listing and applies any pending `--category`, posting the index's
+    /// warnings to the message window the first time they are shown; manifest
+    /// updates the browser has not applied yet are applied once each; the
+    /// `loading details...` hint follows the index's enrichment state. A failed
+    /// fetch with no earlier data and no retry in flight shows the inline error.
+    /// Otherwise (nothing fetched yet, or a retry in flight) the browser is left
+    /// as it is. No path panics.
+    pub fn poll_store_cache(&mut self) {
+        self.poll_plugin_store_cache();
+        self.poll_connector_store_cache();
+    }
+
+    /// [`Self::poll_store_cache`] for the plugin-store browser.
+    fn poll_plugin_store_cache(&mut self) {
+        let Some(kind) = self.plugin_store.as_ref().map(|browser| browser.kind) else {
+            return;
+        };
+        let key = StoreCacheKey::Plugins(kind);
+        let read = {
+            let mut cache = recover_poisoned(self.store_cache.lock(), "store_cache");
+            let read = read_cache_slot(cache.plugin(kind), self.plugin_store_view);
+            mark_read_warnings_shown(&mut cache, key, &read);
+            read
+        };
+        match read {
+            CacheRead::Unchanged => {}
+            CacheRead::Failed { generation, cause } => {
+                self.plugin_store_view = Some(CacheView {
+                    generation,
+                    applied_updates: 0,
+                });
+                self.plugin_store_failed(kind, cause);
+            }
+            CacheRead::Ready {
+                generation,
+                fresh,
+                updates,
+                enriched,
+                warnings,
+            } => {
+                for warning in warnings {
+                    self.push_log_no_agent(LogLevel::Warn, warning);
+                }
+                let Some(browser) = self.plugin_store.as_mut() else {
+                    return;
+                };
+                if let Some((entries, skipped)) = fresh {
+                    browser.set_index(StoreIndex {
+                        store: None,
+                        entries,
+                        skipped,
+                    });
+                    // A `--category <name>` launch is validated against the
+                    // categories the index actually declares (spec `catnav` FR-022).
+                    browser.apply_pending_category();
+                    self.plugin_store_view = Some(CacheView {
+                        generation,
+                        applied_updates: 0,
+                    });
+                }
+                let applied = updates.len();
+                for update in updates {
+                    browser.apply_manifest_update(update);
+                }
+                if let Some(view) = self.plugin_store_view.as_mut() {
+                    view.applied_updates += applied;
+                }
+                if enriched {
+                    browser.finish_enrichment();
+                } else {
+                    browser.enriching = true;
+                }
+            }
+        }
+    }
+
+    /// [`Self::poll_store_cache`] for the connector-catalogue browser.
+    fn poll_connector_store_cache(&mut self) {
+        if self.connector_store.is_none() {
+            return;
+        }
+        let key = StoreCacheKey::Connectors;
+        let read = {
+            let mut cache = recover_poisoned(self.store_cache.lock(), "store_cache");
+            let read = read_cache_slot(cache.connectors(), self.connector_store_view);
+            mark_read_warnings_shown(&mut cache, key, &read);
+            read
+        };
+        match read {
+            CacheRead::Unchanged => {}
+            CacheRead::Failed { generation, cause } => {
+                self.connector_store_view = Some(CacheView {
+                    generation,
+                    applied_updates: 0,
+                });
+                self.connector_catalogue_failed(cause);
+            }
+            CacheRead::Ready {
+                generation,
+                fresh,
+                updates,
+                enriched,
+                warnings,
+            } => {
+                // A refused added marketplace (FR-043) never blinds the panel; it is
+                // surfaced as a warning line so the dropped marketplace is visible.
+                for warning in warnings {
+                    self.push_log_no_agent(LogLevel::Warn, warning);
+                }
+                let Some(browser) = self.connector_store.as_mut() else {
+                    return;
+                };
+                if let Some((entries, skipped)) = fresh {
+                    browser.set_entries(entries, skipped);
+                    // A launch category the catalogue does not carry is refused
+                    // here and reported in the footer (FR-041).
+                    browser.apply_pending_category();
+                    self.connector_store_view = Some(CacheView {
+                        generation,
+                        applied_updates: 0,
+                    });
+                }
+                let applied = updates.len();
+                for update in updates {
+                    browser.apply_manifest_update(update);
+                }
+                if let Some(view) = self.connector_store_view.as_mut() {
+                    view.applied_updates += applied;
+                }
+                if enriched {
+                    browser.finish_enrichment();
+                } else {
+                    browser.enriching = true;
+                }
+            }
+        }
     }
 
     /// Install an injectable store-index fetch seam (spec `pluginstores` T-019;
@@ -1565,17 +1764,18 @@ impl App {
         self.plugin_store_fetcher = fetcher;
     }
 
-    /// [`Self::spawn_plugin_store_fetch`] with the store budget/endpoint block
-    /// supplied by the caller, so the resolution and refusal paths are testable
-    /// without reading a real config file (FR-024, FR-027..FR-029).
+    /// [`Self::start_store_fetch`] for the plugin store `kind` with the store
+    /// budget/endpoint block supplied by the caller, so the resolution and refusal
+    /// paths are testable without reading a real config file (FR-024,
+    /// FR-027..FR-029). The open browser is then polled, so a refused endpoint
+    /// shows its inline error at once.
     pub fn spawn_plugin_store_fetch_with_stores(
         &mut self,
         kind: StoreKind,
         stores: &codemason_config::PluginStoresConfig,
     ) {
-        // Until the browser reads the store cache, this path both feeds the open
-        // panel's delivery slot and fills the cache from the same fetch.
-        self.start_plugin_cache_fetch(kind, stores, true);
+        self.start_plugin_cache_fetch(kind, stores);
+        self.poll_store_cache();
     }
 
     /// Start a background fetch of the marketplace index for `key` into
@@ -1596,7 +1796,7 @@ impl App {
             StoreCacheKey::Plugins(kind) => {
                 let (_dirs, plugins) = store_and_config(&self.cwd_path);
                 let stores = plugins.stores_or_default();
-                self.start_plugin_cache_fetch(kind, &stores, false);
+                self.start_plugin_cache_fetch(kind, &stores);
             }
             StoreCacheKey::Connectors => self.start_connector_cache_fetch(),
         }
@@ -1623,41 +1823,32 @@ impl App {
     }
 
     /// Fetch the plugin store `kind` from every endpoint in `stores` off the
-    /// event loop, filling [`App::store_cache`] and, when `legacy` is set, also
-    /// delivering the outcome to [`App::plugin_store_result`] for the open panel
-    /// (FR-007, FR-016, FR-024, FR-026, FR-048).
+    /// event loop, filling [`App::store_cache`] (FR-007, FR-016, FR-024, FR-026,
+    /// FR-048).
     ///
-    /// With `legacy` set the fetch always runs, even when a cache fetch is
-    /// already in flight (the cache is then left to that fetch). A refused base
-    /// endpoint (non-`https` or malformed, FR-024) fails the cache slot and, with
-    /// `legacy`, the open panel, with no fetch attempted.
+    /// A no-op while a fetch for `kind` is already in flight. A refused base
+    /// endpoint (non-`https` or malformed, FR-024) fails the cache slot with no
+    /// fetch attempted.
     fn start_plugin_cache_fetch(
         &mut self,
         kind: StoreKind,
         stores: &codemason_config::PluginStoresConfig,
-        legacy: bool,
     ) {
         let key = StoreCacheKey::Plugins(kind);
-        let generation = self.begin_store_cache_fetch(key);
-        if generation.is_none() && !legacy {
+        let Some(generation) = self.begin_store_cache_fetch(key) else {
             return;
-        }
+        };
         // The store's base endpoint (config override or compiled default) is the
         // primary marketplace: a refused base is reported with no fetch attempted.
         // Added marketplaces (FR-048) are then appended; a refused added URL is
         // skipped (one bad added URL does not blind the whole store) and reported
         // as a warning.
         if let Err(err) = kind.effective_endpoint_with_source(stores) {
-            if let Some(generation) = generation {
-                recover_poisoned(self.store_cache.lock(), "store_cache").fail(
-                    key,
-                    generation,
-                    err.to_string(),
-                );
-            }
-            if legacy {
-                self.plugin_store_failed(kind, err.to_string());
-            }
+            recover_poisoned(self.store_cache.lock(), "store_cache").fail(
+                key,
+                generation,
+                err.to_string(),
+            );
             return;
         }
         let (endpoints, refused) = kind.effective_endpoints_with_source(stores);
@@ -1687,24 +1878,15 @@ impl App {
                 store = kind.token(),
                 "plugin-store fetch skipped: no async runtime available"
             );
-            if let Some(generation) = generation {
-                recover_poisoned(self.store_cache.lock(), "store_cache").cancel(key, generation);
-            }
+            recover_poisoned(self.store_cache.lock(), "store_cache").cancel(key, generation);
             return;
         };
         let cache = Arc::clone(&self.store_cache);
-        let legacy_slot = legacy.then(|| Arc::clone(&self.plugin_store_result));
         let fetcher = Arc::clone(&self.plugin_store_fetcher);
         let source = Arc::clone(&self.store_manifest_source);
         handle.spawn_blocking(move || {
             let (outcome, failed) =
                 fetch_merged_plugin_index(fetcher.as_ref(), kind, &endpoints, &limits);
-            if let Some(slot) = &legacy_slot {
-                Self::deposit_plugin_store_result(slot, kind, outcome.clone());
-            }
-            let Some(generation) = generation else {
-                return;
-            };
             let index = match outcome {
                 Ok(index) => index,
                 Err(err) => {
@@ -1798,17 +1980,6 @@ impl App {
         }
     }
 
-    /// Store one fetch outcome in the shared delivery slot, recovering a
-    /// poisoned lock (FR-025).
-    fn deposit_plugin_store_result(
-        slot: &std::sync::Mutex<Option<PluginStoreFetchResult>>,
-        kind: StoreKind,
-        outcome: Result<StoreIndex, StoreError>,
-    ) {
-        *recover_poisoned(slot.lock(), "plugin_store_result") =
-            Some(PluginStoreFetchResult { kind, outcome });
-    }
-
     /// Drop entries whose id was already seen, keeping the first occurrence, so a
     /// plugin listed by more than one marketplace (e.g. a plugin added from a
     /// community marketplace that is also in the store default) appears once in
@@ -1821,116 +1992,6 @@ impl App {
         entries.retain(|entry| seen.insert(entry.id.clone()));
     }
 
-    /// Drain a completed off-loop store-index fetch and apply it to the open
-    /// panel (spec `pluginstores` T-008; FR-013, FR-016, FR-017).
-    ///
-    /// Called each housekeeping frame. A result whose store no longer matches the
-    /// open browser (the panel was closed or re-opened for the other store) is
-    /// discarded, so a late arrival can never fill the wrong panel. On success
-    /// the entries are installed (deriving the `Ready`/`Empty` status, FR-017);
-    /// on failure the contained [`StoreError`] is rendered as the inline error
-    /// detail (FR-013). No path panics (FR-025).
-    pub fn poll_plugin_store_result(&mut self) {
-        let result = {
-            let mut guard =
-                recover_poisoned(self.plugin_store_result.lock(), "plugin_store_result");
-            guard.take()
-        };
-        let Some(result) = result else {
-            return;
-        };
-        let open_kind = self.plugin_store.as_ref().map(|b| b.kind);
-        if open_kind != Some(result.kind) {
-            // Stale: the panel is closed or showing the other store (FR-007).
-            return;
-        }
-        match result.outcome {
-            Ok(index) => {
-                if let Some(browser) = self.plugin_store.as_mut() {
-                    browser.set_index(index);
-                    // A `--category <name>` launch is validated against the
-                    // categories the fetched index actually declares, so an unknown
-                    // name is reported in the footer rather than leaving the panel
-                    // silently empty (spec `catnav` FR-022).
-                    browser.apply_pending_category();
-                }
-                // Now that the index is loaded, enrich each entry from its own
-                // manifest off-loop, since the marketplace index usually omits the
-                // version and (for Codex) the description entirely (FR-048).
-                self.start_store_enrichment(result.kind);
-            }
-            Err(err) => self.plugin_store_failed(result.kind, err.panel_detail(result.kind)),
-        }
-    }
-
-    /// Start the off-loop manifest-metadata enrichment of the index now loaded in
-    /// the open browser (spec `pluginstores` FR-048).
-    ///
-    /// Snapshots the loaded entries on the UI thread, bumps the enrichment
-    /// generation so any in-flight worker's messages are discarded, marks the panel
-    /// [`PluginStoreBrowser::enriching`], and hands the per-entry manifest lookups to
-    /// the TUI's background path ([`App::store_manifest_source`]) so the event loop
-    /// never stalls (FR-016, FR-026). Each resolved update is pushed onto
-    /// [`App::store_enrich_result`] and drained by [`App::poll_store_enrichment`].
-    ///
-    /// A no-op when no panel is open for `kind`, when the panel is loading or
-    /// failed, or when no async reactor is available (headless/unit-test contexts);
-    /// no path panics.
-    pub(crate) fn start_store_enrichment(&mut self, kind: StoreKind) {
-        let entries = match self.plugin_store.as_ref() {
-            Some(browser) if browser.kind == kind => {
-                if matches!(browser.status, crate::app::PluginStoreStatus::Ready) {
-                    browser.all.clone()
-                } else {
-                    return;
-                }
-            }
-            _ => return,
-        };
-        let generation = self
-            .store_enrich_generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        if let Some(browser) = self.plugin_store.as_mut()
-            && browser.kind == kind
-        {
-            browser.enriching = true;
-        }
-
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            // Without an async reactor the enrichment cannot run off-loop; running
-            // it inline would block the caller (FR-016/FR-026), so it is skipped and
-            // the panel simply keeps whatever the index declared.
-            tracing::debug!(
-                store = kind.token(),
-                "store enrichment skipped: no async runtime available"
-            );
-            if let Some(browser) = self.plugin_store.as_mut()
-                && browser.kind == kind
-            {
-                browser.finish_enrichment();
-            }
-            return;
-        };
-
-        let source = Arc::clone(&self.store_manifest_source);
-        let slot = Arc::clone(&self.store_enrich_result);
-        handle.spawn_blocking(move || {
-            let sink = |update: codemason_plugins::ManifestUpdate| {
-                push_enrich_result(
-                    &slot,
-                    StoreEnrichResult::Update {
-                        generation,
-                        kind,
-                        update,
-                    },
-                );
-            };
-            codemason_plugins::enrich_into(&entries, kind, source.as_ref(), &sink);
-            push_enrich_result(&slot, StoreEnrichResult::Finished { generation, kind });
-        });
-    }
-
     /// Install an injectable manifest-metadata source (spec `pluginstores` FR-048).
     ///
     /// Replaces the production HTTPS source with an alternative implementation, so
@@ -1938,51 +1999,6 @@ impl App {
     /// access (NFR-003). Mirrors [`App::set_plugin_store_fetcher`].
     pub fn set_manifest_source(&mut self, source: Arc<dyn codemason_plugins::ManifestSource>) {
         self.store_manifest_source = source;
-    }
-
-    /// Drain the completed manifest-enrichment messages and apply them to the open
-    /// panel (spec `pluginstores` FR-048).
-    ///
-    /// Called each housekeeping frame. An update whose generation or store no
-    /// longer matches the open browser (the panel was closed, switched stores, or
-    /// re-fetched) is discarded, so a late arrival can never fill the wrong panel. A
-    /// terminal [`StoreEnrichResult::Finished`] clears the title's loading hint. No
-    /// path panics.
-    pub fn poll_store_enrichment(&mut self) {
-        let drained = {
-            let mut guard =
-                recover_poisoned(self.store_enrich_result.lock(), "store_enrich_result");
-            std::mem::take(&mut *guard)
-        };
-        if drained.is_empty() {
-            return;
-        }
-        let current = self
-            .store_enrich_generation
-            .load(std::sync::atomic::Ordering::SeqCst);
-        let open_kind = self.plugin_store.as_ref().map(|b| b.kind);
-        for message in drained {
-            match message {
-                StoreEnrichResult::Update {
-                    generation,
-                    kind,
-                    update,
-                } => {
-                    if generation == current && open_kind == Some(kind) {
-                        if let Some(browser) = self.plugin_store.as_mut() {
-                            browser.apply_manifest_update(update);
-                        }
-                    }
-                }
-                StoreEnrichResult::Finished { generation, kind } => {
-                    if generation == current && open_kind == Some(kind) {
-                        if let Some(browser) = self.plugin_store.as_mut() {
-                            browser.finish_enrichment();
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Apply an inline failure detail to the open browser for `kind` (FR-013).
@@ -2230,6 +2246,7 @@ impl App {
     /// running turn exactly as they were (FR-012).
     pub fn close_plugin_store(&mut self) {
         self.plugin_store = None;
+        self.plugin_store_view = None;
     }
 
     /// Handle the shared `Backspace` / `Esc` query-editing key while the panel
@@ -2420,7 +2437,7 @@ impl App {
     /// `category` is applied once the fetch lands, against the categories the
     /// fetched catalogue actually declares (FR-041): a category the launch named
     /// that the catalogue turns out not to carry is refused inline by
-    /// [`Self::poll_connector_catalogue_result`] rather than leaving a silently
+    /// [`Self::poll_store_cache`] rather than leaving a silently
     /// empty panel.
     pub fn open_connector_catalogue(
         &mut self,
@@ -2433,148 +2450,22 @@ impl App {
         browser.set_installed(installed);
         browser.set_pending_category(category);
         self.connector_store = Some(browser);
-        self.spawn_connector_catalogue_fetch();
-    }
-
-    /// Start the connector-catalogue fetch off the event loop.
-    ///
-    /// The fetch is blocking (`reqwest::blocking` builds and drops its own tokio
-    /// runtime), so it runs on a plain OS thread rather than
-    /// `tokio::task::spawn_blocking`: dropping a runtime inside a blocking-pool
-    /// worker panics with "Cannot drop a runtime in a context where blocking is
-    /// not allowed". The descriptors (or the contained cause) are delivered back
-    /// through [`App::connector_catalogue_result`] and applied by
-    /// [`App::poll_connector_catalogue_result`] on a later frame, so the panel
-    /// renders its loading row until the result lands.
-    pub(crate) fn spawn_connector_catalogue_fetch(&mut self) {
-        let (dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
-        if !config.is_enabled() {
-            // A disabled subsystem is inert: no catalogue fetch is attempted.
-            self.connector_catalogue_failed("connectors.enabled = false".to_string());
-            return;
-        }
-        let slot = Arc::clone(&self.connector_catalogue_result);
-        std::thread::spawn(move || {
-            let outcome = codemason_connectors::search_installable_catalogue_full(&config, &dirs);
-            let result = match outcome {
-                Ok(full) => ConnectorCatalogueResult {
-                    outcome: Ok(full.descriptors),
-                    skipped: full.skipped,
-                    refused_marketplace: full.refused_marketplace,
-                },
-                Err(cause) => ConnectorCatalogueResult {
-                    outcome: Err(cause),
-                    skipped: 0,
-                    refused_marketplace: None,
-                },
-            };
-            *recover_poisoned(slot.lock(), "connector_catalogue_result") = Some(result);
-        });
-    }
-
-    /// Drain a completed off-loop connector-catalogue fetch and apply it.
-    ///
-    /// A no-op when no panel is open, so a late result never fills a closed
-    /// browser.
-    ///
-    /// After the entries land, a category named at launch is applied (FR-041):
-    /// [`CatalogueBrowser::set_entries`] derives the real category set from the
-    /// fetched catalogue, so a launch category the catalogue does not carry is
-    /// refused here and reported in the panel footer rather than leaving the
-    /// panel silently empty.
-    ///
-    /// A marketplace URL the `https` guard refused during the merge (FR-043)
-    /// never blinds the panel; it is surfaced here as a warning line in the
-    /// message window so the dropped marketplace is visible rather than silent.
-    pub fn poll_connector_catalogue_result(&mut self) {
-        let result = {
-            let mut guard = recover_poisoned(
-                self.connector_catalogue_result.lock(),
-                "connector_catalogue_result",
-            );
-            guard.take()
-        };
-        let Some(result) = result else {
-            return;
-        };
-        if let Some(refused) = result.refused_marketplace {
-            self.push_log_no_agent(
-                LogLevel::Warn,
-                format!("a configured connector marketplace was skipped: {refused}"),
-            );
-        }
-        if self.connector_store.is_none() {
-            return;
-        }
-        match result.outcome {
-            Ok(entries) => {
-                if let Some(browser) = self.connector_store.as_mut() {
-                    browser.set_entries(entries, result.skipped);
-                    browser.apply_pending_category();
-                }
-                // Now that the catalogue is loaded, enrich each entry's blank
-                // description from its repository manifest off-loop (FR-044).
-                self.start_catalogue_enrichment();
+        self.connector_store_view = None;
+        let key = StoreCacheKey::Connectors;
+        let (_dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
+        let needs_fetch = {
+            let mut cache = recover_poisoned(self.store_cache.lock(), "store_cache");
+            if !config.is_enabled() {
+                // A disabled subsystem shows no catalogue, even one cached before
+                // it was disabled; the fetch then records the disabled failure.
+                cache.invalidate(key);
             }
-            Err(cause) => self.connector_catalogue_failed(cause),
-        }
-    }
-
-    /// Start the off-loop manifest-description enrichment of the catalogue now
-    /// loaded in the open browser (spec `connectors` FR-044).
-    ///
-    /// Snapshots the loaded entries on the UI thread, bumps the enrichment
-    /// generation so any in-flight worker's messages are discarded, marks the panel
-    /// [`CatalogueBrowser::enriching`], and hands the per-entry manifest lookups to
-    /// the TUI's background path ([`App::catalogue_manifest_source`]) so the event
-    /// loop never stalls. Each resolved update is pushed onto
-    /// [`App::connector_enrich_result`] and drained by
-    /// [`App::poll_connector_enrichment`].
-    ///
-    /// A no-op when no panel is open, when the panel is loading or failed, or when
-    /// no async reactor is available (headless/unit-test contexts); no path panics.
-    pub(crate) fn start_catalogue_enrichment(&mut self) {
-        let entries = match self.connector_store.as_ref() {
-            Some(browser) if matches!(browser.status, ConnectorBrowseStatus::Ready) => {
-                browser.all.clone()
-            }
-            _ => return,
+            cache.needs_fetch(key, refresh)
         };
-        let generation = self
-            .connector_enrich_generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        if let Some(browser) = self.connector_store.as_mut() {
-            browser.enriching = true;
+        if needs_fetch {
+            self.start_store_fetch(key);
         }
-
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            // Without an async reactor the enrichment cannot run off-loop; running
-            // it inline would block the caller, so it is skipped and the panel keeps
-            // whatever the catalogue declared.
-            tracing::debug!("connector-catalogue enrichment skipped: no async runtime available");
-            if let Some(browser) = self.connector_store.as_mut() {
-                browser.finish_enrichment();
-            }
-            return;
-        };
-
-        let source = Arc::clone(&self.catalogue_manifest_source);
-        let slot = Arc::clone(&self.connector_enrich_result);
-        handle.spawn_blocking(move || {
-            let sink = |update: codemason_connectors::catalogue_enrich::ManifestUpdate| {
-                push_connector_enrich_result(
-                    &slot,
-                    ConnectorEnrichResult::Update { generation, update },
-                );
-            };
-            codemason_connectors::catalogue_enrich::enrich_catalogue_into(
-                &entries,
-                source.as_ref(),
-                &sink,
-            );
-            push_connector_enrich_result(&slot, ConnectorEnrichResult::Finished { generation });
-        });
+        self.poll_store_cache();
     }
 
     /// Install an injectable catalogue manifest-metadata source (spec `connectors`
@@ -2588,48 +2479,6 @@ impl App {
         source: Arc<dyn codemason_connectors::catalogue_enrich::ManifestSource>,
     ) {
         self.catalogue_manifest_source = source;
-    }
-
-    /// Drain the completed catalogue manifest-enrichment messages and apply them to
-    /// the open panel (spec `connectors` FR-044).
-    ///
-    /// Called each housekeeping frame. An update whose generation no longer matches
-    /// the open browser (the panel was closed, or re-fetched) is discarded, so a late
-    /// arrival can never fill the wrong panel. A terminal
-    /// [`ConnectorEnrichResult::Finished`] clears the title's loading hint. No path
-    /// panics.
-    pub fn poll_connector_enrichment(&mut self) {
-        let drained = {
-            let mut guard = recover_poisoned(
-                self.connector_enrich_result.lock(),
-                "connector_enrich_result",
-            );
-            std::mem::take(&mut *guard)
-        };
-        if drained.is_empty() {
-            return;
-        }
-        let current = self
-            .connector_enrich_generation
-            .load(std::sync::atomic::Ordering::SeqCst);
-        for message in drained {
-            match message {
-                ConnectorEnrichResult::Update { generation, update } => {
-                    if generation == current {
-                        if let Some(browser) = self.connector_store.as_mut() {
-                            browser.apply_manifest_update(update);
-                        }
-                    }
-                }
-                ConnectorEnrichResult::Finished { generation } => {
-                    if generation == current {
-                        if let Some(browser) = self.connector_store.as_mut() {
-                            browser.finish_enrichment();
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Apply an inline failure detail to the open connector-catalogue browser.
@@ -2985,6 +2834,7 @@ impl App {
     /// Close the connector-catalogue browse panel.
     pub fn close_connector_catalogue(&mut self) {
         self.connector_store = None;
+        self.connector_store_view = None;
     }
 
     /// Append a message to the input queue (spec `inputqueue` FR-005).

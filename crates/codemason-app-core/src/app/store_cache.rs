@@ -44,6 +44,16 @@ pub struct CachedIndex<E, U> {
     pub warnings_shown: bool,
 }
 
+/// How far an open browser has consumed a cache slot: the generation of the
+/// index it shows and how many of that index's manifest updates it applied.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheView {
+    /// Generation of the index (or failure) the browser shows.
+    pub generation: u64,
+    /// Count of the index's manifest updates already applied.
+    pub applied_updates: usize,
+}
+
 /// What a slot currently holds.
 #[derive(Debug, Clone)]
 pub enum SlotData<E, U> {
@@ -153,6 +163,14 @@ impl<E, U> CacheSlot<E, U> {
     fn invalidate(&mut self) {
         self.data = SlotData::Empty;
         self.in_flight = None;
+    }
+
+    fn mark_warnings_shown(&mut self, generation: u64) {
+        if let SlotData::Ready(ix) = &mut self.data
+            && ix.generation == generation
+        {
+            ix.warnings_shown = true;
+        }
     }
 }
 
@@ -280,6 +298,15 @@ impl StoreCache {
         match key {
             StoreCacheKey::Plugins(kind) => self.plugin_mut(kind).fail(generation, cause),
             StoreCacheKey::Connectors => self.connectors.fail(generation, cause),
+        }
+    }
+
+    /// Records that the warnings of the index at `generation` for `key` were
+    /// surfaced to the user; ignored when stale.
+    pub fn mark_warnings_shown(&mut self, key: StoreCacheKey, generation: u64) {
+        match key {
+            StoreCacheKey::Plugins(kind) => self.plugin_mut(kind).mark_warnings_shown(generation),
+            StoreCacheKey::Connectors => self.connectors.mark_warnings_shown(generation),
         }
     }
 

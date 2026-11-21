@@ -3,25 +3,48 @@
 //! the poll that applies the streamed updates to the open panel (spec `pluginstores`
 //! FR-048).
 //!
-//! The manifest source is replaced with an offline implementation, so no live
-//! store or manifest is contacted (NFR-003). The enrichment is driven through the
-//! real wiring: a store index is delivered into the fetch slot and drained by
-//! `poll_plugin_store_result`, which starts the enrichment of the loaded entries.
+//! The store fetcher and manifest source are replaced with offline
+//! implementations, so no live store or manifest is contacted (NFR-003). The
+//! enrichment is driven through the real wiring: the store-cache fetch job loads
+//! the index, enriches its entries into the cache, and `poll_store_cache` applies
+//! the streamed updates to the open panel.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::{PluginStoreBrowser, PluginStoreFetchResult};
-use codemason_plugins::{ManifestMeta, ManifestSource, StoreEntry, StoreIndex, StoreKind};
+use codemason_app_core::app::{PluginStoreBrowser, StoreCacheKey};
+use codemason_config::PluginStoresConfig;
+use codemason_plugins::{
+    FetchLimits, ManifestMeta, ManifestSource, ManifestUpdate, StoreEndpoint, StoreEntry,
+    StoreError, StoreIndex, StoreIndexFetcher, StoreKind,
+};
 
 #[path = "support/mod.rs"]
 mod support;
 
-/// An offline manifest source answering from a fixed table.
+/// An offline manifest source answering from a fixed table once `open` is set,
+/// so a test can observe the panel while enrichment is still pending.
 struct FakeSource {
     meta_by_id: Vec<(String, ManifestMeta)>,
+    open: Arc<AtomicBool>,
+}
+
+impl FakeSource {
+    /// A source that answers at once.
+    fn new(meta_by_id: Vec<(String, ManifestMeta)>) -> Self {
+        Self {
+            meta_by_id,
+            open: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 impl ManifestSource for FakeSource {
     fn manifest_meta(&self, entry: &StoreEntry, _kind: StoreKind) -> Option<ManifestMeta> {
+        while !self.open.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         self.meta_by_id
             .iter()
             .find(|(id, _)| id == &entry.id)
@@ -51,29 +74,54 @@ fn open_loading() -> App {
     app
 }
 
-/// Deliver a store index into the fetch slot, as the off-loop fetch would.
-fn deliver(app: &App, kind: StoreKind, entries: Vec<StoreEntry>) {
-    let mut guard = app.plugin_store_result.lock().expect("slot");
-    *guard = Some(PluginStoreFetchResult {
-        kind,
-        outcome: Ok(StoreIndex {
+/// An offline store fetcher serving a fixed entry list for every endpoint.
+struct EntriesFetcher(Vec<StoreEntry>);
+
+impl StoreIndexFetcher for EntriesFetcher {
+    fn fetch_index(
+        &self,
+        kind: StoreKind,
+        _endpoint: &StoreEndpoint,
+        _limits: &FetchLimits,
+    ) -> Result<StoreIndex, StoreError> {
+        Ok(StoreIndex {
             store: Some(kind.token().to_string()),
-            entries,
+            entries: self.0.clone(),
             skipped: 0,
-        }),
-    });
+        })
+    }
 }
 
-/// Drain streamed enrichment updates until the terminal `Finished` clears the
+/// Start the store-cache fetch of `entries` for the open panel, as opening the
+/// store would; its job then enriches the entries from the manifest source.
+fn deliver(app: &mut App, kind: StoreKind, entries: Vec<StoreEntry>) {
+    app.set_plugin_store_fetcher(Arc::new(EntriesFetcher(entries)));
+    app.spawn_plugin_store_fetch_with_stores(kind, &PluginStoresConfig::default());
+}
+
+/// Poll until the fetched index has landed in the open panel.
+async fn wait_loaded(app: &mut App) {
+    for _ in 0..600 {
+        app.poll_store_cache();
+        if app.plugin_store_view.is_some() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the off-loop fetch did not land");
+}
+
+/// Poll streamed enrichment updates until the finished enrichment clears the
 /// loading hint.
 async fn drain(app: &mut App) {
     for _ in 0..600 {
-        app.poll_store_enrichment();
-        if app
-            .plugin_store
-            .as_ref()
-            .map(|b| !b.enriching)
-            .unwrap_or(false)
+        app.poll_store_cache();
+        if app.plugin_store_view.is_some()
+            && app
+                .plugin_store
+                .as_ref()
+                .map(|b| !b.enriching)
+                .unwrap_or(false)
         {
             return;
         }
@@ -82,10 +130,12 @@ async fn drain(app: &mut App) {
     panic!("the off-loop enrichment did not finish");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn enrichment_fills_the_version_and_description_the_index_omitted() {
     let mut app = open_loading();
-    app.set_manifest_source(std::sync::Arc::new(FakeSource {
+    let open = Arc::new(AtomicBool::new(false));
+    app.set_manifest_source(Arc::new(FakeSource {
+        open: Arc::clone(&open),
         meta_by_id: vec![
             (
                 "linear".to_string(),
@@ -104,7 +154,7 @@ async fn enrichment_fills_the_version_and_description_the_index_omitted() {
         ],
     }));
     deliver(
-        &app,
+        &mut app,
         StoreKind::Codex,
         vec![
             entry(
@@ -118,12 +168,13 @@ async fn enrichment_fills_the_version_and_description_the_index_omitted() {
         ],
     );
 
-    app.poll_plugin_store_result();
+    wait_loaded(&mut app).await;
     // The panel is now enriching; a title hint would be visible.
     assert!(
         app.plugin_store.as_ref().expect("panel open").enriching,
         "the index landing starts enrichment"
     );
+    open.store(true, Ordering::SeqCst);
     drain(&mut app).await;
 
     let browser = app.plugin_store.as_ref().expect("panel open");
@@ -143,26 +194,23 @@ async fn enrichment_fills_the_version_and_description_the_index_omitted() {
     assert!(!browser.enriching, "the loading hint clears on finish");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn enrichment_keeps_a_version_the_index_already_declared() {
     let mut app = open_loading();
-    app.set_manifest_source(std::sync::Arc::new(FakeSource {
-        meta_by_id: vec![(
-            "clangd".to_string(),
-            ManifestMeta {
-                version: Some("1.0.0".to_string()),
-                description: Some("LSP".to_string()),
-            },
-        )],
-    }));
+    app.set_manifest_source(Arc::new(FakeSource::new(vec![(
+        "clangd".to_string(),
+        ManifestMeta {
+            version: Some("1.0.0".to_string()),
+            description: Some("LSP".to_string()),
+        },
+    )])));
     let mut with_version = entry(
         "clangd",
         "git+https://github.com/anthropics/x#main:plugins/clangd",
     );
     with_version.version = "9.9.9".to_string();
-    deliver(&app, StoreKind::Codex, vec![with_version]);
+    deliver(&mut app, StoreKind::Codex, vec![with_version]);
 
-    app.poll_plugin_store_result();
     drain(&mut app).await;
 
     let browser = app.plugin_store.as_ref().expect("panel open");
@@ -181,37 +229,43 @@ async fn enrichment_keeps_a_version_the_index_already_declared() {
     );
 }
 
-#[tokio::test]
-async fn an_update_from_a_stale_generation_is_dropped() {
-    // A second enrichment (a re-fetch) bumps the generation, so an update tagged
-    // with the earlier generation must not be applied to the current entries.
+#[test]
+fn an_update_from_a_stale_generation_is_dropped() {
+    // A re-fetch replaces the cached index with a new generation, so an update
+    // tagged with the earlier generation must not be applied to the current
+    // entries.
     let mut app = open_loading();
-    app.set_manifest_source(std::sync::Arc::new(FakeSource {
-        meta_by_id: vec![(
-            "linear".to_string(),
-            ManifestMeta {
-                version: Some("1.2.3".to_string()),
-                description: Some("Manage Linear issues".to_string()),
-            },
-        )],
-    }));
-    deliver(
-        &app,
-        StoreKind::Codex,
-        vec![entry(
+    let linear = || {
+        entry(
             "linear",
             "git+https://github.com/openai/plugins#main:plugins/linear",
-        )],
-    );
+        )
+    };
+    let stale = support::deliver_plugin_index(&app, StoreKind::Codex, vec![linear()], 0);
+    app.poll_store_cache();
+    // A re-fetch lands before the first fetch's enrichment reports.
+    support::deliver_plugin_index(&app, StoreKind::Codex, vec![linear()], 0);
+    app.store_cache
+        .lock()
+        .expect("store cache")
+        .push_plugin_update(
+            StoreKind::Codex,
+            stale,
+            ManifestUpdate {
+                id: "linear".to_string(),
+                meta: ManifestMeta {
+                    version: Some("1.2.3".to_string()),
+                    description: Some("Manage Linear issues".to_string()),
+                },
+            },
+        );
+    app.store_cache
+        .lock()
+        .expect("store cache")
+        .finish_enrichment(StoreCacheKey::Plugins(StoreKind::Codex), stale);
 
-    app.poll_plugin_store_result();
-    // Bump past the started generation before draining, simulating a re-fetch.
-    app.store_enrich_generation
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    for _ in 0..200 {
-        app.poll_store_enrichment();
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    for _ in 0..3 {
+        app.poll_store_cache();
     }
 
     let browser = app.plugin_store.as_ref().expect("panel open");
@@ -223,5 +277,9 @@ async fn an_update_from_a_stale_generation_is_dropped() {
     assert_eq!(
         linear.version, "",
         "a stale-generation update is not applied to the current entries"
+    );
+    assert!(
+        browser.enriching,
+        "a stale generation's finish does not clear the current hint"
     );
 }

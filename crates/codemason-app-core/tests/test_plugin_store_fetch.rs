@@ -1,18 +1,17 @@
 //! Tests for the off-loop plugin-store index fetch: the spawned blocking fetch,
-//! its delivery back through the shared result slot, and the UI-thread poll that
-//! applies the outcome to the open panel without blocking the event loop (spec
+//! its delivery into the store cache, and the UI-thread poll that applies the
+//! cached outcome to the open panel without blocking the event loop (spec
 //! `pluginstores` T-008; FR-007, FR-013, FR-016, FR-017, FR-024, FR-026).
 //!
-//! The delivery path is deterministic and offline: the tests deposit a
-//! [`PluginStoreFetchResult`] directly into the slot and drive
-//! `poll_plugin_store_result`, so no live store is contacted. The one off-loop
+//! The delivery path is deterministic and offline: the tests fill the store
+//! cache directly and drive `poll_store_cache`, so no live store is contacted. The one off-loop
 //! spawn test points at an unreachable loopback endpoint, so the contained
 //! [`StoreError`] arrives without any external network dependency.
 
 use std::time::Duration;
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::{PluginStoreBrowser, PluginStoreFetchResult, PluginStoreStatus};
+use codemason_app_core::app::{CacheView, PluginStoreBrowser, PluginStoreStatus, SlotData};
 use codemason_config::{PluginStoreEndpoint, PluginStoresConfig};
 use codemason_plugins::{StoreEntry, StoreError, StoreIndex, StoreKind};
 
@@ -49,10 +48,25 @@ fn open_loading() -> App {
     app
 }
 
-/// Deposit one fetch outcome into the app's delivery slot.
-fn deliver(app: &App, kind: StoreKind, outcome: Result<StoreIndex, StoreError>) {
-    let mut guard = app.plugin_store_result.lock().expect("slot");
-    *guard = Some(PluginStoreFetchResult { kind, outcome });
+/// Record one fetch outcome in the store cache, as the fetch job would; returns
+/// the slot generation.
+fn deliver(app: &App, kind: StoreKind, outcome: Result<StoreIndex, StoreError>) -> u64 {
+    match outcome {
+        Ok(index) => support::deliver_plugin_index(app, kind, index.entries, index.skipped),
+        Err(err) => {
+            support::deliver_plugin_failure(app, kind, &err);
+            0
+        }
+    }
+}
+
+/// A snapshot of the plugin store cache slot for `kind`.
+fn slot(app: &App, kind: StoreKind) -> codemason_app_core::app::PluginSlot {
+    app.store_cache
+        .lock()
+        .expect("store cache")
+        .plugin(kind)
+        .clone()
 }
 
 /// The status of the open browser.
@@ -70,7 +84,7 @@ fn status(app: &App) -> PluginStoreStatus {
 fn poll_with_no_pending_result_is_a_noop() {
     let mut app = open_loading();
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     // Nothing arrived, so the panel stays loading and no repaint is requested.
     assert_eq!(status(&app), PluginStoreStatus::Loading);
@@ -81,7 +95,7 @@ fn poll_with_no_pending_result_is_a_noop() {
 #[test]
 fn a_delivered_index_fills_the_open_panel() {
     let mut app = open_loading();
-    deliver(
+    let generation = deliver(
         &app,
         StoreKind::Codex,
         Ok(index(vec![
@@ -90,14 +104,20 @@ fn a_delivered_index_fills_the_open_panel() {
         ])),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     let browser = app.plugin_store.as_ref().expect("panel open");
     assert_eq!(browser.status, PluginStoreStatus::Ready);
     assert_eq!(browser.all.len(), 2);
     assert_eq!(browser.filtered.len(), 2);
-    // The slot is drained so the same result is not applied twice.
-    assert!(app.plugin_store_result.lock().expect("slot").is_none());
+    // The view records the applied index so the same result is not applied twice.
+    assert_eq!(
+        app.plugin_store_view,
+        Some(CacheView {
+            generation,
+            applied_updates: 0
+        })
+    );
 }
 
 #[test]
@@ -105,7 +125,7 @@ fn a_delivered_empty_index_yields_the_empty_status() {
     let mut app = open_loading();
     deliver(&app, StoreKind::Codex, Ok(index(Vec::new())));
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     assert_eq!(status(&app), PluginStoreStatus::Empty);
     assert!(!app.plugin_store.as_ref().expect("panel").has_results());
@@ -124,7 +144,7 @@ fn a_prefilled_query_still_filters_the_delivered_entries() {
         ])),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     let browser = app.plugin_store.as_ref().expect("panel open");
     assert_eq!(browser.status, PluginStoreStatus::Ready);
@@ -143,7 +163,7 @@ fn a_delivered_error_sets_the_inline_failure() {
         Err(StoreError::Http { status: 503 }),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     match status(&app) {
         PluginStoreStatus::Failed(detail) => {
@@ -171,7 +191,7 @@ fn a_delivered_network_failure_reads_as_an_unavailable_marketplace() {
         }),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     match status(&app) {
         PluginStoreStatus::Failed(detail) => assert!(
@@ -193,11 +213,11 @@ fn a_result_for_the_other_store_is_discarded() {
         Ok(index(vec![entry("claude-todo", "Todo")])),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
-    // The Codex panel is untouched; the foreign result is consumed and dropped.
+    // The Codex panel is untouched; the foreign result stays in its own slot.
     assert_eq!(status(&app), PluginStoreStatus::Loading);
-    assert!(app.plugin_store_result.lock().expect("slot").is_none());
+    assert_eq!(app.plugin_store_view, None);
 }
 
 #[test]
@@ -210,10 +230,10 @@ fn a_result_after_the_panel_closed_is_discarded() {
         Ok(index(vec![entry("codex-weather", "Weather")])),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     assert!(app.plugin_store.is_none(), "the panel stays closed");
-    assert!(app.plugin_store_result.lock().expect("slot").is_none());
+    assert_eq!(app.plugin_store_view, None);
 }
 
 // -- Endpoint refusal short-circuits the spawn (FR-024) ----------------------
@@ -241,7 +261,9 @@ fn a_refused_non_https_endpoint_reports_inline_without_fetching() {
         }
         other => panic!("expected a Failed status, got {other:?}"),
     }
-    assert!(app.plugin_store_result.lock().expect("slot").is_none());
+    let codex = slot(&app, StoreKind::Codex);
+    assert!(matches!(codex.data, SlotData::Failed { .. }), "{codex:?}");
+    assert_eq!(codex.in_flight, None, "no fetch was started");
 }
 
 // -- No reactor: the fetch is skipped, not run inline (FR-016, FR-026) -------
@@ -256,16 +278,18 @@ fn spawning_without_a_runtime_skips_the_fetch_and_keeps_loading() {
     app.spawn_plugin_store_fetch_with_stores(StoreKind::Codex, &PluginStoresConfig::default());
 
     assert_eq!(status(&app), PluginStoreStatus::Loading);
-    assert!(app.plugin_store_result.lock().expect("slot").is_none());
+    let codex = slot(&app, StoreKind::Codex);
+    assert!(matches!(codex.data, SlotData::Empty), "{codex:?}");
+    assert_eq!(codex.in_flight, None, "no fetch is left in flight");
 }
 
-// -- A poisoned slot never panics the poll (FR-025) --------------------------
+// -- A poisoned cache never panics the poll (FR-025) -------------------------
 
 #[test]
 fn poll_recovers_a_poisoned_slot() {
     let mut app = open_loading();
-    // Poison the slot by panicking while its lock is held.
-    let slot = std::sync::Arc::clone(&app.plugin_store_result);
+    // Poison the store cache by panicking while its lock is held.
+    let slot = std::sync::Arc::clone(&app.store_cache);
     let handle = std::thread::spawn(move || {
         let _guard = slot.lock().expect("slot");
         panic!("poison the slot");
@@ -273,7 +297,7 @@ fn poll_recovers_a_poisoned_slot() {
     assert!(handle.join().is_err(), "the thread panicked as intended");
 
     // The poll must recover (recover_poisoned) and return without panicking.
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     assert_eq!(status(&app), PluginStoreStatus::Loading);
 }
@@ -295,15 +319,10 @@ async fn an_off_loop_fetch_delivers_a_contained_error_for_an_unreachable_endpoin
 
     app.spawn_plugin_store_fetch_with_stores(StoreKind::Codex, &stores);
 
-    // The spawned blocking task deposits its outcome; wait (bounded) for it.
+    // The spawned blocking task records its outcome; wait (bounded) for it.
     let mut delivered = false;
     for _ in 0..300 {
-        if app
-            .plugin_store_result
-            .lock()
-            .map(|guard| guard.is_some())
-            .unwrap_or(false)
-        {
+        if matches!(slot(&app, StoreKind::Codex).data, SlotData::Failed { .. }) {
             delivered = true;
             break;
         }
@@ -311,7 +330,7 @@ async fn an_off_loop_fetch_delivers_a_contained_error_for_an_unreachable_endpoin
     }
     assert!(delivered, "the off-loop fetch delivered its result");
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     match status(&app) {
         PluginStoreStatus::Failed(_) => {}

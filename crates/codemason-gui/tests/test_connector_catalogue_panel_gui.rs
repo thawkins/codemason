@@ -73,7 +73,7 @@ fn open(entries: Vec<ConnectorDescriptor>, installed: &[&str], skipped: usize) -
 }
 
 /// An app with the panel open on `category`, populated from `entries` exactly as
-/// [`App::poll_connector_catalogue_result`] fills it after an off-loop fetch:
+/// [`App::poll_store_cache`] fills it after an off-loop fetch:
 /// the entries land first and the launch category is applied against the real
 /// category set.
 fn open_with_category(entries: Vec<ConnectorDescriptor>, category: CategoryFilter) -> App {

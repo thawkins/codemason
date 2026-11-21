@@ -88,18 +88,41 @@ async fn wait_for(app: &App, kind: StoreKind, done: impl Fn(&PluginSlot) -> bool
     }
 }
 
+/// Restores `CODEMASON_CONFIG_CONTENT` to its previous value when dropped, so a
+/// failing assertion cannot leak the override. Held under the env lock.
+struct ConfigContentGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ConfigContentGuard {
+    /// Set `CODEMASON_CONFIG_CONTENT` to `json`, remembering the previous value.
+    fn set(json: &str) -> Self {
+        let previous = std::env::var_os("CODEMASON_CONFIG_CONTENT");
+        // env-isolation: the caller holds the binary-wide env lock for the guard's lifetime.
+        // SAFETY: the binary-wide env lock is held.
+        unsafe { std::env::set_var("CODEMASON_CONFIG_CONTENT", json) };
+        Self { previous }
+    }
+}
+
+impl Drop for ConfigContentGuard {
+    fn drop(&mut self) {
+        // env-isolation: restores the value under the same lock the caller holds.
+        // SAFETY: the binary-wide env lock is held.
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("CODEMASON_CONFIG_CONTENT", value),
+                None => std::env::remove_var("CODEMASON_CONFIG_CONTENT"),
+            }
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::await_holding_lock)] // the lock pins the config env for the whole test
 async fn prefetch_fills_codex_slot() {
     let _lock = crate::global_env_lock();
-    let previous = std::env::var_os("CODEMASON_CONFIG_CONTENT");
-    // SAFETY: the binary-wide env lock is held.
-    unsafe {
-        std::env::set_var(
-            "CODEMASON_CONFIG_CONTENT",
-            r#"{"connectors":{"enabled":false}}"#,
-        )
-    };
+    let _config = ConfigContentGuard::set(r#"{"connectors":{"enabled":false}}"#);
     let mut app = app_with(FixtureStoreFetcher::new().with_default_endpoints());
 
     app.prefetch_store_indexes();
@@ -114,13 +137,6 @@ async fn prefetch_fills_codex_slot() {
         .connectors()
         .clone();
 
-    // SAFETY: the binary-wide env lock is held.
-    unsafe {
-        match previous {
-            Some(value) => std::env::set_var("CODEMASON_CONFIG_CONTENT", value),
-            None => std::env::remove_var("CODEMASON_CONFIG_CONTENT"),
-        }
-    }
     let SlotData::Ready(index) = codex.data else {
         unreachable!("waited for Ready");
     };

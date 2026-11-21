@@ -153,7 +153,7 @@ struct CatalogueLaunch {
 /// `--refresh` and `--category <name>` are accepted anywhere and are removed
 /// from the query tokens, so a pre-filled query may contain spaces. A `--category`
 /// value is validated against the categories the fetched catalogue actually
-/// carries once the off-loop fetch lands (see [`App::poll_connector_catalogue_result`]),
+/// carries once the off-loop fetch lands (see [`App::poll_store_cache`]),
 /// so an unknown value renders the panel's inline refusal rather than an empty
 /// list.
 #[must_use]

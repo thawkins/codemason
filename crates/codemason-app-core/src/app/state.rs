@@ -26,7 +26,7 @@ use codemason_types::strutil::short_suffix;
 use super::BackendPanelState;
 
 pub use codemason_connectors::CatalogueBrowseStatus as ConnectorBrowseStatus;
-use codemason_plugins::{StoreEntry, StoreError, StoreIndex, StoreIndexFetcher, StoreKind};
+use codemason_plugins::{StoreEntry, StoreIndex, StoreIndexFetcher, StoreKind};
 use serde::Serialize;
 
 use crate::app::helpers::short_id;
@@ -1915,55 +1915,6 @@ pub struct QueuedInput {
     pub image_paths: Vec<std::path::PathBuf>,
 }
 
-/// One message from the off-loop manifest-metadata enrichment of a store index
-/// (spec `pluginstores` FR-048).
-///
-/// The enrichment worker ([`App::start_store_enrichment`]) pushes one
-/// [`StoreEnrichResult::Update`] per entry that resolved metadata, then a single
-/// terminal [`StoreEnrichResult::Finished`]; the UI thread drains the queue in
-/// [`App::poll_store_enrichment`] and applies each update to the open browser and
-/// clears the title's loading hint on `Finished`. Every message carries the
-/// generation of the index it belongs to, so a worker whose index is no longer
-/// loaded has its messages dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StoreEnrichResult {
-    /// One entry's manifest metadata resolved.
-    Update {
-        /// The enrichment generation this update belongs to.
-        generation: u64,
-        /// The store the index was fetched for.
-        kind: StoreKind,
-        /// The resolved metadata for one entry.
-        update: codemason_plugins::ManifestUpdate,
-    },
-    /// The enrichment of the index at `generation` finished.
-    Finished {
-        /// The enrichment generation that completed.
-        generation: u64,
-        /// The store the index was fetched for.
-        kind: StoreKind,
-    },
-}
-
-/// The outcome of one off-loop store-index fetch, tagged with the store it was
-/// requested for (spec `pluginstores` T-008; FR-007, FR-013, FR-016, FR-026).
-///
-/// The spawned fetch deposits this into [`App::plugin_store_result`]; the UI
-/// thread drains it in [`App::poll_plugin_store_result`]. The [`kind`] tag lets
-/// the poll discard a stale result that arrives after the panel was closed or
-/// re-opened for a different store, so a late arrival can never fill the wrong
-/// browser.
-///
-/// [`kind`]: PluginStoreFetchResult::kind
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginStoreFetchResult {
-    /// The store this fetch was requested for (FR-007).
-    pub kind: StoreKind,
-    /// The parsed index on success, or the contained fetch/parse error on
-    /// failure (FR-013, FR-025).
-    pub outcome: Result<StoreIndex, StoreError>,
-}
-
 /// The outcome of one off-loop `ENTER` install from the plugin-store browser
 /// (spec `pluginstores` T-009; FR-006, FR-011, FR-014, FR-025, FR-026).
 ///
@@ -1989,25 +1940,6 @@ pub struct PluginStoreInstallResult {
     /// Whether the install committed, so the poll re-derives the installed set
     /// and the row re-colours (FR-011).
     pub succeeded: bool,
-}
-
-/// The outcome of one off-loop connector-catalogue fetch.
-///
-/// The spawned fetch deposits this into [`App::connector_catalogue_result`]; the
-/// UI thread drains it in [`App::poll_connector_catalogue_result`]. Carrying the
-/// descriptors plus the parser's skip count keeps the browser able to report a
-/// short list as a partial result rather than a silent one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectorCatalogueResult {
-    /// The parsed descriptors on success, or the contained cause on failure.
-    pub outcome: Result<Vec<codemason_connectors::ConnectorDescriptor>, String>,
-    /// How many catalogue entries the parser skipped as malformed or
-    /// unexpressible.
-    pub skipped: usize,
-    /// The first refusal a configured added marketplace produced during the
-    /// merge, when any (spec `connectors` FR-043). Surfaced to the message
-    /// window as a warning; a refused added marketplace never blinds the panel.
-    pub refused_marketplace: Option<String>,
 }
 
 /// The outcome of one off-loop `ENTER` install from the connector-catalogue
@@ -2078,32 +2010,6 @@ pub struct SubagentLaunchOutcome {
     pub launch: SubagentLaunch,
     /// The registered task id on success, or the failure message.
     pub outcome: Result<String, String>,
-}
-
-/// One message from the off-loop manifest-metadata enrichment of a connector
-/// catalogue (spec `connectors` FR-044).
-///
-/// The enrichment worker ([`App::start_catalogue_enrichment`]) pushes one
-/// [`ConnectorEnrichResult::Update`] per entry that resolved metadata, then a
-/// single terminal [`ConnectorEnrichResult::Finished`]; the UI thread drains the
-/// queue in [`App::poll_connector_enrichment`] and applies each update to the
-/// open browser, clearing the title's loading hint on `Finished`. Every message
-/// carries the generation of the catalogue it belongs to, so a worker whose
-/// catalogue is no longer loaded has its messages dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectorEnrichResult {
-    /// One entry's manifest metadata resolved.
-    Update {
-        /// The enrichment generation this update belongs to.
-        generation: u64,
-        /// The resolved metadata for one entry.
-        update: codemason_connectors::catalogue_enrich::ManifestUpdate,
-    },
-    /// The enrichment of the catalogue at `generation` finished.
-    Finished {
-        /// The enrichment generation that completed.
-        generation: u64,
-    },
 }
 
 /// Which of the plugin-store panel's three panes holds keyboard focus
@@ -2494,10 +2400,10 @@ impl PluginStoreBrowser {
     /// collision keeps) does not depend on the result ordering - the sort is a display
     /// concern and must not relabel a category (spec `catnav` FR-001).
     ///
-    /// Manifest-metadata enrichment (FR-048) is *not* started here: [`Self::set_index`]
+    /// Manifest-metadata enrichment (FR-048) is *not* tracked here: [`Self::set_index`]
     /// is also the path a hand-built test entry list takes, so the caller that
-    /// owns the fetch ([`App::poll_plugin_store_result`]) starts the off-loop
-    /// enrichment and marks the panel [`Self::enriching`] while it runs.
+    /// reads the store cache ([`App::poll_store_cache`]) marks the panel
+    /// [`Self::enriching`] while the cached index is still being enriched.
     pub fn set_index(&mut self, index: StoreIndex) {
         self.all = index.entries;
         self.skipped = index.skipped;
@@ -3377,17 +3283,9 @@ pub struct App {
     /// While it is `Some`, the panel swallows every keystroke and locks the
     /// input field and the queue (FR-015).
     pub plugin_store: Option<PluginStoreBrowser>,
-    /// Pending result from the off-loop store-index fetch (spec `pluginstores`
-    /// T-008; FR-007, FR-016, FR-026).
-    ///
-    /// The spawned fetch task ([`App::spawn_plugin_store_fetch`]) deposits the
-    /// parsed index (or the contained [`StoreError`]) here; the UI thread drains
-    /// it in [`App::poll_plugin_store_result`] and applies it to
-    /// [`Self::plugin_store`], so the fetch never blocks the event loop or the
-    /// agent turn. The slot carries the store kind it was fetched for so a
-    /// result that arrives after the panel was closed or switched stores is
-    /// ignored rather than applied to the wrong browser.
-    pub plugin_store_result: Arc<std::sync::Mutex<Option<PluginStoreFetchResult>>>,
+    /// How far the open plugin-store browser has consumed its store-cache slot
+    /// ([`App::poll_store_cache`]). Reset to `None` on every open and close.
+    pub plugin_store_view: Option<crate::app::CacheView>,
     /// Pending result from the off-loop `ENTER` install (spec `pluginstores`
     /// T-009; FR-006, FR-011, FR-025, FR-026).
     ///
@@ -3432,21 +3330,6 @@ pub struct App {
     /// [`App::set_manifest_source`], so the enrichment path can be exercised with no
     /// network access (NFR-003).
     pub store_manifest_source: Arc<dyn codemason_plugins::ManifestSource>,
-    /// Pending per-entry manifest enrichment updates (spec `pluginstores` FR-048).
-    ///
-    /// The off-loop enrichment worker ([`App::start_store_enrichment`]) pushes each
-    /// resolved [`codemason_plugins::ManifestUpdate`] here as it arrives, then a
-    /// terminal [`StoreEnrichResult::Finished`]; the UI thread drains the queue in
-    /// [`App::poll_store_enrichment`] and applies each update to the open browser, so
-    /// metadata streams in without re-rendering the whole list at once.
-    pub store_enrich_result: Arc<std::sync::Mutex<Vec<StoreEnrichResult>>>,
-    /// A generation counter guarding the enrichment of the currently loaded index.
-    ///
-    /// The index fetch is tagged with the value of this counter when the enrichment
-    /// worker starts; a worker whose generation no longer matches (the panel was
-    /// re-opened, switched stores, or re-fetched) has its updates dropped rather than
-    /// applied to the wrong entries.
-    pub store_enrich_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Cached area of the plugin-store browse panel (set during render). Kept in
     /// [`Area::default`] while no panel is open (spec `pluginstores` FR-018).
     ///
@@ -3488,14 +3371,10 @@ pub struct App {
     /// Mirrors [`Self::plugin_store`]: while it is `Some`, the panel swallows
     /// every keystroke and locks the input field and the queue.
     pub connector_store: Option<CatalogueBrowser>,
-    /// Pending result from the off-loop connector-catalogue fetch.
-    ///
-    /// The spawned fetch deposits the
-    /// descriptors (or the contained cause) here; the UI thread drains it in
-    /// [`App::poll_connector_catalogue_result`] and applies it to
-    /// [`Self::connector_store`], so the fetch never blocks the event loop or the
-    /// agent turn.
-    pub connector_catalogue_result: Arc<std::sync::Mutex<Option<ConnectorCatalogueResult>>>,
+    /// How far the open connector-catalogue browser has consumed the catalogue's
+    /// store-cache slot ([`App::poll_store_cache`]). Reset to `None` on every
+    /// open and close.
+    pub connector_store_view: Option<crate::app::CacheView>,
     /// Pending result from the off-loop `ENTER` install.
     ///
     /// The spawned install worker
@@ -3514,24 +3393,6 @@ pub struct App {
     /// [`App::set_catalogue_manifest_source`], so the enrichment path can be
     /// exercised with no network access (NFR-003).
     pub catalogue_manifest_source: Arc<dyn codemason_connectors::catalogue_enrich::ManifestSource>,
-    /// Pending per-entry catalogue manifest enrichment updates (spec `connectors`
-    /// FR-044).
-    ///
-    /// The off-loop enrichment worker ([`App::start_catalogue_enrichment`]) pushes
-    /// each resolved [`codemason_connectors::catalogue_enrich::ManifestUpdate`]
-    /// here as it arrives, then a terminal [`ConnectorEnrichResult::Finished`]; the
-    /// UI thread drains the queue in [`App::poll_connector_enrichment`] and applies
-    /// each update to the open browser, so metadata streams in without re-rendering
-    /// the whole list at once.
-    pub connector_enrich_result: Arc<std::sync::Mutex<Vec<ConnectorEnrichResult>>>,
-    /// A generation counter guarding the enrichment of the currently loaded
-    /// connector catalogue.
-    ///
-    /// The catalogue fetch is tagged with the value of this counter when the
-    /// enrichment worker starts; a worker whose generation no longer matches (the
-    /// panel was reopened or re-fetched) has its updates dropped rather than applied
-    /// to the wrong entries.
-    pub connector_enrich_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Cached area of the connector-catalogue panel's left category-navigator
     /// column (set during render).
     ///

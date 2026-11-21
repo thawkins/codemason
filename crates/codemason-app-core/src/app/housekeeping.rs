@@ -62,23 +62,15 @@ impl App {
             // Stream /spec govcreate staged progress and surface the report.
             self.poll_govcreate_result();
 
-            // Apply a completed off-loop plugin-store index fetch (T-008/FR-016).
-            self.poll_plugin_store_result();
-
-            // Apply streamed manifest-metadata enrichment updates (FR-048).
-            self.poll_store_enrichment();
+            // Fill the open plugin-store / connector-catalogue browser from the
+            // store cache: a landed index, streamed manifest updates, a failure.
+            self.poll_store_cache();
 
             // Apply a completed off-loop plugin-store install (T-009/FR-011).
             self.poll_plugin_store_install_result();
 
             // Surface the `/plugins stores --check` availability probe.
             self.poll_plugin_store_probe_result();
-
-            // Apply a completed off-loop connector-catalogue fetch.
-            self.poll_connector_catalogue_result();
-
-            // Apply streamed connector-catalogue enrichment updates (FR-044).
-            self.poll_connector_enrichment();
 
             // Apply a completed off-loop connector-catalogue install.
             self.poll_connector_catalogue_install_result();
