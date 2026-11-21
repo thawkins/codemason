@@ -2072,6 +2072,17 @@ or paste an image to attach it from the clipboard, or use **File > Attach
 Images...** for the native file dialog. Transcript text is not selectable; `/clip`
 copies the whole transcript.
 
+Staged images sit above the prompt as **removable thumbnails**, one per image:
+
+- **Double-click** a thumbnail to open that image at full size (**Actual size** /
+  **Fit to window**, **Close**). It stays staged, so the dialog is only a look.
+- Click the **X** in its top-right corner to unstage it. Only that image leaves
+  the list; the file on disk is never deleted, so you can attach it again.
+- A thumbnail the window cannot decode still shows its file name, so you can see
+  which one it is and remove it. Double-clicking a name does nothing.
+- Staged images scroll sideways once they fill the row rather than squeezing the
+  editor.
+
 Images and diagrams in the transcript:
 
 - An attached image shows as a thumbnail; click it to open the full-size view

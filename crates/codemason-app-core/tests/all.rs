@@ -461,6 +461,8 @@ mod test_provider_detection;
 mod test_question_answer_guard;
 #[path = "test_quit_force_exit_hook.rs"]
 mod test_quit_force_exit_hook;
+#[path = "test_remove_pending_attachment.rs"]
+mod test_remove_pending_attachment;
 #[path = "test_render_cost_scaling.rs"]
 mod test_render_cost_scaling;
 #[path = "test_research_app_more.rs"]

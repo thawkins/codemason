@@ -1,7 +1,7 @@
 //! GUI colours for the frontend-neutral [`ThemeColor`]s.
 //!
 //! [`Palette::from_tokens`] converts a theme's
-//! [`ThemeTokens`](codemason_app_core::theme_tokens::ThemeTokens) to egui
+//! [`ThemeTokens`] to egui
 //! colours, and [`palette_for`] does it for the App's current theme. Every
 //! colour comes from the theme: the 16 ANSI names resolve to the theme's
 //! nearest semantic colour (red is the error colour, gray the muted text), so

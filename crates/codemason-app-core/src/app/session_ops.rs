@@ -5285,6 +5285,36 @@ impl App {
         true
     }
 
+    /// Drop the pending attachment at `index`, so an image staged by mistake
+    /// is not sent with the next message.
+    ///
+    /// Only the list entry goes: the file itself is left alone, because an
+    /// attachment is usually the user's own image and deleting it would
+    /// destroy their data.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - the attachment's position in
+    ///   [`SessionView::pending_attachments`], as the GUI's thumbnail strip
+    ///   numbers it.
+    ///
+    /// # Returns
+    ///
+    /// Whether an attachment was removed; an index past the end removes
+    /// nothing and is not an error (the strip is drawn from the same list,
+    /// which a click can outrun by a frame).
+    pub fn remove_pending_attachment(&mut self, index: usize) -> bool {
+        if index >= self.session.pending_attachments.len() {
+            return false;
+        }
+        let removed = self.session.pending_attachments.remove(index);
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("[attach] Image removed: {}", removed.display()),
+        );
+        true
+    }
+
     /// Log a warning when a clipboard-resolved image path lies outside the
     /// current working directory or the user's home directory. The file is
     /// still attached (the user may intentionally want a screenshot or asset

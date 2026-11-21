@@ -977,9 +977,10 @@ fn draw_blocks(
                 let size = vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
                 if image_ui(ui, path, name, size, ImageFit::Fill) {
                     actions.push(BlockAction::Enlarge(ImageRef::file(path)));
-                } else if !loadable(ui, path) {
+                } else if picture_state(ui, path) == crate::image_load::PictureState::Unavailable {
                     // A file that cannot be loaded (gone, or a format the
-                    // window cannot decode) is named instead of drawn.
+                    // window cannot decode) is named instead of drawn. One
+                    // still on its way is drawn next frame, not named.
                     ui.label(egui::RichText::new(block.plain_text()).color(palette.info));
                 }
             }
@@ -1003,7 +1004,7 @@ fn markdown_ui(ui: &mut egui::Ui, cache: &mut CommonMarkCache, text: &str, root:
         border.width *= TABLE_BORDER_SCALE;
     }
     CommonMarkViewer::new()
-        .default_implicit_uri_scheme(format!("file://{}/", root.display()))
+        .default_implicit_uri_scheme(crate::image_load::file_uri_dir(root))
         .show(ui, cache, text);
 }
 
@@ -1031,8 +1032,8 @@ pub enum ReplyImageSource {
 /// scheme but `file`.
 #[must_use]
 pub fn reply_image_source(src: &str, root: &Path) -> ReplyImageSource {
-    if let Some(path) = src.strip_prefix("file://") {
-        return ReplyImageSource::File(PathBuf::from(path));
+    if let Some(path) = crate::image_load::uri_path(src) {
+        return ReplyImageSource::File(path);
     }
     if src.contains("://") || src.starts_with("data:") {
         return ReplyImageSource::NotLoaded;
@@ -1045,17 +1046,9 @@ pub fn reply_image_source(src: &str, root: &Path) -> ReplyImageSource {
     })
 }
 
-/// Whether the window can load the image file at `path`.
-fn loadable(ui: &egui::Ui, path: &Path) -> bool {
-    let uri = format!("file://{}", path.display());
-    let ctx = ui.ctx();
-    // A changed file is read again; an SVG is rasterised at a capped size.
-    crate::image_load::refresh_if_changed(ctx, &uri);
-    let Some(hint) = crate::image_load::decode_hint(ctx, &uri) else {
-        ctx.request_repaint();
-        return false;
-    };
-    ctx.try_load_image(&uri, hint).is_ok()
+/// What state the image file at `path`'s decode is in this frame.
+fn picture_state(ui: &egui::Ui, path: &Path) -> crate::image_load::PictureState {
+    crate::image_load::picture_state(ui.ctx(), &crate::image_load::file_uri(path))
 }
 
 /// How an image is fitted into its box.
@@ -1080,10 +1073,10 @@ fn image_ui(
     max_size: egui::Vec2,
     fit: ImageFit,
 ) -> bool {
-    if !loadable(ui, path) {
+    if picture_state(ui, path) != crate::image_load::PictureState::Ready {
         return false;
     }
-    let image = egui::Image::new(format!("file://{}", path.display()));
+    let image = egui::Image::new(crate::image_load::file_uri(path));
     let image = match fit {
         ImageFit::Fill => image,
         ImageFit::Shrink => image.fit_to_original_size(1.0),
@@ -1127,7 +1120,9 @@ fn reply_image_ui(
             if image_ui(ui, &path, name, size, ImageFit::Shrink) {
                 Some(path)
             } else {
-                if !loadable(ui, &path) {
+                // Only a decode that can never finish is reported: one still
+                // in flight is drawn next frame, not called broken.
+                if picture_state(ui, &path) == crate::image_load::PictureState::Unavailable {
                     note(ui, "(cannot be shown)");
                 }
                 None

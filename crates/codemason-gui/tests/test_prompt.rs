@@ -14,6 +14,7 @@ mod support;
 use std::path::PathBuf;
 
 use codemason_gui::dialogs::shortcuts::SHORTCUTS_TITLE;
+use codemason_gui::material::thumbnail::REMOVE_LABEL;
 use codemason_gui::panels::prompt::{ATTACHMENTS_LABEL, SLASH_LABEL};
 
 use codemason_app_core::app::{App, ConfiguredProvider, ProviderSource, QueuedInput};
@@ -617,7 +618,133 @@ fn test_prompt_shows_pending_attachments() {
     harness.run();
 
     harness.get_by_label(ATTACHMENTS_LABEL);
-    harness.get_by_label_contains("screen.png");
+    // Each attachment is a thumbnail of the image file, so its accessible
+    // name is the file's name.
+    harness.get_by_label("screen.png");
+}
+
+#[test]
+fn test_prompt_shows_a_thumbnail_per_attachment() {
+    let (_rt, mut harness) = rig(|app| {
+        app.session.pending_attachments = vec![
+            PathBuf::from("shots/first.png"),
+            PathBuf::from("shots/second.png"),
+            PathBuf::from("shots/third.png"),
+        ];
+    });
+    harness.run();
+
+    harness.get_by_label(ATTACHMENTS_LABEL);
+    for name in ["first.png", "second.png", "third.png"] {
+        harness.get_by_label(name);
+    }
+}
+
+#[test]
+fn test_prompt_removes_an_attachment_from_its_close_mark() {
+    let (_rt, mut harness) = rig(|app| {
+        app.session.pending_attachments = vec![
+            PathBuf::from("shots/first.png"),
+            PathBuf::from("shots/second.png"),
+        ];
+    });
+    harness.run();
+    // One close mark per attachment; each carries the same accessible name,
+    // so the second is the one that takes `second.png` off.
+    let marks = harness.get_all_by_label(REMOVE_LABEL).count();
+    assert_eq!(marks, 2, "one close mark per attachment");
+
+    harness
+        .get_all_by_label(REMOVE_LABEL)
+        .last()
+        .expect("a mark")
+        .click();
+    harness.run();
+
+    let remaining = &harness.state().app().session.pending_attachments;
+    assert_eq!(remaining, &vec![PathBuf::from("shots/first.png")]);
+    assert_eq!(
+        harness.get_all_by_label(REMOVE_LABEL).count(),
+        1,
+        "the strip follows the list"
+    );
+}
+
+#[test]
+fn test_prompt_attachment_strip_disappears_with_its_last_image() {
+    let (_rt, mut harness) = rig(|app| {
+        app.session.pending_attachments = vec![PathBuf::from("shots/only.png")];
+    });
+    harness.run();
+    harness.get_by_label(ATTACHMENTS_LABEL);
+
+    harness.get_by_label(REMOVE_LABEL).click();
+    harness.run();
+
+    assert!(
+        harness.state().app().session.pending_attachments.is_empty(),
+        "the last attachment was removed"
+    );
+    assert!(
+        harness.query_by_label(ATTACHMENTS_LABEL).is_none(),
+        "an empty strip draws nothing"
+    );
+}
+
+/// A 2x1 opaque red PNG, so an attached image has a real picture to load.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0xF4, 0x22, 0x7F,
+    0x8A, 0x00, 0x00, 0x00, 0x0E, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x38, 0xA1, 0xA1, 0xF1,
+    0x1F, 0x84, 0x01, 0x12, 0x33, 0x04, 0x2F, 0xB4, 0x17, 0x82, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x49,
+    0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+#[test]
+fn test_prompt_double_click_on_an_attachment_opens_the_image_view() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/prompt_attachment_view")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let path = dir.join("screen.png");
+    std::fs::write(&path, PNG).expect("write png");
+    let attached = path.clone();
+    let (_rt, mut harness) = rig(move |app| app.session.pending_attachments = vec![attached]);
+    // The shell installs these at startup (`main_thread`); the harness is a
+    // bare context, so a `file://` image would never load and the picture
+    // would sense no click.
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    assert!(
+        codemason_gui::dialogs::image_view::shown(&harness.ctx).is_none(),
+        "no view before the click"
+    );
+
+    // Below the close mark, which covers the box's top-right quarter.
+    let pos = harness.get_by_label("screen.png").rect().left_bottom()
+        + egui::vec2(codemason_gui::material::thumbnail::SIZE / 2.0, -12.0);
+    // Each click is one frame (press and release), so the two are one frame
+    // apart, inside egui's double-click delay.
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        harness.step();
+    }
+    harness.run();
+
+    let shown = codemason_gui::dialogs::image_view::shown(&harness.ctx).expect("the view opened");
+    assert_eq!(shown.name, "screen.png");
+    assert_eq!(
+        harness.state().app().session.pending_attachments,
+        vec![path],
+        "enlarging keeps the attachment staged"
+    );
 }
 
 #[test]
