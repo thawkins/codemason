@@ -175,10 +175,16 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   Night), and your own themes are JSON files in `~/.config/codemason/themes/`
   or `.codemason/themes/`. Tool calls fold into one activity row per run
   (`/verbosity low|medium|high`), reasoning sits under a collapsible Thinking
-  row (`/thinking-display`), and edits show their diff, with a Diff pane for
-  reviewing changed files and diff or command previews in the permission
-  dialog. `Ctrl+P` opens a command palette over actions, slash commands,
-  themes, agents and sessions; every shortcut can be rebound in
+  row (`/thinking-display`) whose line count shows at its right (a thought of 3
+  lines or fewer starts open, a longer one stays closed until you open it), and
+  edits show their diff, capped at 10 lines, with a Diff pane for reviewing
+  changed files and diff or command previews in the permission dialog; a longer
+  diff's **Open diff** button shows the message's diffs in a modal overlay with
+  the pane's own view. The prompt field sits on the dock's bottom edge and grows
+  upwards only, so a long prompt or a row of attachment thumbnails moves its top
+  rather than pushing the transcript down. `Ctrl+P` opens a command palette over
+  actions, slash commands, themes, agents and sessions; every shortcut can be
+  rebound in
   `gui-keys.json`; a leader key (`Ctrl+G`) starts two-key sequences with a
   which-key popup; model favourites (`Ctrl+F` in the picker) and `F2` for
   recent models; `@file#20-45` mentions send only those lines; and `/editor`
@@ -1062,7 +1068,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.171** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.175** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered

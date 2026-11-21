@@ -2152,7 +2152,8 @@ License 2.0, `crates/codemason-gui/assets/fonts/MaterialSymbols-LICENSE.txt`,
 which also records the command that rebuilds the subset) sits alone in the
 `codemason-icons` family, so its private-use code points never stand in for
 text. `icons::Icon` names the icons the window draws (read, edit, command,
-search, agent, check, cross, warning, info, the two chevrons and copy), each
+search, agent, check, cross, warning, info, the two chevrons and copy, plus
+provider's `cloud` and resume's `play_arrow` for the ribbon's Agent tab), each
 with an ASCII stand-in `icons::icon_label` draws when the stack lacks the
 font. An activity row starts with the icon of its main kind of work (edit,
 then command, search, read, other tool), and a finished tool call's `* ` or
@@ -2253,7 +2254,13 @@ the added/removed counts, and stops after 2,000 lines (`truncated`). The
 transcript draws a diff as a card with the path, `+added -removed`, and its
 hunks up to 10 lines in all (`INLINE_MAX_LINES`) on
 `diff.added_bg`/`diff.removed_bg` rows with `diff.line_number` gutters; its
-horizontal scroll bar is solid, on a row of its own under the lines. A longer
+horizontal scroll bar is solid, on a row of its own under the lines. Each diff
+card is drawn in its own egui id scope (`messages::diff_ui` takes the block's
+`egui::Id` and wraps the card in `ui.push_id`), because two diff blocks of the
+same path in one message - a `multi_edit`, or two `Edit` calls to one file -
+otherwise collide on the id the card salts its scroll area with and egui paints
+its ID-clash warning (`First use of ScrollArea ID ...` / `Second use of ...`)
+over the transcript. A longer
 diff ends in a `[n] more lines...` banner with an `Open diff` button, which
 opens the diff overlay (`dialogs::diff_view`, a modal 85% of the window) on the
 message's diffs with the clicked one selected. The overlay draws the Diff pane's
@@ -2354,6 +2361,13 @@ it (`App::take_frontend_action`); a slash command that takes arguments
 runs; a theme is selected; an agent runs `/agent <name>`; a session is switched
 to. A slash command or agent row is queued for the next turn boundary while a
 turn runs, as a typed command is, and the user's draft in the prompt is kept.
+The same draft rule covers every other surface that runs a slash command
+without the user typing it - a ribbon button, a quick access button in the
+title strip, a native menu command and a status-bar service chip - through one
+helper (`shell::run_slash_keeping_draft`): it saves the draft, its cursor and
+the slash menu, runs the command, and restores all three when the command left
+the prompt empty, so a command that writes the prompt itself keeps what it
+wrote.
 Keyless actions (the palette, the pickers) do not run while a modal dialog has
 the keyboard, and Enter or an arrow typed in the same frame as query text runs
 after the query is updated (`dialogs::palette::prepare`). The GUI dialog (`dialogs::palette`) draws a focused search field that edits
