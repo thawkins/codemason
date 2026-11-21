@@ -1163,8 +1163,8 @@ left a review comment. The session gets a message describing the problem
 GitHub (github.com):
 
 1. Make sure `GITHUB_TOKEN` is set, or log in with `/github login`.
-2. Ask the agent to open a pull request; `github_create_pr` binds it to the
-   session. For an existing one, run `/autofix bind 67` (or `/autofix bind`
+2. Ask the agent to open a pull request; `github_create_pr` (or
+   `gh pr create` in a shell command) binds it to the session. For an existing one, run `/autofix bind 67` (or `/autofix bind`
    for the open PR of the session's branch, or paste its URL).
 3. Run `/autofix on`, or press `X` in the session menu.
 

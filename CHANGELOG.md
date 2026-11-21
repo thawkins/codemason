@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed: a pull request the agent opened with `gh pr create` (or a merge request with `glab mr create`) in a shell command was never recorded against the session, so the PR/MRs submenu, the sidebar's pull-request count and Auto-fix never saw it. Only `github_create_pr`, `gitlab_create_mr` and `autofix_add` bound requests. The tool dispatcher now reads the request URL from such a `Bash` call's output and binds it to the top-level session, taking the title and head branch from `--title`/`-t` and `--head`/`-H` (`--source-branch`/`-s` for `glab`) (`binding::bind_from_shell`).
+- Fixed: bare `http(s)://` URLs in assistant replies (a PR link, for example) were drawn as plain text in the GUI transcript, because CommonMark links only `<url>` and `[text](url)`. `markdown::autolink_bare_urls` now wraps them in `<...>` before rendering, leaving existing links, images and code untouched and keeping trailing punctuation outside the link.
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
 
 ## [1.0.173] - 2026-11-21

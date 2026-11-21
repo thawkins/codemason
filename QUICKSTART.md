@@ -1450,8 +1450,9 @@ the branch has merge conflicts, or someone else leaves a review comment.
 /autofix unbind          # forget the PR/MR
 ```
 
-A PR or MR the agent opens with `github_create_pr` or `gitlab_create_mr` is
-bound automatically. To do it all in one step, ask the agent to use
+A PR or MR the agent opens with `github_create_pr` or `gitlab_create_mr`, or
+with `gh pr create` / `glab mr create` in a shell command, is bound
+automatically. To do it all in one step, ask the agent to use
 `autofix_add`: it pushes the current branch, opens a PR/MR into the branch it
 was created from (or reuses the branch's open one), binds it and turns
 Auto-fix on. The sidebar row's pull-request count turns green when bound and amber
