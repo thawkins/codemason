@@ -165,6 +165,7 @@ pub const QUICK_ACCESS: &[RibbonItem] = &[
     slash("Undo", Icon::Undo, "/undo"),
     slash("Copy transcript", Icon::Copy, "/clip"),
     STOP,
+    slash("Resume", Icon::Resume, "/resume"),
 ];
 
 /// The ribbon's tabs.
@@ -225,13 +226,17 @@ pub const TABS: &[RibbonTab] = &[
             RibbonGroup {
                 label: "Setup",
                 items: &[
+                    slash("Provider", Icon::Provider, "/provider"),
                     slash("Model", Icon::Model, "/model"),
                     slash("Agent", Icon::Agent, "/agent"),
                 ],
             },
             RibbonGroup {
                 label: "Run",
-                items: &[slash("Loop", Icon::Loop, "/loop")],
+                items: &[
+                    slash("Loop", Icon::Loop, "/loop"),
+                    slash("Resume", Icon::Resume, "/resume"),
+                ],
             },
         ],
     },

@@ -79,11 +79,11 @@ The window has a word-processor layout on every theme (the
 for it):
 
 - A title strip shows the session's name (set it with `/name`; otherwise
-  `untitled` and its id) and four quick buttons: New session, Undo, Copy
-  transcript and Stop.
+  `untitled` and its id) and five quick buttons: New session, Undo, Copy
+  transcript, Stop and Resume.
 - A ribbon carries the commands. Its tabs are File (open a project, a new
   project folder, Quit), Home (sessions, undo and redo, copy, stop, compact),
-  Insert (attach images, templates), Agent (model, agent, loop), View (the Log,
+  Insert (attach images, templates), Agent (provider, model, agent, loop, resume), View (the Log,
   Profile, Tasks and Memory panels, theme), Review (cost, stats, doctor) and
   Help (About). Every button runs a command codemason already has
   and is labelled with its name. The Log, Profile, Tasks and Memory buttons

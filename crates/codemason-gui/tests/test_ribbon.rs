@@ -244,3 +244,50 @@ fn test_ribbon_title_strip_shows_the_session_name() {
     rig.harness.run();
     rig.harness.get_by_label("codemason - Release prep");
 }
+
+#[test]
+fn test_ribbon_agent_tab_has_provider_and_resume() {
+    let agent = TABS
+        .iter()
+        .find(|tab| tab.label == "Agent")
+        .expect("Agent tab");
+    let labels = |group: &str| -> Vec<&str> {
+        agent
+            .groups
+            .iter()
+            .find(|g| g.label == group)
+            .expect("group")
+            .items
+            .iter()
+            .map(|i| i.label)
+            .collect()
+    };
+    let setup = labels("Setup");
+    let provider = setup.iter().position(|l| *l == "Provider");
+    let model = setup.iter().position(|l| *l == "Model");
+    assert!(provider.is_some() && provider < model, "{setup:?}");
+    assert_eq!(labels("Run").last(), Some(&"Resume"));
+    let last = QUICK_ACCESS.last().expect("quick access");
+    assert_eq!(last.label, "Resume");
+    assert_eq!(
+        last.action,
+        RibbonAction::Menu(MenuAction::Slash("/resume"))
+    );
+}
+
+#[test]
+fn test_ribbon_slash_command_keeps_the_unsent_draft() {
+    let mut rig = rig("document-light");
+    {
+        let app = rig.harness.state_mut().app_mut();
+        app.session.input = "half-typed prompt".to_string();
+        app.session.input_cursor = 4;
+    }
+    // The quick access Resume: with nothing halted it only reports so, and a
+    // toolbar click is not a prompt submission, so the draft stays.
+    rig.harness.get_by_label("Resume").click();
+    rig.harness.run();
+    let app = rig.harness.state().app();
+    assert_eq!(app.session.input, "half-typed prompt");
+    assert_eq!(app.session.input_cursor, 4);
+}
