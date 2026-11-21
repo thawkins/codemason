@@ -229,8 +229,8 @@ appears under a "Thinking" row with its line count at the right; a thought of
 
 Edits show their diff under the call, up to 10 lines; a longer diff ends in a
 "n more lines..." banner whose **Open diff** button shows the message's changed
-files in an overlay (its close button is at the top right, or click outside
-it). The overlay and the Diff pane share one view. Its row of buttons steps through the
+files in an overlay (its close button is at the top right; Esc or a click
+outside it closes it too). The overlay and the Diff pane share one view. Its row of buttons steps through the
 files and the hunks and switches the layout and the reviewed mark; a button
 with nothing that way (the first hunk, the last file) is greyed out, and a
 readout at the right of the row says which hunk and which file you are on.

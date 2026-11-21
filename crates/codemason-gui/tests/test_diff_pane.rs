@@ -467,3 +467,15 @@ fn test_inline_diff_scroll_bar_does_not_cover_the_last_line() {
         "no room for the bar: narrow {narrow}, wide {scrolled}, bar {bar}"
     );
 }
+
+#[test]
+fn test_escape_closes_the_diff_overlay() {
+    let (_rt, mut harness) = shell();
+    harness.run();
+    open_overlay(&mut harness);
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(!is_open(&harness.ctx), "Esc closes the overlay");
+    // The transcript is still there behind it.
+    harness.get_by_label(OPEN_DIFF);
+}

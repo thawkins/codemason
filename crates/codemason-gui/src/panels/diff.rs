@@ -641,7 +641,8 @@ pub fn diff_view_ui(ui: &mut egui::Ui, pane: &mut DiffPaneState, palette: &Palet
     let layout = pane.layout;
     // Scroll to the hunk only when it changes, so the reader can scroll.
     let at = (pane.selected, hunk_index);
-    let last_id = Id::unique("codemason_diff_pane_shown_hunk");
+    // Per view: the Diff pane and the overlay each scroll to the hunk.
+    let last_id = ui.scope_id().with("codemason_diff_shown_hunk");
     let moved = ui.data(|d| d.get_temp::<(usize, usize)>(last_id)) != Some(at);
     ui.data_mut(|d| d.insert_temp(last_id, at));
     egui::ScrollArea::both()

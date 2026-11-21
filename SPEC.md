@@ -2258,7 +2258,8 @@ diff ends in a `[n] more lines...` banner with an `Open diff` button, which
 opens the diff overlay (`dialogs::diff_view`, a modal 85% of the window) on the
 message's diffs with the clicked one selected. The overlay draws the Diff pane's
 own view (`diff::diff_view_ui`), whose `Close diff` button sits at its top
-right; it or a click outside closes the overlay, and while it is open the pane's
+right; it, Esc or a click outside closes the overlay, no other key or menu
+command reaches the session behind it, and while it is open the pane's
 keys below act on it. The `Diff` dock pane (`PaneId::Diff`, in the right tab
 group, shown while `App::diff_pane.shown`) shows the same files. The pane shows one file, unified or split (`Old` and
 `New` columns per hunk, removed runs beside the added runs that follow them).

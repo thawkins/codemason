@@ -4,8 +4,10 @@
 //! opens it ([`open`]) on the message's diffs in `App::diff_pane`; [`show`]
 //! draws them in a modal with the Diff pane's own view
 //! ([`crate::panels::diff::diff_view_ui`]), whose close button sits at the
-//! top right. The close button or a click outside closes it. While it is
-//! open the Diff pane's keys (`]`, `[`, `n`, `p`, `v`, `m`) act on it.
+//! top right. The close button, Esc or a click outside closes it. While it
+//! is open the Diff pane's keys (`]`, `[`, `n`, `p`, `v`, `m`) act on it and
+//! no other key or menu command reaches the session behind it (the shell
+//! checks [`is_open`]).
 //!
 //! Whether it is open is GUI state (egui memory), not App state: the
 //! terminal frontend has no overlay.
@@ -79,7 +81,7 @@ pub fn show(ctx: &egui::Context, app: &mut App, palette: &Palette) -> bool {
                 egui::WidgetInfo::labeled(egui::Role::Dialog, true, DIFF_VIEW_TITLE)
             });
         });
-    if closed || modal.backdrop_response.clicked() {
+    if closed || modal.should_close() {
         ctx.data_mut(|d| d.remove::<bool>(open_id()));
     }
     true
