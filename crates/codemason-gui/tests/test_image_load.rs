@@ -3,7 +3,8 @@
 //! a path's `file://` URI is one the loader reads back as the same path.
 
 use codemason_gui::image_load::{
-    MAX_DECODE_SIDE, capped, decode_hint, file_uri, is_svg, refresh_if_changed, uri_path,
+    MAX_DECODE_SIDE, capped, decode_hint, file_uri, file_uri_dir, is_svg, refresh_if_changed,
+    uri_path,
 };
 use egui::load::SizeHint;
 
@@ -162,6 +163,30 @@ fn test_image_load_file_uri_is_not_percent_encoded() {
         );
         assert_eq!(uri_path(&uri).as_deref(), Some(path), "and back again");
     }
+}
+
+#[test]
+fn test_image_load_file_uri_dir_keeps_a_drive_path_resolvable() {
+    // A markdown image is a relative path appended to this prefix, so the
+    // prefix decides whether the loader finds it: on Windows a prefix built as
+    // `file://C:/shots` reads `C:` as a UNC host.
+    let unix = file_uri_dir(std::path::Path::new("/home/me/shots"));
+    assert_eq!(unix, "file:///home/me/shots/");
+    assert_eq!(
+        uri_path(&format!("{unix}screen.png")).as_deref(),
+        Some(std::path::Path::new("/home/me/shots/screen.png"))
+    );
+    let drive = file_uri_dir(std::path::Path::new("C:\\shots"));
+    assert_eq!(drive, "file:///C:\\shots/");
+    assert_eq!(
+        uri_path(&format!("{drive}screen.png")).as_deref(),
+        Some(std::path::Path::new("C:\\shots/screen.png"))
+    );
+    // One separator either way: a directory already ending in one gains none.
+    assert_eq!(
+        file_uri_dir(std::path::Path::new("/home/me/shots/")),
+        "file:///home/me/shots/"
+    );
 }
 
 #[test]

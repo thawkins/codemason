@@ -46,10 +46,12 @@
   *host*, so `C:\shots\screen.png` became `\\C:\shots\screen.png` and the file was
   never found. One `image_load::file_uri` now writes the third slash a URI puts
   after an empty authority (`file:///C:/shots/screen.png`) and leaves a plain
-  absolute path as it stands, with `image_load::uri_path` as its inverse; every
-  site goes through them (`dialogs::image_view`, `panels::prompt`,
-  `panels::messages`, `material::thumbnail`), and neither encodes the path, so a
-  file named `My%20Doc.png` still resolves.
+  absolute path as it stands, with `image_load::uri_path` as its inverse and
+  `image_load::file_uri_dir` for the prefix a relative markdown image is
+  appended to; every site goes through them (`dialogs::image_view`,
+  `panels::prompt`, `panels::messages`, `material::thumbnail`, and the markdown
+  viewer's implicit scheme), and none encodes the path, so a file named
+  `My%20Doc.png` still resolves.
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
 
 ## [1.0.173] - 2026-11-21

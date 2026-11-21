@@ -12,8 +12,9 @@
 //!   (or appeared) since it was loaded, so a regenerated `chart.png` shows
 //!   the new chart instead of the cached one.
 //! - [`file_uri`] builds the `file://` URI of a path in the one form the
-//!   loader reads back unambiguously on every platform, and [`uri_path`]
-//!   reverses it.
+//!   loader reads back unambiguously on every platform, [`file_uri_dir`]
+//!   does so for a directory a relative path is appended to, and
+//!   [`uri_path`] reverses it.
 //!
 //! Dependencies: `egui`, and `resvg`'s `usvg` (the version egui_extras
 //! already uses) to read an SVG's size.
@@ -61,6 +62,23 @@ pub fn file_uri(path: &Path) -> String {
     } else {
         format!("file://{text}")
     }
+}
+
+/// The `file://` URI prefix a path relative to `dir` is appended to: `dir`'s
+/// own [`file_uri`], ending in the separator that joins the two.
+///
+/// A relative image in markdown is resolved by prefixing it with this, so the
+/// prefix has to be built by the same rule as [`file_uri`] or a Windows drive
+/// takes the drive's `C:` for a UNC host. `file:///C:/shots/` keeps the third
+/// slash on a drive path, and a plain directory already begins with the
+/// separator.
+#[must_use]
+pub fn file_uri_dir(dir: &Path) -> String {
+    let mut uri = file_uri(dir);
+    if !uri.ends_with('/') {
+        uri.push('/');
+    }
+    uri
 }
 
 /// The file path a `file://` URI names, if it names one.

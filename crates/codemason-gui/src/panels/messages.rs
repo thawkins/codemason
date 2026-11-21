@@ -1004,7 +1004,7 @@ fn markdown_ui(ui: &mut egui::Ui, cache: &mut CommonMarkCache, text: &str, root:
         border.width *= TABLE_BORDER_SCALE;
     }
     CommonMarkViewer::new()
-        .default_implicit_uri_scheme(format!("file://{}/", root.display()))
+        .default_implicit_uri_scheme(crate::image_load::file_uri_dir(root))
         .show(ui, cache, text);
 }
 
