@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: the GUI ribbon's **Agent** tab has a **Provider** button (`/provider`) before **Model**, and a **Resume** button (`/resume`) at the end of its **Run** group. Resume is also the last quick access button in the title strip. Two glyphs (`cloud`, `play_arrow`) join the bundled Material Symbols subset as `Icon::Provider` and `Icon::Resume`.
+
 ## [1.0.174] - 2026-11-21
 
 Session request history, shell-created pull requests, and attachment thumbnails.

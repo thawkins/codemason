@@ -114,11 +114,15 @@ pub enum Icon {
     Maximize,
     /// Restore the window (`filter_none`).
     Restore,
+    /// The model provider (`cloud`).
+    Provider,
+    /// Resume a halted agent (`play_arrow`).
+    Resume,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 44] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -161,6 +165,8 @@ impl Icon {
         Self::Minimize,
         Self::Maximize,
         Self::Restore,
+        Self::Provider,
+        Self::Resume,
     ];
 
     /// The icon's character in the Material Symbols font.
@@ -209,6 +215,8 @@ impl Icon {
             Self::Minimize => "\u{e931}",
             Self::Maximize => "\u{e3c6}",
             Self::Restore => "\u{e3e0}",
+            Self::Provider => "\u{e2bd}",
+            Self::Resume => "\u{e037}",
         }
     }
 
@@ -258,6 +266,8 @@ impl Icon {
             Self::Minimize => "_",
             Self::Maximize => "[ ]",
             Self::Restore => "[=]",
+            Self::Provider => "api",
+            Self::Resume => "|>",
         }
     }
 }

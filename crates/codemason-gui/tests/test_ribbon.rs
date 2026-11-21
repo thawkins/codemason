@@ -244,3 +244,33 @@ fn test_ribbon_title_strip_shows_the_session_name() {
     rig.harness.run();
     rig.harness.get_by_label("codemason - Release prep");
 }
+
+#[test]
+fn test_ribbon_agent_tab_has_provider_and_resume() {
+    let agent = TABS
+        .iter()
+        .find(|tab| tab.label == "Agent")
+        .expect("Agent tab");
+    let labels = |group: &str| -> Vec<&str> {
+        agent
+            .groups
+            .iter()
+            .find(|g| g.label == group)
+            .expect("group")
+            .items
+            .iter()
+            .map(|i| i.label)
+            .collect()
+    };
+    let setup = labels("Setup");
+    let provider = setup.iter().position(|l| *l == "Provider");
+    let model = setup.iter().position(|l| *l == "Model");
+    assert!(provider.is_some() && provider < model, "{setup:?}");
+    assert_eq!(labels("Run").last(), Some(&"Resume"));
+    let last = QUICK_ACCESS.last().expect("quick access");
+    assert_eq!(last.label, "Resume");
+    assert_eq!(
+        last.action,
+        RibbonAction::Menu(MenuAction::Slash("/resume"))
+    );
+}

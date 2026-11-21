@@ -153,7 +153,7 @@ Done, with these differences:
 - The title strip shows `codemason - <project folder>`, not the session
   title: the session title is only read from the database, too costly per
   frame. Its quick access buttons are New session, Undo, Copy transcript
-  (`/clip`) and Stop (Esc).
+  (`/clip`), Stop (Esc) and Resume (`/resume`).
 - File is an ordinary ribbon tab (project folders, About, Quit), not a
   full-window backstage sheet.
 - The prompt keeps its own editor (completion, history, attachments) inside
@@ -181,7 +181,8 @@ Done, with these differences:
    - **Home**: Session (New, Resume, Rename), Clipboard (Copy, Paste
      attachment), Turn (Send, Stop, Queue).
    - **Insert**: Attach file, Attach image, Mention file, Snippet.
-   - **Agent**: Model picker, Agent profile, Permissions mode, Loop.
+   - **Agent**: Provider, Model picker, Agent profile, Permissions mode, Loop,
+     Resume.
    - **View**: Pane toggles as toggle icon buttons (Sessions, Log, Tasks,
      Memory, Context, Agents, Teams, Queue), Theme, Zoom.
    - **Review**: Diff, Context breakdown, Usage.
