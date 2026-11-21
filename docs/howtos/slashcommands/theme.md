@@ -63,6 +63,32 @@ from those roles.
 | `/theme <name>` | Switch to any listed theme; the name is case-insensitive (`high_contrast` and `highcontrast` are accepted for `high-contrast`) |
 | `/theme help` | Show the help table |
 
+## Editing a theme
+
+In the picker, every theme except `system` has an edit (pencil) button. It
+opens the theme editor over the picker:
+
+- Every colour is listed under its group (`text`, `bg`, `border`, `accent`,
+  `state`, `diff`, `syntax`, `markdown`, `categorical`, `m3`). Click a swatch
+  for a colour picker, or type `#rrggbb` into the hex field; a hex value is
+  taken once it is valid.
+- The window previews the edited theme while the editor is open, and colours
+  below the contrast floors are listed at the top.
+- **Save** writes the theme. A theme loaded from a file is saved back to that
+  file; a built-in theme is saved to
+  `~/.config/codemason/themes/<name>.json`, which replaces the built-in one
+  from then on.
+- **Reset to default** (built-in themes only) deletes your copy in
+  `~/.config/codemason/themes/` and restores the built-in colours. A built-in
+  replaced by a project's `.codemason/themes/` file is not reset (that file
+  belongs to the repository), and if another file still replaces the theme
+  the status line names it.
+- **Cancel edit** closes the editor without saving. Esc does too; with
+  unsaved edits the first Esc only warns and the second discards them.
+
+Editing a theme whose file has no `m3` block and changing one of its `m3`
+colours stores the whole `m3` block in the saved file.
+
 ## Your own themes
 
 A theme is a JSON file. Put it in `~/.config/codemason/themes/` (every

@@ -2186,7 +2186,19 @@ for `text.subtle`, `accent` and the state colours) is used; both are reported
 as warnings in the Log pane. The selection is `system` (the default, following
 the operating system between `codemason-dark` and `codemason-light`; no
 reported preference counts as dark) or a named theme, and changing it restyles
-the window on the next frame. Spacing, corner radii and text sizes come from
+the window on the next frame. Each theme row of the `/theme` picker except
+`system` has an edit button that opens the theme editor (`App::theme_editor`,
+`crates/codemason-app-core/src/app/theme_editor.rs`, drawn by
+`crates/codemason-gui/src/dialogs/theme_editor.rs`): every colour by its
+dotted key (`ThemeTokens::colours`, Material roles included) with a swatch and
+a hex field, a live preview of the edited theme and its contrast warnings.
+Save writes the theme (`save_theme`, atomic) back to the file it was loaded
+from, or, for a built-in theme, to `~/.config/codemason/themes/<name>.json`,
+which replaces the built-in from then on; Reset to default (built-in themes
+only) deletes that file when it is in the user themes directory (never a
+project file) and reloads the catalog, naming any file that still replaces the
+theme; Cancel edit drops the edit, and so does Esc (with unsaved edits, the
+first Esc only warns). Spacing, corner radii and text sizes come from
 the scales in `crates/codemason-gui/src/metrics.rs` (spacing 4/8/12/16/24,
 radii 4/6/10, text 12/14/16/20).
 
@@ -2731,7 +2743,7 @@ repository and does not use ETags.
 | `/compact` | Summarise and compact the conversation history (one-shot LLM summarisation; FR-009). `/compress` is a deprecated alias |
 | `/memory` | Structured-memory panel and summary: `/memory` / `/memory show` (same), `/memory clear` (a `Yes`/`No` dialog clears this project's memories), `/memory help` |
 | `/db` | Session database: `/db prune [--days N] [--dry-run]` deletes messages older than the retention window (the session row is kept; a real prune arms a `Yes`/`No` dialog that opens on `No`), `/db help` (also the bare form) |
-| `/theme` | Switch the window's colour theme while it runs. A bare `/theme` opens the theme picker (Up/Down or a click previews, Enter keeps, Esc restores); `/theme list` reports the current theme and the catalog; `/theme <name>`, `/theme system`, `/theme dark` and `/theme light` switch directly. The `theme` config key sets the theme at startup (`"system"` when unset or unknown); choosing a theme (`/theme <name>`, Enter in the picker, or the command palette) writes it to the user-global config, so the choice survives a restart |
+| `/theme` | Switch the window's colour theme while it runs. A bare `/theme` opens the theme picker (Up/Down or a click previews, Enter keeps, Esc restores); `/theme list` reports the current theme and the catalog; `/theme <name>`, `/theme system`, `/theme dark` and `/theme light` switch directly. The `theme` config key sets the theme at startup (`"system"` when unset or unknown); choosing a theme (`/theme <name>`, Enter in the picker, or the command palette) writes it to the user-global config, so the choice survives a restart. Each picker row's edit button opens the theme editor (edit colours with a live preview; Save, Cancel edit, Reset to default) |
 | `/verbosity` | Set how much the transcript shows: `/verbosity low\|medium\|high` (default `low`); a bare `/verbosity` reports it. The `verbosity` config key sets the startup level; `/verbosity` does not write it |
 | `/thinking-display` | Set how thinking text shows: `/thinking-display show\|hide\|collapse` (expanded, hidden, collapsed; default collapsed); a bare form reports it. The `thinking_display` config key (`collapsed`, `expanded`, `hidden`) sets the startup mode. Distinct from `/thinking`, which sets the model's thinking level |
 | `/undo` / `/redo` | `/undo` removes the last turn from the conversation and the session database and restores the work tree to the snapshot taken before that turn's first tool call; `/redo` puts the messages and files back while nothing has been sent since (section 3.10) |
