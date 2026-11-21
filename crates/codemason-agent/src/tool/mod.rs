@@ -1395,6 +1395,27 @@ impl codemason_tools_vcs::storage::StorageBackend for CoreVcsStorageAdapter {
     }
 }
 
+/// Binds a pull/merge request that a `Bash` call opened (`gh pr create`,
+/// `glab mr create`) to the calling session, as `github_create_pr` does.
+///
+/// # Arguments
+///
+/// * `ctx` - the context the `Bash` call ran with.
+/// * `command` - the shell command it ran.
+/// * `output` - the call's output, which holds the request's URL.
+pub(crate) fn bind_shell_created_request(ctx: &ToolContext, command: &str, output: &str) {
+    let Some(storage) = ctx.storage.as_ref() else {
+        return;
+    };
+    let vcs_ctx = codemason_tools_vcs::ToolContext {
+        session_id: ctx.session_id.clone(),
+        working_dir: ctx.working_dir.clone(),
+        storage: Some(Arc::new(CoreVcsStorageAdapter::new(storage.clone()))),
+        config: ctx.config.clone(),
+    };
+    codemason_tools_vcs::binding::bind_from_shell(&vcs_ctx, command, output);
+}
+
 struct ExtractedVcsToolAdapter {
     inner: Arc<dyn codemason_tools_vcs::Tool>,
 }

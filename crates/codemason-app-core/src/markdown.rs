@@ -4,6 +4,9 @@
 //! [`split_standalone_images`] cuts a document around the images that
 //! stand alone in a paragraph, so a frontend can draw them itself.
 //!
+//! [`autolink_bare_urls`] turns bare `http(s)://` URLs into autolinks, which
+//! CommonMark (unlike GitHub) does not do on its own.
+//!
 //! [`markdown_to_styled`] turns a markdown document (a `RESEARCH.md` body,
 //! for the `/research open` viewer) into styled lines: headings, lists,
 //! code blocks (monospace), inline code (monospace), links, images as
@@ -13,6 +16,7 @@
 //! Dependencies: `pulldown-cmark` (parsing) and [`crate::app`]
 //! (`sanitize_for_display`, `image_dimensions_or_placeholder`).
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -43,6 +47,112 @@ pub fn has_table(markdown: &str) -> bool {
     markdown.contains('|')
         && Parser::new_ext(markdown, Options::ENABLE_TABLES)
             .any(|event| matches!(event, MdEvent::Start(Tag::Table(_))))
+}
+
+/// Wrap every bare `http://` / `https://` URL in `markdown` in `<...>`, so
+/// a CommonMark renderer draws it as a link (CommonMark, unlike GitHub
+/// Flavored Markdown, links only `<url>` and `[text](url)`). URLs already in
+/// a link or image, in code, or in HTML are left alone; trailing sentence
+/// punctuation and an unbalanced `)` or `]` are kept outside the link.
+///
+/// # Returns
+///
+/// `markdown` unchanged (borrowed) when it has no bare URL.
+#[must_use]
+pub fn autolink_bare_urls(markdown: &str) -> Cow<'_, str> {
+    if !markdown.contains("://") {
+        return Cow::Borrowed(markdown);
+    }
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let mut links = Vec::new();
+    // Nesting of links, images and code blocks: their text is not searched.
+    let mut skipped_depth = 0usize;
+    // The parser splits a run of text at characters such as `_`, which
+    // occur in URLs: adjacent text events are searched as one run.
+    let mut run: Option<std::ops::Range<usize>> = None;
+    for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+        let searched = matches!(event, MdEvent::Text(_)) && skipped_depth == 0;
+        match &mut run {
+            Some(open) if searched && open.end == range.start => {
+                open.end = range.end;
+                continue;
+            }
+            _ => {
+                if let Some(done) = run.take() {
+                    bare_urls(&markdown[done.clone()], done.start, &mut links);
+                }
+            }
+        }
+        match event {
+            MdEvent::Start(Tag::Link { .. } | Tag::Image { .. } | Tag::CodeBlock(_)) => {
+                skipped_depth += 1;
+            }
+            MdEvent::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock) => {
+                skipped_depth = skipped_depth.saturating_sub(1);
+            }
+            _ if searched => run = Some(range),
+            _ => {}
+        }
+    }
+    if let Some(done) = run {
+        bare_urls(&markdown[done.clone()], done.start, &mut links);
+    }
+    if links.is_empty() {
+        return Cow::Borrowed(markdown);
+    }
+    let mut out = String::with_capacity(markdown.len() + links.len() * 2);
+    let mut copied = 0;
+    for (start, end) in links {
+        out.push_str(&markdown[copied..start]);
+        out.push('<');
+        out.push_str(&markdown[start..end]);
+        out.push('>');
+        copied = end;
+    }
+    out.push_str(&markdown[copied..]);
+    Cow::Owned(out)
+}
+
+/// Push the `(start, end)` byte ranges (offset by `base`) of the URLs in
+/// `text` onto `links`.
+fn bare_urls(text: &str, base: usize, links: &mut Vec<(usize, usize)>) {
+    let mut from = 0;
+    while let Some(found) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| text[from..].find(scheme).map(|i| (from + i, scheme.len())))
+        .min()
+    {
+        let (start, scheme_len) = found;
+        let len = text[start..]
+            .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`'))
+            .unwrap_or(text.len() - start);
+        let mut url = &text[start..start + len];
+        loop {
+            // `_` and `*` are kept: emphasis delimiters around a URL are
+            // already outside the parser's text, and both are valid in paths.
+            let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'']);
+            let trimmed = [('(', ')'), ('[', ']')]
+                .iter()
+                .find_map(|&(open, close)| {
+                    let rest = trimmed.strip_suffix(close)?;
+                    (trimmed.matches(open).count() < trimmed.matches(close).count()).then_some(rest)
+                })
+                .unwrap_or(trimmed);
+            if trimmed.len() == url.len() {
+                break;
+            }
+            url = trimmed;
+        }
+        // A word starting `http://` with no host after it is not a URL.
+        let preceded_ok = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        if url.len() > scheme_len && preceded_ok {
+            links.push((base + start, base + start + url.len()));
+        }
+        from = start + len.max(scheme_len);
+    }
 }
 
 /// One piece of a markdown document split by [`split_standalone_images`].

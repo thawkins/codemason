@@ -2604,7 +2604,10 @@ is in a section. Deleting a section returns its sessions to their projects.
 **Binding.** A session is bound to at most one pull request (GitHub) or
 merge request (GitLab), stored on its top-level session in
 `session_requests`. `github_create_pr` and `gitlab_create_mr` bind the
-request they create (a binding failure is logged, never fails the tool);
+request they create (a binding failure is logged, never fails the tool), and
+so does a `Bash` call running `gh pr create` / `glab mr create`, whose
+output's request URL is bound with the title and head branch read from the
+command's flags;
 the `autofix_add` tool pushes the current branch, opens (or reuses) its
 request against the branch it came from and turns Auto-fix on;
 `/autofix bind [number|#n|!n|url]` binds an existing one, or with no

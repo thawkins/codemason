@@ -11,6 +11,14 @@
 
 **Update prompt:** Update @STATS.md to show the composition of the project, show breakdown by crate
 
+> **Shell-created PR binding and bare-URL links (unreleased).** No crate or
+> file is added or removed: `codemason-tools-vcs` (`binding.rs`),
+> `codemason-agent` (tool dispatcher), `codemason-app-core` (`markdown.rs`)
+> and `codemason-gui` (Messages pane) get small edits, with 6 new tests in
+> `test_request_binding` and `test_markdown`. `cargo nextest run -p
+> codemason-tools-vcs -p codemason-app-core -p codemason-gui` ran 4,537 tests,
+> all passing.
+
 > **Removable attachment thumbnails (unreleased, branch `festive_easley`).**
 > Staged images above the prompt are now thumbnails (`material/thumbnail.rs`,
 > new, with `panels/prompt.rs::attachments_row` rewritten from a text row), each

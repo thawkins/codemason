@@ -52,7 +52,9 @@ use std::time::{Duration, Instant};
 use codemason_agent::message::{Message, Role as MessageRole};
 use codemason_app_core::activity::{ActivityGroup, group_activity};
 use codemason_app_core::app::App;
-use codemason_app_core::markdown::{MarkdownPiece, has_table, split_standalone_images};
+use codemason_app_core::markdown::{
+    MarkdownPiece, autolink_bare_urls, has_table, split_standalone_images,
+};
 use codemason_app_core::message_blocks::{ToolState, TranscriptBlock, message_to_blocks};
 use codemason_app_core::message_lines::MESSAGE_STREAM_MIN_INTERVAL;
 use codemason_app_core::message_text::canonical_tool_name;
@@ -995,7 +997,8 @@ fn draw_blocks(
 }
 
 /// Draw `text` as markdown, with relative image paths resolved against
-/// the session's folder (`root`) rather than the process's.
+/// the session's folder (`root`) rather than the process's, and bare URLs
+/// drawn as links.
 fn markdown_ui(ui: &mut egui::Ui, cache: &mut CommonMarkCache, text: &str, root: &Path) {
     if has_table(text) {
         // egui_commonmark frames a table in egui's noninteractive stroke;
@@ -1005,7 +1008,7 @@ fn markdown_ui(ui: &mut egui::Ui, cache: &mut CommonMarkCache, text: &str, root:
     }
     CommonMarkViewer::new()
         .default_implicit_uri_scheme(crate::image_load::file_uri_dir(root))
-        .show(ui, cache, text);
+        .show(ui, cache, &autolink_bare_urls(text));
 }
 
 /// Where an image in a reply is read from.
