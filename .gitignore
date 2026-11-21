@@ -139,3 +139,4 @@ node_modules/
 
 # Output of scripts/gen-spec-pdf.sh
 /SPEC.pdf
+.superpowers/
