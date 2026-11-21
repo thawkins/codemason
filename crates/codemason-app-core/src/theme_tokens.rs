@@ -17,10 +17,11 @@
 //! Dependencies: `serde` and `serde_json` (theme files), `codemason-config`
 //! (saving the chosen theme).
 
-use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Name of the built-in dark theme, used when the system is dark.
 pub const DARK_THEME: &str = "codemason-dark";
@@ -96,6 +97,12 @@ impl Rgb {
         Some(Self(channel(0)?, channel(2)?, channel(4)?))
     }
 
+    /// Formats the colour as lowercase `#rrggbb`, the shape a theme file uses.
+    #[must_use]
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.0, self.1, self.2)
+    }
+
     /// The WCAG 2 relative luminance of this colour, 0.0 (black) to 1.0 (white).
     #[must_use]
     pub fn relative_luminance(self) -> f32 {
@@ -122,6 +129,12 @@ impl<'de> Deserialize<'de> for Rgb {
     }
 }
 
+impl Serialize for Rgb {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
 /// The WCAG 2 contrast ratio between two colours.
 ///
 /// Returns `(L1 + 0.05) / (L2 + 0.05)` for the lighter (`L1`) and darker (`L2`)
@@ -135,7 +148,7 @@ pub fn contrast_ratio(a: Rgb, b: Rgb) -> f32 {
 }
 
 /// Text colours, from most to least prominent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TextTokens {
     /// Body text.
@@ -147,7 +160,7 @@ pub struct TextTokens {
 }
 
 /// Surface colours, from the window background upwards.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BgTokens {
     /// The window and panel background.
@@ -161,7 +174,7 @@ pub struct BgTokens {
 }
 
 /// Border colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BorderTokens {
     /// Resting outlines and separators.
@@ -171,7 +184,7 @@ pub struct BorderTokens {
 }
 
 /// State colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateTokens {
     /// Success.
@@ -185,7 +198,7 @@ pub struct StateTokens {
 }
 
 /// Diff colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiffTokens {
     /// Text of an added line.
@@ -203,7 +216,7 @@ pub struct DiffTokens {
 }
 
 /// Syntax-highlighting colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SyntaxTokens {
     /// Keywords.
@@ -225,7 +238,7 @@ pub struct SyntaxTokens {
 }
 
 /// Markdown colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MarkdownTokens {
     /// Headings.
@@ -239,7 +252,7 @@ pub struct MarkdownTokens {
 }
 
 /// One theme: every colour a frontend draws with, by meaning.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeTokens {
     /// The name the theme is selected by, e.g. `codemason-dark`.
@@ -247,7 +260,7 @@ pub struct ThemeTokens {
     /// Whether the theme is dark (light text on a dark background).
     pub dark: bool,
     /// Attribution for a ported palette.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credit: Option<String>,
     /// Text colours.
     pub text: TextTokens,
@@ -269,14 +282,14 @@ pub struct ThemeTokens {
     pub categorical: [Rgb; 8],
     /// Material Design 3 colour roles. Optional in a theme file: when absent,
     /// [`ThemeTokens::roles`] derives them from the tokens above.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub m3: Option<M3Roles>,
 }
 
 /// Material Design 3 colour roles.
 ///
 /// Each `on_x` role is the text and icon colour drawn on the `x` role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct M3Roles {
     /// High-emphasis fills: filled buttons, active indicators.
@@ -511,6 +524,63 @@ fn on_colour(fill: Rgb) -> Rgb {
 }
 
 impl ThemeTokens {
+    /// Every colour of the theme as `(key, colour)`, keyed by its dotted path
+    /// in a theme file: `text.base`, `accent`, `categorical.3`, `m3.primary`.
+    ///
+    /// The Material roles are listed even when the theme file has none: they
+    /// are then the derived [`ThemeTokens::roles`]. Groups and keys come in
+    /// the order of a serialised theme file.
+    #[must_use]
+    pub fn colours(&self) -> Vec<(String, Rgb)> {
+        let mut full = self.clone();
+        full.m3 = Some(self.roles());
+        let mut out = Vec::new();
+        if let Ok(serde_json::Value::Object(root)) = serde_json::to_value(&full) {
+            for (key, value) in &root {
+                collect_colours(key, value, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Sets the colour at `key` (a key from [`ThemeTokens::colours`]).
+    ///
+    /// Setting an `m3.*` key on a theme without its own Material roles first
+    /// stores the derived roles, so the other roles keep their look.
+    ///
+    /// # Returns
+    ///
+    /// `false`, with the theme unchanged, when `key` names no colour.
+    pub fn set_colour(&mut self, key: &str, value: Rgb) -> bool {
+        let mut edited = self.clone();
+        if key.starts_with("m3.") && edited.m3.is_none() {
+            edited.m3 = Some(edited.roles());
+        }
+        let Ok(mut json) = serde_json::to_value(&edited) else {
+            return false;
+        };
+        let slot = key.split('.').try_fold(&mut json, |node, part| match node {
+            serde_json::Value::Object(map) => map.get_mut(part),
+            serde_json::Value::Array(items) => {
+                part.parse::<usize>().ok().and_then(|i| items.get_mut(i))
+            }
+            _ => None,
+        });
+        match slot {
+            Some(slot) if slot.as_str().and_then(Rgb::from_hex).is_some() => {
+                *slot = serde_json::Value::String(value.to_hex());
+            }
+            _ => return false,
+        }
+        match serde_json::from_value::<Self>(json) {
+            Ok(theme) => {
+                *self = theme;
+                true
+            }
+            Err(_) => false, // no-error-ok: a key that broke the shape names no colour
+        }
+    }
+
     /// The theme's Material Design 3 colour roles.
     ///
     /// # Returns
@@ -651,6 +721,9 @@ impl ThemeSelection {
 pub struct ThemeCatalog {
     /// The themes in listing order; names are unique.
     themes: Vec<Arc<ThemeTokens>>,
+    /// The file each theme loaded by [`ThemeCatalog::load_dir`] came from.
+    /// Built-in themes have no entry.
+    sources: BTreeMap<String, PathBuf>,
 }
 
 impl Default for ThemeCatalog {
@@ -678,6 +751,7 @@ impl ThemeCatalog {
         });
         Self {
             themes: themes.clone(),
+            sources: BTreeMap::new(),
         }
     }
 
@@ -703,7 +777,7 @@ impl ThemeCatalog {
             match read_theme(&path) {
                 Ok(theme) => {
                     warnings.extend(theme.contrast_failures());
-                    self.insert(theme);
+                    self.insert_from(theme, path);
                 }
                 Err(reason) => {
                     warnings.push(format!("theme file {} skipped: {reason}", path.display()));
@@ -720,6 +794,27 @@ impl ThemeCatalog {
             Some(slot) => *slot = theme,
             None => self.themes.push(theme),
         }
+    }
+
+    /// Adds `theme`, loaded from `path`, replacing the entry of the same name,
+    /// and records `path` as the theme's source file.
+    pub fn insert_from(&mut self, theme: ThemeTokens, path: PathBuf) {
+        self.sources.insert(theme.name.clone(), path);
+        self.insert(theme);
+    }
+
+    /// The file the theme called `name` was loaded from, or `None` for a
+    /// built-in theme no file replaced.
+    #[must_use]
+    pub fn source(&self, name: &str) -> Option<&Path> {
+        self.sources.get(name).map(PathBuf::as_path)
+    }
+
+    /// Whether `name` is one of the built-in themes, whether or not a file
+    /// currently replaces it.
+    #[must_use]
+    pub fn is_builtin(&self, name: &str) -> bool {
+        Self::builtin().get(name).is_some()
     }
 
     /// The theme called `name`, if the catalog has one.
@@ -817,6 +912,100 @@ fn read_theme(path: &Path) -> Result<ThemeTokens, String> {
         return Err(format!("over the {MAX_THEME_BYTES} byte limit"));
     }
     ThemeTokens::from_json(&json).map_err(|e| e.to_string())
+}
+
+/// Adds the colours under `value` to `out`, keyed by their dotted path from
+/// `key`. Only `#rrggbb` strings inside a group or array are colours; the
+/// top-level `name` and `credit` strings are not.
+fn collect_colours(key: &str, value: &serde_json::Value, out: &mut Vec<(String, Rgb)>) {
+    match value {
+        serde_json::Value::String(text) if key != "name" && key != "credit" => {
+            if let Some(colour) = Rgb::from_hex(text) {
+                out.push((key.to_string(), colour));
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (child, inner) in map {
+                collect_colours(&format!("{key}.{child}"), inner, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (i, inner) in items.iter().enumerate() {
+                collect_colours(&format!("{key}.{i}"), inner, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The test override of [`user_themes_dir`].
+fn user_themes_dir_override() -> &'static Mutex<Option<PathBuf>> {
+    static OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+/// Points [`user_themes_dir`] at `dir` (or back at the real directory with
+/// `None`), so tests never write into the user's config.
+#[doc(hidden)]
+pub fn set_user_themes_dir_override(dir: Option<PathBuf>) {
+    *user_themes_dir_override()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = dir;
+}
+
+/// The user's theme directory, `~/.config/codemason/themes`, where an edited
+/// built-in theme is saved; `None` when no config directory can be found.
+#[must_use]
+pub fn user_themes_dir() -> Option<PathBuf> {
+    let forced = user_themes_dir_override()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    forced.or_else(|| codemason_config::Config::global_config_dir().map(|d| d.join("themes")))
+}
+
+/// The file name a theme called `name` is saved under: every character
+/// outside `[A-Za-z0-9_-]` becomes `_`, so the name cannot leave the theme
+/// directory, and `.json` is added.
+#[must_use]
+pub fn theme_file_name(name: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{stem}.json")
+}
+
+/// Writes `theme` to `path` as a theme file, creating the parent directory.
+///
+/// The JSON goes to `<path>.tmp` first and is renamed over `path`, so a
+/// failed write never leaves a half-written theme behind.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be created or the file cannot
+/// be written or renamed.
+pub fn save_theme(theme: &ThemeTokens, path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut json = serde_json::to_string_pretty(theme)?;
+    json.push('\n');
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    if let Err(err) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp); // INTENTIONAL: best-effort cleanup; the rename error is returned
+        return Err(err.into());
+    }
+    Ok(())
 }
 
 /// The theme the launch configuration asks for, set once by the binary.

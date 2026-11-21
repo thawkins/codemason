@@ -609,6 +609,8 @@ mod test_telemetry_slash;
 mod test_text_selection;
 #[path = "test_theme_command.rs"]
 mod test_theme_command;
+#[path = "test_theme_save.rs"]
+mod test_theme_save;
 #[path = "test_theme_tokens.rs"]
 mod test_theme_tokens;
 #[path = "test_think_narration_scrub.rs"]
