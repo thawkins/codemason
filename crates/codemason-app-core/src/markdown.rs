@@ -53,7 +53,7 @@ pub fn has_table(markdown: &str) -> bool {
 /// a CommonMark renderer draws it as a link (CommonMark, unlike GitHub
 /// Flavored Markdown, links only `<url>` and `[text](url)`). URLs already in
 /// a link or image, in code, or in HTML are left alone; trailing sentence
-/// punctuation and an unbalanced `)` are kept outside the link.
+/// punctuation and an unbalanced `)` or `]` are kept outside the link.
 ///
 /// # Returns
 ///
@@ -128,11 +128,16 @@ fn bare_urls(text: &str, base: usize, links: &mut Vec<(usize, usize)>) {
             .unwrap_or(text.len() - start);
         let mut url = &text[start..start + len];
         loop {
-            let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '*', '_']);
-            let trimmed = match trimmed.strip_suffix(')') {
-                Some(rest) if trimmed.matches('(').count() < trimmed.matches(')').count() => rest,
-                _ => trimmed,
-            };
+            // `_` and `*` are kept: emphasis delimiters around a URL are
+            // already outside the parser's text, and both are valid in paths.
+            let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'']);
+            let trimmed = [('(', ')'), ('[', ']')]
+                .iter()
+                .find_map(|&(open, close)| {
+                    let rest = trimmed.strip_suffix(close)?;
+                    (trimmed.matches(open).count() < trimmed.matches(close).count()).then_some(rest)
+                })
+                .unwrap_or(trimmed);
             if trimmed.len() == url.len() {
                 break;
             }

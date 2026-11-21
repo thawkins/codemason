@@ -120,6 +120,9 @@ fn test_request_binding_ignores_other_commands() {
     let url = "https://github.com/acme/app/pull/7";
     assert!(request_from_shell("gh pr view 7 --json url", url).is_none());
     assert!(request_from_shell("echo gh pr", url).is_none());
+    // Printing an example create command runs no `gh`.
+    assert!(request_from_shell(&format!("echo gh pr create {url}"), url).is_none());
+    assert!(request_from_shell("# gh pr create\nls", url).is_none());
     // A create that printed no request URL (it failed) binds nothing.
     assert!(request_from_shell("gh pr create --fill", "error: no commits").is_none());
 }
@@ -153,4 +156,21 @@ fn test_request_binding_shell_create_binds_top_level_session() {
             .len(),
         1
     );
+}
+
+#[test]
+fn test_request_binding_flags_come_from_the_create_command_only() {
+    let url = "https://github.com/acme/app/pull/3\n";
+    let request = request_from_shell(
+        "GH_PROMPT_DISABLED=1 gh pr create --fill; echo --title Other --head other",
+        url,
+    )
+    .expect("a created PR after an env assignment");
+    assert_eq!(request.number, 3);
+    assert_eq!(request.title, "");
+    assert_eq!(request.head_branch, "");
+    let request = request_from_shell("git push && gh pr create -t 'T' -H b | cat", url)
+        .expect("a created PR between other commands");
+    assert_eq!(request.title, "T");
+    assert_eq!(request.head_branch, "b");
 }

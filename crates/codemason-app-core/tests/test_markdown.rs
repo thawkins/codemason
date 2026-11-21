@@ -98,6 +98,10 @@ fn test_markdown_autolink_bare_url() {
         "See <https://example.com/a>. Then (<http://x.io/b>)."
     );
     assert_eq!(
+        autolink_bare_urls("See [https://example.com] and https://example.com/file_"),
+        "See [<https://example.com>] and <https://example.com/file_>"
+    );
+    assert_eq!(
         autolink_bare_urls("- https://en.wikipedia.org/wiki/Rust_(language)"),
         "- <https://en.wikipedia.org/wiki/Rust_(language)>"
     );

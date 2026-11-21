@@ -249,8 +249,15 @@ async fn dispatch_tool_leaf(
         })
         .await;
     // A pull/merge request opened with `gh pr create` / `glab mr create` is
-    // bound to the session like one opened by `github_create_pr`.
-    if let (Some(command), Ok(output)) = (command.as_deref(), output.as_ref()) {
+    // bound to the session like one opened by `github_create_pr`. `Bash`
+    // returns `Ok` for a nonzero exit too, so only a successful run counts.
+    if let (Some(command), Ok(output)) = (command.as_deref(), output.as_ref())
+        && output
+            .metadata
+            .as_ref()
+            .and_then(|m| m["exit_code"].as_i64())
+            == Some(0)
+    {
         crate::tool::bind_shell_created_request(tool_ctx, command, &output.content);
     }
     output

@@ -65,20 +65,25 @@ pub fn bind_created(ctx: &ToolContext, mut request: SessionRequest) {
 /// last such URL wins). `None` otherwise.
 #[must_use]
 pub fn request_from_shell(command: &str, output: &str) -> Option<SessionRequest> {
-    let tokens = shell_tokens(command);
-    let (forge, start, marker, head_flags): (&str, usize, &str, &[&str]) =
-        if let Some(i) = find_words(&tokens, &["gh", "pr", "create"]) {
-            ("github", i + 3, "/pull/", &["--head", "-H"])
-        } else {
-            let i = find_words(&tokens, &["glab", "mr", "create"])?;
-            (
-                "gitlab",
-                i + 3,
-                "/-/merge_requests/",
-                &["--source-branch", "-s"],
-            )
-        };
-    let args = tokens.get(start..).unwrap_or_default();
+    let commands = shell_commands(command);
+    let (forge, args, marker, head_flags): (&str, &[String], &str, &[&str]) =
+        commands.iter().find_map(|words| {
+            // Leading `NAME=value` assignments are not the program.
+            let words = &words[words.iter().take_while(|w| is_assignment(w)).count()..];
+            let is = |program: [&str; 3]| words.iter().take(3).eq(program.iter());
+            if is(["gh", "pr", "create"]) {
+                Some(("github", &words[3..], "/pull/", &["--head", "-H"][..]))
+            } else if is(["glab", "mr", "create"]) {
+                Some((
+                    "gitlab",
+                    &words[3..],
+                    "/-/merge_requests/",
+                    &["--source-branch", "-s"][..],
+                ))
+            } else {
+                None
+            }
+        })?;
     let (web_url, repo, number) = output
         .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '(' | ')'))
         .rev()
@@ -118,11 +123,13 @@ fn request_url(word: &str, marker: &str) -> Option<(String, String, u64)> {
         .then(|| (url.to_string(), repo.to_string(), number))
 }
 
-/// Index of the first run of `words` in `tokens`.
-fn find_words(tokens: &[String], words: &[&str]) -> Option<usize> {
-    tokens
-        .windows(words.len())
-        .position(|w| w.iter().zip(words).all(|(t, w)| t == w))
+/// Whether `word` is a `NAME=value` variable assignment.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+    })
 }
 
 /// The value of the first of `flags` in `args` (`--flag value` or
@@ -141,15 +148,19 @@ fn flag_value(args: &[String], flags: &[&str]) -> Option<String> {
     })
 }
 
-/// Splits a shell command into words: whitespace separates, single and
-/// double quotes group, a backslash escapes the next character outside
-/// single quotes, and `;`, `&` and `|` end a word. Enough to read the flags
-/// of a `gh`/`glab` invocation; not a full shell parser.
-fn shell_tokens(command: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
+/// Splits a shell command line into its simple commands, each a list of
+/// words. Whitespace separates words; single and double quotes group (so a
+/// quoted `$(cat <<EOF ...)` body is one word); a backslash escapes the
+/// next character outside single quotes; an unquoted `;`, `&`, `|` or
+/// newline ends a command; and an unquoted `#` starting a word comments out
+/// the rest of the line. Enough to find a `gh`/`glab` invocation and read
+/// its flags; not a full shell parser.
+fn shell_commands(command: &str) -> Vec<Vec<String>> {
+    let mut commands = Vec::new();
+    let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
     let mut in_word = false;
-    let mut chars = command.chars();
+    let mut chars = command.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '\'' => {
@@ -170,10 +181,14 @@ fn shell_tokens(command: &str) -> Vec<String> {
                 in_word = true;
                 word.extend(chars.next());
             }
+            '#' if !in_word => while chars.next_if(|&c| c != '\n').is_some() {},
             c if c.is_whitespace() || matches!(c, ';' | '&' | '|') => {
                 if in_word {
-                    tokens.push(std::mem::take(&mut word));
+                    words.push(std::mem::take(&mut word));
                     in_word = false;
+                }
+                if (c == '\n' || matches!(c, ';' | '&' | '|')) && !words.is_empty() {
+                    commands.push(std::mem::take(&mut words));
                 }
             }
             c => {
@@ -183,7 +198,10 @@ fn shell_tokens(command: &str) -> Vec<String> {
         }
     }
     if in_word {
-        tokens.push(word);
+        words.push(word);
     }
-    tokens
+    if !words.is_empty() {
+        commands.push(words);
+    }
+    commands
 }
