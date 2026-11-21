@@ -311,3 +311,45 @@ async fn test_theme_editor_esc_with_unsaved_edits_asks_first() {
     let _ = app.handle_key(esc).await;
     assert!(app.theme_editor.is_none(), "second Esc discards");
 }
+
+#[test]
+fn test_theme_editor_locks_the_input_without_the_picker() {
+    let scratch = ScratchThemes::scrub_themes();
+    let mut app = make_app(&scratch);
+    assert!(app.theme_picker.is_none());
+    app.open_theme_editor("nord");
+    assert!(app.is_input_locked(), "the editor is a modal on its own");
+    app.cancel_theme_edit();
+    assert!(!app.is_input_locked());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_theme_editor_reset_keeps_a_project_symlink_into_the_user_dir() {
+    let scratch = ScratchThemes::scrub_themes();
+    let mut app = make_app(&scratch);
+    let mut theme = (*app.themes.get("nord").expect("nord")).clone();
+    theme.accent = RED;
+    let user_copy = scratch.themes().join("nord.json");
+    save_theme(&theme, &user_copy).expect("save");
+    let project = scratch.dir.path().join(".codemason").join("themes");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let link = project.join("nord.json");
+    std::os::unix::fs::symlink(&user_copy, &link).expect("symlink");
+    app.themes.load_dir(&project);
+    assert_eq!(app.themes.source("nord"), Some(link.as_path()));
+
+    app.open_theme_editor("nord");
+    app.reset_theme_to_default();
+    assert!(
+        link.symlink_metadata().is_ok(),
+        "the project's symlink is not deleted"
+    );
+    assert!(user_copy.is_file());
+    assert!(app.theme_editor.is_some());
+    assert!(
+        app.status.starts_with("theme not reset: "),
+        "{}",
+        app.status
+    );
+}

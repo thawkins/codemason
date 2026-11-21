@@ -1240,6 +1240,7 @@ impl App {
             || self.config_save_picker.is_some()
             || self.history_picker.is_some()
             || self.theme_picker.is_some()
+            || self.theme_editor.is_some()
             || self.palette.is_some()
             || self.context_menu.is_some()
             || self.show_shortcuts

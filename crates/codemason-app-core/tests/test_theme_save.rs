@@ -1,6 +1,6 @@
 //! Tests for writing themes to disk: serialisation round trips, the colour
-//! key list the theme editor edits, file-name sanitising, atomic saves and the
-//! catalog's record of where each theme was loaded from.
+//! key list the theme editor edits, file-name sanitising, atomic saves, the
+//! size limit and the catalog's record of where each theme was loaded from.
 
 use codemason_app_core::theme_tokens::{
     Rgb, ThemeCatalog, ThemeTokens, save_theme, theme_file_name,
@@ -60,6 +60,38 @@ fn test_theme_save_fails_when_parent_is_a_file() {
     let blocker = dir.path().join("blocker");
     std::fs::write(&blocker, "x").expect("write");
     assert!(save_theme(&builtin("nord"), &blocker.join("nord.json")).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_theme_save_never_writes_through_a_planted_tmp_symlink() {
+    let dir = scratch();
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, "keep me").expect("write");
+    let path = dir.path().join("nord.json");
+    // The old fixed temporary name: a link there must not be followed.
+    std::os::unix::fs::symlink(&victim, path.with_extension("json.tmp")).expect("symlink");
+    save_theme(&builtin("nord"), &path).expect("save");
+    assert_eq!(std::fs::read_to_string(&victim).expect("read"), "keep me");
+    assert!(path.is_file());
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read dir")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".theme-"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+}
+
+#[test]
+fn test_theme_save_refuses_a_theme_over_the_load_limit() {
+    let dir = scratch();
+    let mut theme = builtin("nord");
+    theme.name = "n".repeat(64 * 1024);
+    let path = dir.path().join("big.json");
+    let err = save_theme(&theme, &path).expect_err("over the limit");
+    assert!(err.to_string().contains("byte limit"), "{err}");
+    assert!(!path.exists(), "nothing is written");
 }
 
 #[test]

@@ -332,6 +332,17 @@ fn is_field_edit_key(input: KeyInput) -> bool {
     is_prompt_edit_key(input) && !matches!(input.key, Key::Up | Key::Down)
 }
 
+/// Whether `input` moves egui's keyboard focus or presses the focused
+/// widget: Tab, Enter or Space with no modifier other than Shift.
+fn is_widget_key(input: KeyInput) -> bool {
+    let plain = !input.mods.ctrl && !input.mods.alt && !input.mods.cmd;
+    plain
+        && matches!(
+            input.key,
+            Key::Tab | Key::BackTab | Key::Enter | Key::Char(' ')
+        )
+}
+
 /// Whether `input` is a key the App handles for the focused prompt: it
 /// reads or edits the App's input buffer, so it is forwarded and the prompt
 /// TextEdit never sees it.
@@ -453,6 +464,11 @@ pub enum Focus {
         field_focused: bool,
         /// Whether that field has a non-empty text selection.
         field_selection: bool,
+        /// Whether the modal is drawn with egui widgets the keyboard drives
+        /// (the theme editor): Tab, Shift+Tab, Enter and Space stay in egui's
+        /// input to move the focus and press the focused button, and are not
+        /// forwarded. Esc and every other key still go to the App.
+        widget_keys: bool,
     },
     /// The prompt TextEdit has the keyboard.
     Prompt {
@@ -841,9 +857,22 @@ impl KeyRouter {
             // Text that follows in the same frame (fast typing, an IME
             // commit) is never dropped and never makes the press "typed".
             let typed_text = next_text.is_some_and(|text| is_key_text(key, text));
-            if let Focus::Modal { field_focused, .. } = focus {
+            if let Focus::Modal {
+                field_focused,
+                widget_keys,
+                ..
+            } = focus
+            {
                 // A dialog's text field keeps its typing and editing keys.
                 if field_focused && is_field_edit_key(key) {
+                    continue;
+                }
+                // A keyboard-driven dialog keeps its focus and activation
+                // keys, so Save or Reset can be reached and pressed.
+                if widget_keys && is_widget_key(key) {
+                    if typed_text {
+                        drop[i + 1] = true;
+                    }
                     continue;
                 }
                 drop[i] = true;

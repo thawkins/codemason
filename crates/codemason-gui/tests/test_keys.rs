@@ -793,6 +793,7 @@ fn test_route_modal_forwards_and_removes_every_press() {
         Focus::Modal {
             field_focused: false,
             field_selection: false,
+            widget_keys: false,
         },
         vec![
             press(egui::Key::Enter, egui::Modifiers::NONE),
@@ -821,11 +822,60 @@ fn test_route_modal_forwards_and_removes_every_press() {
 }
 
 #[test]
+fn test_route_modal_widget_keys_stay_for_egui_and_esc_still_forwards() {
+    let (keys, left) = route_events(
+        Focus::Modal {
+            field_focused: false,
+            field_selection: false,
+            widget_keys: true,
+        },
+        vec![
+            press(egui::Key::Tab, egui::Modifiers::NONE),
+            press(egui::Key::Tab, egui::Modifiers::SHIFT),
+            press(egui::Key::Enter, egui::Modifiers::NONE),
+            press(egui::Key::Space, egui::Modifiers::NONE),
+            egui::Event::Text(" ".to_string()),
+            press(egui::Key::Escape, egui::Modifiers::NONE),
+            press(egui::Key::Y, egui::Modifiers::NONE),
+            egui::Event::Text("y".to_string()),
+        ],
+    );
+
+    assert_eq!(
+        keys,
+        vec![plain(Key::Esc), plain(Key::Char('y'))],
+        "Esc and other keys still reach the App"
+    );
+    let kept: Vec<egui::Key> = left
+        .iter()
+        .filter_map(|event| match event {
+            egui::Event::Key { key, .. } => Some(*key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kept,
+        vec![
+            egui::Key::Tab,
+            egui::Key::Tab,
+            egui::Key::Enter,
+            egui::Key::Space
+        ],
+        "egui keeps the focus and activation keys: {left:?}"
+    );
+    assert!(
+        !left.iter().any(|e| matches!(e, egui::Event::Text(_))),
+        "the space Space typed is not left as text: {left:?}"
+    );
+}
+
+#[test]
 fn test_route_modal_text_field_keeps_typing_and_editing_keys() {
     let (keys, left) = route_events(
         Focus::Modal {
             field_focused: true,
             field_selection: false,
+            widget_keys: false,
         },
         vec![
             press(egui::Key::S, egui::Modifiers::NONE),
@@ -905,10 +955,12 @@ fn test_route_modal_text_field_keeps_ctrl_c_only_with_a_selection() {
     let with = Focus::Modal {
         field_focused: true,
         field_selection: true,
+        widget_keys: false,
     };
     let without = Focus::Modal {
         field_focused: true,
         field_selection: false,
+        widget_keys: false,
     };
     assert_eq!(router.route(&mut ctrl_c(), with), Vec::new());
     assert_eq!(
@@ -964,6 +1016,7 @@ fn test_route_modal_forwards_unpaired_text_once_and_leaves_pastes() {
         Focus::Modal {
             field_focused: false,
             field_selection: false,
+            widget_keys: false,
         },
         vec![
             press(egui::Key::A, egui::Modifiers::NONE),
@@ -999,6 +1052,7 @@ fn test_route_modal_forwards_ctrl_and_cmd_chords_before_unrelated_text() {
     let modal = Focus::Modal {
         field_focused: false,
         field_selection: false,
+        widget_keys: false,
     };
     let ctrl_c = KeyInput {
         key: Key::Char('c'),
