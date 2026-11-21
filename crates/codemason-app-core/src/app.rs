@@ -38,6 +38,7 @@ pub mod md_worker;
 mod connector;
 /// Markdown table construction for slash-command reports.
 pub use codemason_types::mdtable;
+pub use connector::connector_marketplace_mutates;
 mod model_favorites;
 pub use self::model_favorites::{
     FAVORITE_MODELS_KEY, RECENT_MODELS_KEY, RECENT_MODELS_MAX, RecentModel,
@@ -49,6 +50,7 @@ pub use self::outcome::HandleOutcome;
 mod plugin;
 pub(crate) use self::plugin::toggle_plugin_enabled;
 pub use models::model_part_from_selected_model;
+pub use plugin::marketplace_mutation_target;
 mod project_services;
 pub(crate) mod projects;
 pub mod prompt;

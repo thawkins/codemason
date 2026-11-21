@@ -1594,6 +1594,13 @@ impl App {
         self.open_plugin_store(kind, "", false);
     }
 
+    /// Drops the cached index for `key` and starts a fresh fetch, called after a
+    /// marketplace add/remove changed what that index lists.
+    pub fn marketplace_changed(&mut self, key: StoreCacheKey) {
+        recover_poisoned(self.store_cache.lock(), "store_cache").invalidate(key);
+        self.start_store_fetch(key);
+    }
+
     /// Force a re-fetch of the index shown by whichever store browser is open
     /// (plugin store or connector catalogue). The browser keeps showing the
     /// cached index until the new one lands; a no-op while a fetch for that index

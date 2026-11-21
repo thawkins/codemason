@@ -40,6 +40,7 @@
 
 use std::sync::Arc;
 
+use crate::app::StoreCacheKey;
 use async_trait::async_trait;
 use codemason_config::{ConnectorsConfig, McpServerConfig};
 use codemason_connectors::{
@@ -59,6 +60,38 @@ use codemason_connectors::{
 /// [`run_connector_subcommand`]; the management subcommands drive
 /// [`TuiConnectorEnv`] and `test` runs against a throwaway probe client.
 pub(super) async fn handle_connectors_command(app: &mut crate::app::App, args: &str) -> String {
+    let result = dispatch_connectors_command(app, args).await;
+    // A marketplace add/remove changes what the catalogue lists, so the cached
+    // index is dropped and refetched whatever the command reported.
+    let args = args.trim();
+    let sub = subcommand_of(args);
+    if sub == "marketplace" {
+        let rest = args.strip_prefix(sub).map(str::trim_start).unwrap_or("");
+        if connector_marketplace_mutates(rest) {
+            app.marketplace_changed(StoreCacheKey::Connectors);
+        }
+    }
+    result
+}
+
+/// Whether a `/connectors marketplace <rest>` invocation adds or removes a
+/// marketplace.
+///
+/// `rest` is the text after `marketplace`: `[claude] add|remove ...`, where the
+/// catalogue token is optional. `show`, `list` and anything else return false.
+#[must_use]
+pub fn connector_marketplace_mutates(rest: &str) -> bool {
+    let mut tokens = rest.split_whitespace();
+    let first = tokens.next();
+    let verb = match first {
+        Some(token) if token.eq_ignore_ascii_case("claude") => tokens.next(),
+        other => other,
+    };
+    matches!(verb, Some("add" | "remove"))
+}
+
+/// Runs the `/connectors` subcommand ladder; see [`handle_connectors_command`].
+async fn dispatch_connectors_command(app: &mut crate::app::App, args: &str) -> String {
     let args = args.trim();
 
     // A bare `/connectors` renders usage (FR-017).
