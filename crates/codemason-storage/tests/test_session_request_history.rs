@@ -259,3 +259,40 @@ fn test_session_request_history_migrates_a_v13_database() {
         .expect("stats");
     assert_eq!(storage.request_diff_stats().expect("stats").len(), 1);
 }
+
+/// An Auto-fix poll that closes a request drops its diff size, so the
+/// backfill reads the final one; a poll that keeps it open leaves it.
+#[test]
+fn test_session_request_history_autofix_close_clears_diff_stats() {
+    let storage = Storage::open_in_memory().expect("storage");
+    storage
+        .create_session("s", "/nonexistent/history")
+        .expect("s");
+    let bound = github("s", 1, "open");
+    storage.set_session_request(&bound).expect("bind");
+    assert!(storage.set_session_autofix("s", true).expect("autofix"));
+    storage
+        .set_request_diff_stats("github.com", "acme/app", 1, 120, 7)
+        .expect("stats");
+
+    assert!(
+        storage
+            .record_autofix_poll(&bound, "open", "MR 1", "abc")
+            .expect("open poll")
+    );
+    assert_eq!(storage.request_diff_stats().expect("stats").len(), 1);
+
+    assert!(
+        storage
+            .record_autofix_poll(&bound, "merged", "MR 1", "abc")
+            .expect("merge poll")
+    );
+    assert!(storage.request_diff_stats().expect("stats").is_empty());
+    let missing: Vec<u64> = storage
+        .request_history_missing_stats()
+        .expect("missing")
+        .iter()
+        .map(|r| r.number)
+        .collect();
+    assert_eq!(missing, [1]);
+}

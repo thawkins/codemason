@@ -2728,10 +2728,14 @@ impl Storage {
                 binding.host
             ],
         )?;
-        // The history row follows only a poll that was kept.
+        // The history row follows only a poll that was kept. A request that
+        // leaves `open` drops its diff size, so the history refresh's
+        // backfill (`request_history_missing_stats`) reads the final one.
         if changed > 0 {
             tx.execute(
-                "UPDATE session_request_history SET state = ?2, title = ?3 \
+                "UPDATE session_request_history SET state = ?2, title = ?3, \
+                 additions = CASE WHEN state <> ?2 AND ?2 <> 'open' THEN NULL ELSE additions END, \
+                 deletions = CASE WHEN state <> ?2 AND ?2 <> 'open' THEN NULL ELSE deletions END \
                  WHERE session_id = ?1 AND repo = ?4 AND number = ?5 AND host = ?6",
                 params![
                     binding.session_id,

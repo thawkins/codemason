@@ -717,8 +717,12 @@ fn popup_target(
     if let (Some(row), Some(popup)) = (open.as_ref(), popup_rect) {
         let bridge =
             Rect::from_x_y_ranges(row.1.right()..=popup.left(), row.1.y_range()).expand(4.0);
-        let on_its_row = hovered.as_ref().is_some_and(|h| h.0 == row.0);
-        if inside(popup.expand(4.0)) || inside(bridge) || on_its_row {
+        // On its own row, follow the row's current rectangle, so a scroll
+        // or a sidebar resize moves the popup with it.
+        if let Some(current) = hovered.as_ref().filter(|h| h.0 == row.0) {
+            return Some(current.clone());
+        }
+        if inside(popup.expand(4.0)) || inside(bridge) {
             return open;
         }
     }
@@ -743,6 +747,7 @@ fn popup_target(
 fn request_popup(
     ctx: &egui::Context,
     app: &mut App,
+    session_id: &str,
     requests: &[RequestEntry],
     row: Rect,
     palette: &Palette,
@@ -757,7 +762,10 @@ fn request_popup(
                 ui.set_width(POPUP_WIDTH);
                 let entry = request_entry_height(ui);
                 ScrollArea::vertical()
-                    .id_salt("sessions_request_popup_scroll")
+                    // One scroll state per session, so a long history
+                    // scrolled in one popup does not open another
+                    // session's popup part-way down.
+                    .id_salt(("sessions_request_popup_scroll", session_id))
                     .max_height(entry * POPUP_ROWS)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -852,7 +860,9 @@ fn request_entry(ui: &mut egui::Ui, entry: &RequestEntry, palette: &Palette) -> 
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    if response.hovered() {
+    // Keyboard focus is highlighted like the pointer, so Tab shows which
+    // request Enter opens.
+    if response.hovered() || response.has_focus() {
         ui.painter()
             .rect_filled(rect, crate::metrics::radius::XS, palette.selection);
     }
@@ -1302,7 +1312,7 @@ impl SessionsView {
                 }
             })
             .collect();
-        self.popup_rect = Some(request_popup(&ctx, app, &entries, row, palette));
+        self.popup_rect = Some(request_popup(&ctx, app, &id, &entries, row, palette));
         self.popup = Some((id, row));
     }
 }
