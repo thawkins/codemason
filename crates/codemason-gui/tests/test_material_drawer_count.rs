@@ -38,3 +38,45 @@ fn test_material_drawer_count_label() {
         Some(egui::accesskit::Toggled::True)
     );
 }
+
+/// The painted text shapes of the last frame, as `(text, rect)`.
+fn painted_texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some((
+                text.galley.job.text.clone(),
+                text.galley.rect.translate(text.pos.to_vec2()),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn test_material_drawer_count_long_label_leaves_room_for_the_count() {
+    let palette = support_material::palette();
+    let label = "A very long marketplace name that runs past the rail";
+    let mut harness = support_material::builder()
+        .with_size(egui::vec2(180.0, 100.0))
+        .build_ui(move |ui| {
+            drawer_item_with_count(ui, &palette, label, 1234, false);
+        });
+    harness.run();
+    let texts = painted_texts(harness.output());
+    let count = texts
+        .iter()
+        .find(|(text, _)| text == "1234")
+        .map(|(_, rect)| *rect)
+        .expect("the count is painted");
+    let painted = texts
+        .iter()
+        .find(|(text, _)| text.starts_with("A very"))
+        .map(|(_, rect)| *rect)
+        .expect("the label is painted");
+    assert!(
+        painted.right() <= count.left(),
+        "label {painted:?} ends before count {count:?}"
+    );
+}
