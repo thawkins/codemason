@@ -184,6 +184,8 @@ mod test_side_panels;
 mod test_startup;
 #[path = "test_status_bar.rs"]
 mod test_status_bar;
+#[path = "test_store_dialog_gui.rs"]
+mod test_store_dialog_gui;
 #[path = "test_theme.rs"]
 mod test_theme;
 #[path = "test_theme_editor_dialog.rs"]

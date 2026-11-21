@@ -552,6 +552,46 @@ pub(crate) fn material_modal_response<R>(
         })
 }
 
+/// Draw a Material dialog of a fixed `size` that draws its own header: the
+/// `surface_container_high` surface, the backdrop, and `title` as its
+/// accessible label (`Role::Dialog`), with no headline and no scrolling of
+/// its own (the content lays out, and scrolls, its own panes).
+///
+/// The content area is `size`, kept inside the window less the margin
+/// [`material_modal`] leaves. As with [`modal`], the App's key handling
+/// decides when the dialog closes.
+pub(crate) fn material_modal_sized<R>(
+    ctx: &egui::Context,
+    palette: &crate::palette::Palette,
+    id: &str,
+    title: &str,
+    size: egui::Vec2,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    use crate::material::dialog::dialog_frame;
+    egui::Modal::new(Id::unique(id))
+        .frame(dialog_frame(palette))
+        .show(ctx, |ui| {
+            let window = ctx.content_rect();
+            let size = egui::vec2(
+                size.x.min((window.width() - DIALOG_WINDOW_MARGIN).max(0.0)),
+                size.y
+                    .min((window.height() - DIALOG_WINDOW_MARGIN).max(0.0)),
+            );
+            ui.visuals_mut().panel_fill = crate::palette::rgb(palette.m3.surface_container_high);
+            let shown = ui.scope(|ui| {
+                ui.set_min_size(size);
+                ui.set_max_size(size);
+                add_contents(ui)
+            });
+            shown
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
+            shown.inner
+        })
+        .inner
+}
+
 /// A Material dialog's action row, right-aligned: the first button is the
 /// confirming one (filled, rightmost) unless it cancels (Esc), and the rest
 /// are text buttons to its left. Each sends its key press when clicked.

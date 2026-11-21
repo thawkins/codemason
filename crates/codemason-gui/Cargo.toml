@@ -17,6 +17,8 @@ codemason-agent = { path = "../codemason-agent" }
 codemason-storage = { path = "../codemason-storage" }
 codemason-app-core = { workspace = true }
 codemason-connectors = { workspace = true }
+# The Plugin Store dialog names the store kind (`StoreKind`).
+codemason-plugins = { workspace = true }
 codemason-types = { workspace = true }
 codemason-config = { workspace = true }
 codemason-tools-core = { workspace = true }
@@ -54,8 +56,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# Only the plugin-store GUI tests name `codemason_plugins` types directly.
-codemason-plugins = { workspace = true }
 codemason-codeindex = { path = "../codemason-codeindex" }
 codemason-llm = { path = "../codemason-llm" }
 egui_kittest = { workspace = true }
