@@ -186,6 +186,8 @@ mod test_startup;
 mod test_status_bar;
 #[path = "test_theme.rs"]
 mod test_theme;
+#[path = "test_theme_editor_dialog.rs"]
+mod test_theme_editor_dialog;
 #[path = "test_window.rs"]
 mod test_window;
 

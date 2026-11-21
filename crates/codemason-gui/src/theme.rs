@@ -52,7 +52,8 @@ pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
     codemason_app_core::theme_tokens::contrast_ratio(to_rgb(a), to_rgb(b))
 }
 
-/// The tokens of the App's current theme.
+/// The tokens of the App's current theme, or of the theme being edited
+/// while the theme editor is open (its live preview).
 ///
 /// # Arguments
 ///
@@ -63,7 +64,7 @@ pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 #[must_use]
 pub fn active_tokens(app: &App, ctx: &egui::Context) -> Arc<ThemeTokens> {
     let system_dark = ctx.system_theme() != Some(egui::Theme::Light);
-    app.themes.resolve(&app.theme, system_dark)
+    app.active_theme_tokens(system_dark)
 }
 
 /// The background fills of egui's five widget states in `palette`.

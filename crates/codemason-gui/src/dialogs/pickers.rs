@@ -14,6 +14,10 @@
 //! highlighted history entry. The keys reach the App through the router, as
 //! in the TUI.
 //!
+//! Every theme row but `system` has an edit button that opens the theme
+//! editor on that theme (`App::open_theme_editor`, drawn by
+//! [`super::theme_editor`]).
+//!
 //! This dialog lists the entries with the highlight. Clicking an entry
 //! moves the highlight (the state the arrows move); a double click or the
 //! Select / Restore button sends Enter, Copy sends `c` and Close sends Esc.
@@ -39,6 +43,13 @@ pub const APPLY_THEME: &str = "Apply";
 
 /// The theme picker's button that restores the previous theme (Esc).
 pub const CANCEL_THEME: &str = "Cancel";
+
+/// The accessible label (and hover text) of the edit button on the theme
+/// picker's row for `name`.
+#[must_use]
+pub fn edit_theme_label(name: &str) -> String {
+    format!("Edit {name}")
+}
 
 /// Accessible label of a picker's entry list.
 pub const ENTRIES_LABEL: &str = "Entries";
@@ -150,10 +161,12 @@ pub fn show_theme(ctx: &egui::Context, app: &mut App) -> bool {
     };
     let rows = picker.entries.clone();
     let selected = picker.selected;
+    let palette = crate::palette::palette_for(app, ctx);
     let mut clicked = None;
+    let mut edit = None;
     modal(ctx, "codemason_theme_picker", THEME_TITLE, |ui| {
         ui.weak("The window previews the highlighted theme.");
-        clicked = entry_list(ui, ENTRIES_LABEL, &rows, selected);
+        (clicked, edit) = theme_entry_list(ui, &palette, &rows, selected);
         ui.add_space(crate::metrics::space::SM);
         key_buttons(
             ui,
@@ -164,13 +177,71 @@ pub fn show_theme(ctx: &egui::Context, app: &mut App) -> bool {
         );
         ui.weak("Up/Down preview * Enter apply * Esc cancel");
     });
-    if let Some((i, choose)) = clicked {
+    if let Some(i) = edit
+        && let Some(name) = rows.get(i)
+    {
+        app.open_theme_editor(name);
+    } else if let Some((i, choose)) = clicked {
         app.theme_picker_select(i);
         if choose {
             send_key(ctx, plain(Key::Enter));
         }
     }
     true
+}
+
+/// Draw the theme picker's rows as [`entry_list`] does, with an edit button
+/// on every row but the first (`system`, which has no colours of its own).
+///
+/// # Returns
+///
+/// The clicked row as [`entry_list`] reports it, and the row whose edit
+/// button was pressed.
+fn theme_entry_list(
+    ui: &mut egui::Ui,
+    palette: &crate::palette::Palette,
+    rows: &[String],
+    selected: usize,
+) -> (Option<(usize, bool)>, Option<usize>) {
+    use crate::icons::Icon;
+    use crate::material::icon_button::{IconButtonKind, icon_button_inline};
+
+    let mut clicked = None;
+    let mut edit = None;
+    let height = (ui.ctx().content_rect().height() * 0.6).max(120.0);
+    let list = egui::ScrollArea::vertical()
+        .max_height(height)
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                for (i, row) in rows.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let response = ui.selectable_label(i == selected, row.as_str());
+                        if response.double_clicked() {
+                            clicked = Some((i, true));
+                        } else if response.clicked() {
+                            clicked = Some((i, false));
+                        }
+                        if i > 0
+                            && icon_button_inline(
+                                ui,
+                                palette,
+                                IconButtonKind::Standard,
+                                Icon::Edit,
+                                &edit_theme_label(row),
+                                None,
+                            )
+                            .clicked()
+                        {
+                            edit = Some(i);
+                        }
+                    });
+                }
+            })
+            .response
+        });
+    list.inner
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, ENTRIES_LABEL));
+    (clicked, edit)
 }
 
 /// Draw the `/config list` save picker while the App shows it.
