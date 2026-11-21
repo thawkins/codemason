@@ -971,7 +971,7 @@ fn draw_blocks(
                 ui.add(egui::Label::new(job).wrap());
             }
             TranscriptBlock::Thinking(lines) => thinking_ui(ui, id, lines, style),
-            TranscriptBlock::Diff(diff) => diff_ui(ui, entry, diff, palette, actions),
+            TranscriptBlock::Diff(diff) => diff_ui(ui, id, entry, diff, palette, actions),
             TranscriptBlock::Activity(group) => activity_ui(ui, id, entry, group, style, actions),
             TranscriptBlock::Tool {
                 lines,
@@ -1448,7 +1448,9 @@ fn activity_ui(
                     | TranscriptBlock::Notice(_)
                     | TranscriptBlock::Image { .. }
                     | TranscriptBlock::Activity(_) => {}
-                    TranscriptBlock::Diff(diff) => diff_ui(ui, entry, diff, palette, actions),
+                    TranscriptBlock::Diff(diff) => {
+                        diff_ui(ui, id.with(index), entry, diff, palette, actions);
+                    }
                 }
             }
         });
@@ -1487,14 +1489,24 @@ fn entry_diffs(entry: &Entry) -> Vec<&codemason_app_core::diff_view::FileDiff> {
 
 /// An inline diff; Open diff asks for the Diff pane on the message's diffs
 /// with this one selected.
+///
+/// The card is drawn in its own id scope: two calls that change the same
+/// file give two cards on one path, and the card's scroll area is salted
+/// with the path alone, so without a scope per card the second would reuse
+/// the first's id and egui would paint its ID-clash warning ("First use of
+/// ScrollArea ID ..." / "Second use of ...") over both.
 fn diff_ui(
     ui: &mut egui::Ui,
+    id: egui::Id,
     entry: &Entry,
     diff: &codemason_app_core::diff_view::FileDiff,
     palette: &Palette,
     actions: &mut Vec<BlockAction>,
 ) {
-    if crate::panels::diff::inline_diff_ui(ui, diff, palette) {
+    let opened = ui.push_id(id, |ui| {
+        crate::panels::diff::inline_diff_ui(ui, diff, palette)
+    });
+    if opened.inner {
         let diffs = entry_diffs(entry);
         let selected = diffs
             .iter()

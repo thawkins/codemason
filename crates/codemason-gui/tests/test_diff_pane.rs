@@ -61,6 +61,39 @@ fn edits() -> Message {
     )
 }
 
+/// An assistant message with two finished Edits of the same file, `a.rs`.
+///
+/// Two inline diffs share a path, so each one needs its own egui id scope:
+/// otherwise the second card's `ScrollArea` reuses the first one's id and
+/// egui paints its ID-clash warning ("First use of ScrollArea ID ..." /
+/// "Second use of ...") over both.
+fn same_file_twice() -> Message {
+    let old = "alpha\nbeta\ngamma\n";
+    let call = |id: &str, old: &str, new: &str| MessagePart::ToolCall {
+        tool: "Edit".to_string(),
+        call_id: id.to_string(),
+        state: Box::new(ToolCallState {
+            status: ToolCallStatus::Completed,
+            input: serde_json::json!({
+                "file_path": "a.rs",
+                "old_string": old,
+                "new_string": new,
+            }),
+            output: None,
+            error: None,
+            duration_ms: None,
+        }),
+    };
+    Message::new(
+        "s2",
+        Role::Assistant,
+        vec![
+            call("d1", old, "alpha\nBETA\ngamma\n"),
+            call("d2", "gamma\n", "GAMMA\n"),
+        ],
+    )
+}
+
 /// Whether the Diff pane marks the diff of `a.rs` reviewed.
 fn reviewed_a(harness: &Harness<'static, Shell>) -> bool {
     let pane = &harness.state().app().diff_pane;
@@ -131,6 +164,48 @@ fn test_inline_diff_shows_changed_lines_and_open_diff() {
     assert!(harness.query_by_label_contains("+ line eighteen").is_none());
     let pane = &harness.state().app().diff_pane;
     assert!(pane.files.is_empty(), "nothing is opened yet");
+}
+
+#[test]
+fn test_two_inline_diffs_of_one_file_do_not_clash_ids() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let mut app = {
+        let _enter = runtime.enter();
+        support::make_app()
+    };
+    app.transcript_prefs.verbosity = Verbosity::High;
+    app.session.messages = vec![same_file_twice()];
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1000.0))
+        .with_max_steps(64)
+        .build_ui_state(|ui, shell: &mut Shell| shell.update(ui), Shell::new(app));
+    harness.run();
+    harness.run();
+
+    // Both cards draw their own change.
+    harness.get_by_label_contains("+ BETA");
+    harness.get_by_label_contains("+ GAMMA");
+
+    // egui warns about a shared widget id by painting "First use of ..." and
+    // "Second use of ..." over the widgets, on its debug layer.
+    let warnings = harness.ctx.graphics(|layers| {
+        layers
+            .get(egui::LayerId::debug())
+            .map(|list| {
+                list.all_entries()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                        _ => None,
+                    })
+                    .filter(|text| text.contains(" use of "))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    assert!(
+        warnings.is_empty(),
+        "egui painted an id-clash warning over the transcript: {warnings:?}"
+    );
 }
 
 #[test]

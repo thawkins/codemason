@@ -15,8 +15,10 @@ count at its right. The ribbon's **Agent** tab gains **Provider** before
 **Model** and a **Resume** button, Resume also being the last quick access
 button in the title strip, and two glyphs join the bundled Material Symbols
 subset. Also in this release: a slash command run from the ribbon, the quick
-access toolbar or the native menu no longer erases the unsent prompt, and an
-inline diff's horizontal scroll bar no longer covers its last line.
+access toolbar or the native menu no longer erases the unsent prompt, an inline
+diff's horizontal scroll bar no longer covers its last line, and two inline
+diffs of the same file no longer make egui paint its ID-clash warning over the
+transcript.
 
 ### Added
 
@@ -31,6 +33,7 @@ inline diff's horizontal scroll bar no longer covers its last line.
 ### Fixed
 
 - Fixed: a slash command run from the GUI ribbon, the quick access toolbar or the native menu no longer erases the unsent prompt. The draft, its cursor and the slash menu are restored unless the command wrote the prompt itself (the status-bar service chips already did this; they now share the one helper, `run_slash_keeping_draft`).
+- Fixed: an edit transcript showed egui's ID-clash warning (`First use of ScrollArea ID ...` / `Second use of ...`) over two inline diffs of one file. Both cards salt their scroll area with the path alone, so two calls changing the same file (`multi_edit`, or two `Edit` calls) collided; each diff block is now drawn in its own egui id scope (`messages::diff_ui`).
 - Fixed: the horizontal scroll bar of an inline diff wider than the transcript was drawn over the diff's last line. The inline diff now uses egui's solid scroll bar, which takes its own row under the lines.
 - Fixed: the tool-rename guard's cost case timed the guard's subprocess on the wall clock and asserted it finished in under ten seconds. The guard scans a scratch copy of the tree and costs ~2.8 s of CPU, but a full-workspace `cargo nextest run` schedules ~16k tests across every core, so the same scan measured 10.07 s of wall clock and the case failed for the runner's load rather than for the guard's cost. `scripts/check_tool_rename.py --json` now reports `cpu_seconds` (`time.process_time()` around the scan) and the case asserts on that, which is what NFR-009's "a few seconds" clause is about; a zero reading fails, so a guard that stops measuring cannot silently pass.
 
