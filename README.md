@@ -291,8 +291,10 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   (`v` or `Ctrl`+click) have their own menus; a project's `Properties` sets
   its description, the execution backend its new sessions use and their
   model, each falling back to the global setting. Each session row shows
-  `#N`, the number of pull/merge requests it has had, with a `PR/MRs`
-  submenu that opens any of them in the browser
+  a pull-request icon with how many requests it has had; resting the
+  pointer on it lists them (state, `+added -removed`, an eye on the one
+  Auto-fix watches), and a click, or the
+  `PR/MRs` submenu, opens one in the browser
 - **Session management** — persistent conversation history stored in SQLite;
   list, resume, export-archive, and import sessions. A session's transcript can be
   aged out with `/db prune [--days N] [--dry-run]` (GUI) or `cdmn db prune`

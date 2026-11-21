@@ -212,6 +212,9 @@ pub struct RequestInfo {
     pub source_branch: String,
     /// Current state.
     pub state: RequestState,
+    /// Lines added and removed, when the forge reports them: GitHub's
+    /// single-request read does, its list reads and GitLab do not.
+    pub diff_stats: Option<codemason_storage::DiffStats>,
 }
 
 impl RequestInfo {
@@ -230,6 +233,13 @@ impl RequestInfo {
             web_url: item["html_url"].as_str().unwrap_or_default().to_string(),
             source_branch: item["head"]["ref"].as_str().unwrap_or_default().to_string(),
             state,
+            diff_stats: item["additions"]
+                .as_u64()
+                .zip(item["deletions"].as_u64())
+                .map(|(additions, deletions)| codemason_storage::DiffStats {
+                    additions,
+                    deletions,
+                }),
         })
     }
 
@@ -249,6 +259,7 @@ impl RequestInfo {
                 .unwrap_or_default()
                 .to_string(),
             state,
+            diff_stats: None,
         })
     }
 }
@@ -736,8 +747,10 @@ impl PullRequestCounts {
         self.is_due(HISTORY_KEY)
     }
 
-    /// Refreshes the state and title of every request still recorded as
-    /// open in a live session's PR/MR history, if due. Requests whose
+    /// Refreshes the state, title and diff size of every request still
+    /// recorded as open in a live session's PR/MR history, and reads the
+    /// diff size of any GitHub request (in any state) that has none yet, if
+    /// due. Requests whose
     /// session has Auto-fix off, and earlier requests after a rebind, are
     /// otherwise never read again. Shares the per-project schedule (one
     /// pass per [`BASE_INTERVAL`], backing off after a rate limit) under its
@@ -768,9 +781,23 @@ impl PullRequestCounts {
         let Some(_running) = self.begin(HISTORY_KEY) else {
             return 0;
         };
-        let open = match self.storage.open_request_history() {
-            Ok(open) => open,
-            Err(e) => {
+        let rows = match (
+            self.storage.open_request_history(),
+            self.storage.request_history_missing_stats(),
+        ) {
+            (Ok(mut open), Ok(missing)) => {
+                // A request can be in both lists: read it once.
+                for row in missing {
+                    let seen = open.iter().any(|o| {
+                        o.host == row.host && o.repo == row.repo && o.number == row.number
+                    });
+                    if !seen {
+                        open.push(row);
+                    }
+                }
+                open
+            }
+            (Err(e), _) | (_, Err(e)) => {
                 tracing::debug!(error = %e, "could not read request history");
                 self.reschedule(HISTORY_KEY, false);
                 return 0;
@@ -778,7 +805,8 @@ impl PullRequestCounts {
         };
         let mut changed = 0;
         let mut rate_limited = false;
-        for row in &open {
+        for row in &rows {
+            let before = changed;
             let Some(kind) = RemoteKind::parse(&row.forge) else {
                 continue;
             };
@@ -814,6 +842,24 @@ impl PullRequestCounts {
             ) {
                 Ok(n) => changed += n,
                 Err(e) => tracing::debug!(error = %e, "could not store request state"),
+            }
+            if let Some(stats) = info.diff_stats {
+                match self.storage.set_request_diff_stats(
+                    &row.host,
+                    &row.repo,
+                    row.number,
+                    stats.additions,
+                    stats.deletions,
+                ) {
+                    Ok(n) => changed += n,
+                    Err(e) => tracing::debug!(error = %e, "could not store request diff size"),
+                }
+            }
+            if changed > before {
+                // The sidebar's cached history is stale: reload it.
+                self.event_bus.publish(Event::SessionUpdated {
+                    session_id: row.session_id.clone(),
+                });
             }
         }
         self.reschedule(HISTORY_KEY, rate_limited);

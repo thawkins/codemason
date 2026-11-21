@@ -46,7 +46,7 @@ use codemason_types::message::{Message, MessagePart, Role};
 ///
 /// Public so tests can assert the persisted `schema_version` setting against
 /// the compiler-enforced value instead of a hard-coded literal.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 // PERF-071: static SQL bodies hoisted to `const &str` so the session read
 // paths build no `String` and the prepared-statement cache sees a stable
@@ -1324,6 +1324,23 @@ impl Storage {
                  SELECT session_id, forge, host, repo, number, title, web_url, head_branch,
                         state, updated_at FROM session_requests;",
         )?;
+        // Each request's diff size (lines added and removed), read from the
+        // forge after the request is recorded; NULL until then.
+        for col in ["additions", "deletions"] {
+            let has_col: bool = tx
+                .prepare_cached(&format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('session_request_history') \
+                     WHERE name='{col}'"
+                ))?
+                .query_row([], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                > 0;
+            if !has_col {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE session_request_history ADD COLUMN {col} INTEGER;"
+                ))?;
+            }
+        }
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS sidebar_sections (
                  id TEXT PRIMARY KEY,
@@ -2252,6 +2269,33 @@ impl Storage {
         Ok(rows)
     }
 
+    /// Every session's request history, keyed by session id, each list newest
+    /// first as [`Self::session_request_history`] orders it; sessions with no
+    /// requests are absent. One query, for the sessions sidebar.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn session_request_histories(&self) -> Result<HashMap<String, Vec<SessionRequest>>> {
+        let conn = lock_conn_read!(self)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT session_id, forge, host, repo, number, title, web_url, head_branch, state \
+             FROM session_request_history \
+             ORDER BY session_id, first_seen_at DESC, number DESC",
+        )?;
+        let rows = stmt
+            .query_map([], session_request_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut histories: HashMap<String, Vec<SessionRequest>> = HashMap::new();
+        for request in rows {
+            histories
+                .entry(request.session_id.clone())
+                .or_default()
+                .push(request);
+        }
+        Ok(histories)
+    }
+
     /// One history row per pull/merge request still recorded as `open` in a
     /// live (not archived) session, so its state can be refreshed. The
     /// `session_id` is any one session that had it.
@@ -2272,6 +2316,103 @@ impl Storage {
         let rows = stmt
             .query_map([], session_request_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// One history row per GitHub pull request of a live (not archived)
+    /// session whose diff size has not been read yet, in any state, so the
+    /// history refresh can read it once. GitLab merge requests report no
+    /// line counts and are left out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn request_history_missing_stats(&self) -> Result<Vec<SessionRequest>> {
+        let conn = lock_conn_read!(self)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT MIN(h.session_id), h.forge, h.host, h.repo, h.number, MAX(h.title), \
+             MAX(h.web_url), MAX(h.head_branch), MAX(h.state) FROM session_request_history h \
+             JOIN sessions s ON s.id = h.session_id \
+             WHERE h.forge = 'github' AND h.additions IS NULL AND s.archived_at IS NULL \
+             GROUP BY h.forge, h.host, h.repo, h.number \
+             ORDER BY h.host, h.repo, h.number",
+        )?;
+        let rows = stmt
+            .query_map([], session_request_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Records the diff size of request `number` of `repo` on `host` in
+    /// every session's history.
+    ///
+    /// # Arguments
+    ///
+    /// * `host`, `repo`, `number` - the request.
+    /// * `additions`, `deletions` - lines added and removed.
+    ///
+    /// # Returns
+    ///
+    /// The number of history rows that changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails.
+    pub fn set_request_diff_stats(
+        &self,
+        host: &str,
+        repo: &str,
+        number: u64,
+        additions: u64,
+        deletions: u64,
+    ) -> Result<usize> {
+        let as_i64 = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+        let conn = lock_conn!(self)?;
+        let changed = conn.execute(
+            "UPDATE session_request_history SET additions = ?4, deletions = ?5 \
+             WHERE host = ?1 AND repo = ?2 AND number = ?3 \
+               AND (additions IS NOT ?4 OR deletions IS NOT ?5)",
+            params![
+                host,
+                repo,
+                as_i64(number),
+                as_i64(additions),
+                as_i64(deletions)
+            ],
+        )?;
+        Ok(changed)
+    }
+
+    /// The diff size of every request whose size has been read, keyed by
+    /// `(host, repo, number)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn request_diff_stats(&self) -> Result<HashMap<RequestKey, DiffStats>> {
+        let conn = lock_conn_read!(self)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT host, repo, number, MAX(additions), MAX(deletions) \
+             FROM session_request_history \
+             WHERE additions IS NOT NULL AND deletions IS NOT NULL \
+             GROUP BY host, repo, number",
+        )?;
+        let count = |n: i64| u64::try_from(n).unwrap_or(0);
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    (
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        count(r.get::<_, i64>(2)?),
+                    ),
+                    DiffStats {
+                        additions: count(r.get::<_, i64>(3)?),
+                        deletions: count(r.get::<_, i64>(4)?),
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
         Ok(rows)
     }
 
@@ -2307,28 +2448,6 @@ impl Storage {
             ],
         )?;
         Ok(changed)
-    }
-
-    /// How many pull/merge requests each session has had (see
-    /// [`Storage::session_request_history`]); sessions with none are absent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails.
-    pub fn session_request_totals(&self) -> Result<HashMap<String, usize>> {
-        let conn = lock_conn_read!(self)?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT session_id, COUNT(*) FROM session_request_history GROUP BY session_id",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    usize::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
-                ))
-            })?
-            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
-        Ok(rows)
     }
 
     /// The request session `session_id` is bound to, if any.
@@ -2609,10 +2728,14 @@ impl Storage {
                 binding.host
             ],
         )?;
-        // The history row follows only a poll that was kept.
+        // The history row follows only a poll that was kept. A request that
+        // leaves `open` drops its diff size, so the history refresh's
+        // backfill (`request_history_missing_stats`) reads the final one.
         if changed > 0 {
             tx.execute(
-                "UPDATE session_request_history SET state = ?2, title = ?3 \
+                "UPDATE session_request_history SET state = ?2, title = ?3, \
+                 additions = CASE WHEN state <> ?2 AND ?2 <> 'open' THEN NULL ELSE additions END, \
+                 deletions = CASE WHEN state <> ?2 AND ?2 <> 'open' THEN NULL ELSE deletions END \
                  WHERE session_id = ?1 AND repo = ?4 AND number = ?5 AND host = ?6",
                 params![
                     binding.session_id,
@@ -6621,6 +6744,18 @@ pub struct SessionRequest {
     pub head_branch: String,
     /// `open`, `merged` or `closed`, when last seen.
     pub state: String,
+}
+
+/// A pull/merge request's identity across sessions: `(host, repo, number)`.
+pub type RequestKey = (String, String, u64);
+
+/// A request's diff size, as its forge reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct DiffStats {
+    /// Lines added.
+    pub additions: u64,
+    /// Lines removed.
+    pub deletions: u64,
 }
 
 /// One binding as the `autofix_status` tool reports it.

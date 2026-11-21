@@ -19,6 +19,13 @@
 //! drawn from the icon font, whose bundled subset has no pull-request,
 //! container or cloud glyphs.
 //!
+//! Resting the pointer on a row with requests opens the request popup
+//! beside it (in place of the tooltip): each request's title, then its
+//! state, repository and number, and its diff size (`+120 -7`, GitHub only)
+//! once the history refresh has read it; an eye marks the request Auto-fix
+//! watches, and a click opens it in the browser ([`App::open_url`]). The
+//! popup stays open while the pointer moves onto it.
+//!
 //! Every action is app-core's: a click calls
 //! [`click_row`] (switches to the session, opens a new one, starts the
 //! filter or toggles a section; `Ctrl`+click toggles the selection) and a
@@ -48,10 +55,12 @@ use codemason_app_core::sessions_sidebar_state::{
     PINNED_KEY, SidebarRow, attention_of, backend_of, build_rows, click_row, open_row_menu,
     refresh_if_dirty, relative_age, selectable,
 };
+use codemason_app_core::styled::ThemeColor;
 use codemason_config::ExecutionBackendKind;
+use codemason_storage::{DiffStats, SessionRequest};
 use egui::{
-    Atom, Atoms, Color32, IdSalt, IntoAtoms, Painter, Pos2, Rect, RichText, Role, ScrollArea,
-    Stroke, WidgetInfo, pos2, vec2,
+    Atom, Atoms, Color32, Id, IdSalt, IntoAtoms, Painter, Pos2, Rect, RichText, Role, ScrollArea,
+    Stroke, Vec2, WidgetInfo, pos2, vec2,
 };
 
 use crate::dialogs::session_menu;
@@ -108,6 +117,10 @@ pub fn section_gap_height(row_height: f32) -> f32 {
 pub struct SessionsView {
     /// The cursor row drawn last frame, to scroll it into view once it moves.
     last_cursor: Option<usize>,
+    /// The session whose request popup is open, and the row it hangs from.
+    popup: Option<(String, Rect)>,
+    /// Where the request popup was drawn last frame.
+    popup_rect: Option<Rect>,
 }
 
 /// Pull/merge request state of a session, as its row's badge shows it.
@@ -608,6 +621,317 @@ fn session_atoms(
     atoms
 }
 
+/// The colour of a request in `state` (`open`, `merged`, `closed`).
+fn request_colour(state: &str, palette: &Palette) -> Color32 {
+    match state {
+        "open" => palette.success,
+        // The forges show merged in purple: the theme's fifth categorical
+        // colour (its magenta).
+        "merged" => palette.color(ThemeColor::Categorical(4)),
+        "closed" => palette.error,
+        _ => palette.muted,
+    }
+}
+
+/// A request's state as a word: `Open`, `Merged`, `Closed`.
+fn state_word(state: &str) -> String {
+    let mut chars = state.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// `#12` on GitHub, `!12` on GitLab.
+fn request_number(request: &SessionRequest) -> String {
+    let sigil = codemason_agent::project::RemoteKind::parse(&request.forge)
+        .map_or('#', |kind| kind.noun().sigil);
+    format!("{sigil}{}", request.number)
+}
+
+/// Paint a pull-request glyph in the square `rect`: a branch on the left
+/// (two rings joined by a line) and, on the right, a ring whose line rises
+/// and turns back toward the branch, ending in an arrowhead.
+fn paint_pr_glyph(painter: &egui::Painter, rect: Rect, colour: Color32) {
+    let s = rect.width();
+    let stroke = Stroke::new((s * 0.085).max(1.0), colour);
+    let ring = s * 0.1;
+    let left = s.mul_add(0.22, rect.left());
+    let right = s.mul_add(-0.22, rect.right());
+    let top = s.mul_add(0.18, rect.top());
+    let bottom = s.mul_add(-0.18, rect.bottom());
+    painter.circle_stroke(egui::pos2(left, top), ring, stroke);
+    painter.circle_stroke(egui::pos2(left, bottom), ring, stroke);
+    painter.circle_stroke(egui::pos2(right, bottom), ring, stroke);
+    painter.line_segment(
+        [
+            egui::pos2(left, top + ring),
+            egui::pos2(left, bottom - ring),
+        ],
+        stroke,
+    );
+    // The right line rises to the top and turns back to the gap between
+    // the columns, where its arrowhead points at the branch.
+    let tip = egui::pos2(f32::midpoint(left, right), top);
+    painter.add(egui::Shape::line(
+        vec![
+            egui::pos2(right, bottom - ring),
+            egui::pos2(right, top),
+            tip,
+        ],
+        stroke,
+    ));
+    let barb = s * 0.13;
+    painter.line_segment([tip, tip + Vec2::new(barb, -barb)], stroke);
+    painter.line_segment([tip, tip + Vec2::new(barb, barb)], stroke);
+}
+
+/// Id of the request popup's open state: the session it is for and the
+/// row it hangs from.
+fn popup_id() -> Id {
+    Id::unique("codemason_sessions_request_popup")
+}
+
+/// Width of the request popup, in points.
+const POPUP_WIDTH: f32 = 340.0;
+
+/// How many requests the popup shows before it scrolls.
+const POPUP_ROWS: f32 = 7.0;
+
+/// Which session's request popup is open, if any, after this frame's
+/// pointer: the popup stays open while the pointer is on it or crossing to
+/// it from its row; resting on a row with requests opens that row's (at
+/// once while another popup is open, otherwise after the tooltip delay).
+fn popup_target(
+    ui: &egui::Ui,
+    hovered: Option<(String, Rect)>,
+    open: Option<(String, Rect)>,
+    popup_rect: Option<Rect>,
+) -> Option<(String, Rect)> {
+    let pointer = ui.ctx().pointer_hover_pos();
+    let inside = |rect: Rect| pointer.is_some_and(|p| rect.contains(p));
+    if let (Some(row), Some(popup)) = (open.as_ref(), popup_rect) {
+        let bridge =
+            Rect::from_x_y_ranges(row.1.right()..=popup.left(), row.1.y_range()).expand(4.0);
+        // On its own row, follow the row's current rectangle, so a scroll
+        // or a sidebar resize moves the popup with it.
+        if let Some(current) = hovered.as_ref().filter(|h| h.0 == row.0) {
+            return Some(current.clone());
+        }
+        if inside(popup.expand(4.0)) || inside(bridge) {
+            return open;
+        }
+    }
+    let hovered = hovered?;
+    let delay = ui.style().interaction.tooltip_delay;
+    let rested = ui.input(|i| i.pointer.time_since_last_movement()) >= delay;
+    if open.is_some() || rested {
+        Some(hovered)
+    } else {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f32(delay));
+        None
+    }
+}
+
+/// Draw the request popup for `requests` beside `row`, and open the
+/// request clicked in it.
+///
+/// # Returns
+///
+/// The popup's rectangle.
+fn request_popup(
+    ctx: &egui::Context,
+    app: &mut App,
+    session_id: &str,
+    requests: &[RequestEntry],
+    row: Rect,
+    palette: &Palette,
+) -> Rect {
+    let mut chosen = None;
+    let response = egui::Area::new(popup_id().with("area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(row.right_top() + Vec2::new(4.0, 0.0))
+        .constrain(true)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_width(POPUP_WIDTH);
+                let entry = request_entry_height(ui);
+                ScrollArea::vertical()
+                    // One scroll state per session, so a long history
+                    // scrolled in one popup does not open another
+                    // session's popup part-way down.
+                    .id_salt(("sessions_request_popup_scroll", session_id))
+                    .max_height(entry * POPUP_ROWS)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for entry in requests {
+                            if request_entry(ui, entry, palette).clicked() {
+                                chosen = Some(entry.request.web_url.clone());
+                            }
+                        }
+                    });
+            });
+        });
+    if let Some(url) = chosen
+        && let Err(e) = app.open_url(&url)
+    {
+        app.status = e;
+    }
+    response.response.rect
+}
+
+/// Height of one request in the popup: two lines and their padding.
+fn request_entry_height(ui: &egui::Ui) -> f32 {
+    let body = ui.text_style_height(&egui::TextStyle::Body);
+    let small = ui.text_style_height(&egui::TextStyle::Small);
+    body + small + crate::metrics::space::SM.mul_add(2.0, crate::metrics::space::XS)
+}
+
+/// One request as the popup lists it.
+#[derive(Debug, Clone)]
+struct RequestEntry {
+    /// The request.
+    request: SessionRequest,
+    /// Its diff size, once read.
+    stats: Option<DiffStats>,
+    /// Whether the Auto-fix watcher polls it.
+    watched: bool,
+}
+
+/// Paint an eye in the square `rect`: an almond outline and its pupil.
+fn paint_eye(painter: &egui::Painter, rect: Rect, colour: Color32) {
+    let s = rect.width();
+    let stroke = Stroke::new((s * 0.085).max(1.0), colour);
+    let centre = rect.center();
+    let half = s * 0.42;
+    let lift = s * 0.3;
+    let lid = |sign: f32| {
+        egui::Shape::QuadraticBezier(egui::epaint::QuadraticBezierShape::from_points_stroke(
+            [
+                centre - Vec2::new(half, 0.0),
+                centre + Vec2::new(0.0, sign * lift * 2.0),
+                centre + Vec2::new(half, 0.0),
+            ],
+            false,
+            Color32::TRANSPARENT,
+            stroke,
+        ))
+    };
+    painter.add(lid(-1.0));
+    painter.add(lid(1.0));
+    painter.circle_filled(centre, s * 0.14, colour);
+}
+
+/// One request in the popup: its title (with an eye at the right while
+/// Auto-fix watches it), then its state glyph and word, repository and
+/// number, and its diff size (`+120 -7`) when it is known. A click opens it.
+fn request_entry(ui: &mut egui::Ui, entry: &RequestEntry, palette: &Palette) -> egui::Response {
+    let RequestEntry {
+        request,
+        stats,
+        watched,
+    } = entry;
+    let stats = *stats;
+    use crate::metrics::space;
+    let size = Vec2::new(ui.available_width(), request_entry_height(ui));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let number = request_number(request);
+    let mut size_words = stats.map_or_else(String::new, |s| {
+        format!(", {} added, {} removed", s.additions, s.deletions)
+    });
+    if *watched {
+        size_words.push_str(", watched by Auto-fix");
+    }
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            Role::Link,
+            true,
+            format!(
+                "{} {number}: {} ({}{size_words})",
+                request.repo, request.title, request.state
+            ),
+        )
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    // Keyboard focus is highlighted like the pointer, so Tab shows which
+    // request Enter opens.
+    if response.hovered() || response.has_focus() {
+        ui.painter()
+            .rect_filled(rect, crate::metrics::radius::XS, palette.selection);
+    }
+    let inner = rect.shrink2(Vec2::new(space::SM, space::SM));
+    let body = ui.text_style_height(&egui::TextStyle::Body);
+    // The eye sits at the title line's right end; the title is cut before it.
+    let eye_width = if *watched { body + space::SM } else { 0.0 };
+    if *watched {
+        let eye = Rect::from_min_size(
+            egui::pos2(inner.right() - body, inner.top()),
+            Vec2::splat(body),
+        );
+        paint_eye(ui.painter(), eye, palette.accent);
+    }
+    let title = egui::WidgetText::from(RichText::new(&request.title).color(palette.text))
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            inner.width() - eye_width,
+            egui::TextStyle::Body,
+        );
+    let title_height = title.size().y;
+    ui.painter().galley(inner.left_top(), title, palette.text);
+    let small = ui.text_style_height(&egui::TextStyle::Small);
+    let line = Rect::from_min_size(
+        inner.left_top() + Vec2::new(0.0, title_height + space::XS),
+        Vec2::new(inner.width(), small),
+    );
+    let colour = request_colour(&request.state, palette);
+    paint_pr_glyph(
+        ui.painter(),
+        Rect::from_min_size(line.left_top(), Vec2::splat(small)),
+        colour,
+    );
+    let mut job = egui::text::LayoutJob::default();
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let format = |colour| egui::TextFormat::simple(font.clone(), colour);
+    job.append(&state_word(&request.state), 0.0, format(colour));
+    job.append(
+        &format!("  \u{b7}  {} {number}", request.repo),
+        0.0,
+        format(palette.muted),
+    );
+    // The diff size sits at the right end; the rest is cut short before it.
+    let size = stats.map(|s| {
+        let mut size = egui::text::LayoutJob::default();
+        size.append(
+            &format!("+{}", s.additions),
+            0.0,
+            format(palette.diff_added),
+        );
+        size.append(
+            &format!(" -{}", s.deletions),
+            0.0,
+            format(palette.diff_removed),
+        );
+        ui.fonts_mut(|f| f.layout_job(size))
+    });
+    let size_width = size.as_ref().map_or(0.0, |g| g.size().x + space::SM);
+    job.wrap =
+        egui::text::TextWrapping::truncate_at_width(line.width() - small - space::XS - size_width);
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    ui.painter().galley(
+        line.left_top() + Vec2::new(small + space::XS, 0.0),
+        galley,
+        palette.muted,
+    );
+    if let Some(size) = size {
+        let pos = egui::pos2(line.right() - size.size().x, line.top());
+        ui.painter().galley(pos, size, palette.muted);
+    }
+    response
+}
+
 /// The Sessions pane's dock tab title: the pane name and the session count,
 /// e.g. `Sessions (12)`. The panel itself draws no heading.
 ///
@@ -681,6 +1005,8 @@ impl SessionsView {
         self.last_cursor = focused.then_some(cursor);
         let mut clicked = None;
         let mut menu = None;
+        // The session row under the pointer that has requests, and its rect.
+        let mut hovered_requests = None;
         let output = scroll.show_viewport(ui, |ui, viewport| {
             ui.set_height(layout.content_height());
             for index in layout.visible(&viewport) {
@@ -753,9 +1079,15 @@ impl SessionsView {
                     ui.ctx().accesskit_node_builder(response.id, |node| {
                         node.set_description(description);
                     });
-                    // The tooltip is shown as a side effect; the returned
-                    // response is the same row.
-                    response.response.clone().on_hover_text(details.join("\n"));
+                    // A row with requests opens the request popup instead of
+                    // a tooltip; the tooltip is shown as a side effect.
+                    if app.sidebar.request_history.contains_key(id) {
+                        if response.hovered() {
+                            hovered_requests = Some((id.clone(), response.rect));
+                        }
+                    } else {
+                        response.response.clone().on_hover_text(details.join("\n"));
+                    }
                 }
                 if let SidebarRow::SubAgent { agent, task, .. } = row {
                     response.response.clone().on_hover_text(format!(
@@ -783,6 +1115,7 @@ impl SessionsView {
             egui::Sense::hover(),
         );
         list.widget_info(|| WidgetInfo::labeled(Role::List, true, SESSIONS_LABEL));
+        self.show_request_popup(ui, app, hovered_requests, palette);
         if let Some((index, ctrl)) = clicked {
             click_row(app, index, ctrl);
             ui.ctx().request_repaint();
@@ -941,6 +1274,45 @@ impl RowLayout {
         first..last
     }
 }
+
+impl SessionsView {
+    /// Open, keep or close the request popup for this frame's pointer
+    /// ([`popup_target`]) and draw it.
+    fn show_request_popup(
+        &mut self,
+        ui: &egui::Ui,
+        app: &mut App,
+        hovered: Option<(String, Rect)>,
+        palette: &Palette,
+    ) {
+        let ctx = ui.ctx().clone();
+        let open = self.popup.take();
+        let target = popup_target(ui, hovered, open, self.popup_rect);
+        let Some((id, row)) = target else {
+            self.popup_rect = None;
+            return;
+        };
+        let Some(requests) = app.sidebar.request_history.get(&id).cloned() else {
+            self.popup_rect = None;
+            return;
+        };
+        let entries: Vec<RequestEntry> = requests
+            .into_iter()
+            .map(|request| {
+                let key = (request.host.clone(), request.repo.clone(), request.number);
+                RequestEntry {
+                    stats: app.sidebar.request_stats.get(&key).copied(),
+                    watched: app.sidebar.watched_requests.contains(&key),
+                    request,
+                }
+            })
+            .collect();
+        self.popup_rect = Some(request_popup(&ctx, app, &id, &entries, row, palette));
+        self.popup = Some((id, row));
+    }
+}
+
+/// `scroll` set to bring row `index` into view, given this frame's viewport
 
 /// `scroll` set to bring row `index` into view, given this frame's viewport
 /// of `visible_rows` full rows.

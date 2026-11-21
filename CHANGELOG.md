@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added: resting the pointer on a session row with requests opens a list beside it: each request's title, state, `owner/repo #N` and, for GitHub, `+added -removed`, newest first; click one to open it in the browser. An eye marks the request Auto-fix is watching.
+- Added: the PR/MR history stores each GitHub request's diff size (schema 14, `additions`/`deletions` on `session_request_history`). The history refresh reads it with the state of open requests, and once for any other request without one; GitLab reports no line counts. A refresh that changes a row now reloads the sidebar.
 - Added: images staged for the next message are drawn as **removable thumbnails**
   above the prompt (`material::thumbnail`, `panels::prompt::attachments_row`).
   Each is a 64-point picture in a Material outline frame with a filled
