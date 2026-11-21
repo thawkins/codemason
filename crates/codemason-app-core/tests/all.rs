@@ -571,6 +571,8 @@ mod test_stats_command;
 mod test_status_expiry;
 #[path = "test_statusbar_last_prompt.rs"]
 mod test_statusbar_last_prompt;
+#[path = "test_store_cache.rs"]
+mod test_store_cache;
 #[path = "test_stream_metrics.rs"]
 mod test_stream_metrics;
 #[path = "test_styled.rs"]
