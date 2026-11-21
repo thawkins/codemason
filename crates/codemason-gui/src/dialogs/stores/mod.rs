@@ -15,16 +15,17 @@
 //! [`frame`] draws it: the header (title, the Codex | Claude switcher for
 //! plugins, the search field, close), the filter rail, the result list,
 //! the details pane and the footer. [`plugin`] draws the plugin-specific
-//! row and detail parts. Clicks do what the TUI's mouse handler does: a
-//! filter row selects that filter and focuses its pane, a result row moves
-//! the highlight; a double click on a result, a row's Install or the
-//! details' Install moves the highlight there, focuses the results and
-//! sends Enter. Clear search, Close, Refresh, Retry and the switcher call
-//! the App's own actions.
+//! row and detail parts, [`connector`] the connector-specific ones.
+//! Clicks do what the TUI's mouse handler does: a filter row selects that
+//! filter and focuses its pane, a result row moves the highlight; a double
+//! click on a result, a row's Install or the details' Install moves the
+//! highlight there, focuses the results and sends Enter. Clear search,
+//! Close, Refresh, Retry and the switcher call the App's own actions.
 //!
 //! Dependencies: `codemason-app-core`, `codemason-connectors`,
 //! `codemason-plugins` (`StoreKind`) and `egui`.
 
+pub mod connector;
 pub mod frame;
 pub mod plugin;
 pub mod snapshot;
@@ -206,37 +207,12 @@ pub fn show_connector_store(ctx: &egui::Context, app: &mut App) -> bool {
         &palette,
         "codemason_connector_store",
         &snap,
-        &CONNECTOR_LOOK,
+        &connector::LOOK,
     ) else {
         return true;
     };
     apply_connector(ctx, app, click);
     true
-}
-
-/// The connector catalogue's copy and parts: a row shows its tags, the
-/// details its category, marketplace and source.
-const CONNECTOR_LOOK: frame::Look = frame::Look {
-    search_placeholder: "Search connectors...",
-    loading: "Loading the catalogue...",
-    empty: "The catalogue has no entries",
-    row_extras: plugin::row_tags,
-    details: connector_details,
-};
-
-/// Draw a connector's detail fields.
-fn connector_details(
-    ui: &mut egui::Ui,
-    palette: &crate::palette::Palette,
-    row: &snapshot::RowSnapshot,
-) {
-    let detail = match &row.detail {
-        snapshot::Detail::Connector(detail) => detail,
-        snapshot::Detail::Plugin(_) => return,
-    };
-    frame::detail_field(ui, palette, "Category", &detail.category);
-    frame::detail_field(ui, palette, "Marketplace", &detail.marketplace);
-    frame::detail_field(ui, palette, "Source", &detail.source);
 }
 
 /// Do what `click` asks of the connector catalogue.
