@@ -63,10 +63,49 @@ pub fn drawer_item(
     label: &str,
     selected: bool,
 ) -> Response {
+    draw_item(ui, palette, icon, label, None, selected)
+}
+
+/// Draw a drawer item with a count at its right edge.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in.
+/// * `palette` - the colours.
+/// * `label` - the item's text.
+/// * `count` - the number shown right-aligned in `on_surface_variant`.
+/// * `selected` - whether this is the current destination.
+///
+/// # Returns
+///
+/// The item's response; its accessible name is `"{label} ({count})"`.
+pub fn drawer_item_with_count(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    count: usize,
+    selected: bool,
+) -> Response {
+    draw_item(ui, palette, None, label, Some(count), selected)
+}
+
+/// Draw a drawer item, with an optional right-aligned count.
+fn draw_item(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    count: Option<usize>,
+    selected: bool,
+) -> Response {
     let m3 = &palette.m3;
     let size = Vec2::new(ui.available_width(), ITEM_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(Role::Tab, ui.is_enabled(), selected, label));
+    let name = match count {
+        Some(count) => format!("{label} ({count})"),
+        None => label.to_string(),
+    };
+    response.widget_info(|| WidgetInfo::selected(Role::Tab, ui.is_enabled(), selected, &name));
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -95,6 +134,15 @@ pub fn drawer_item(
     let text = text_galley(ui, label, label_large(ui.ctx()), content);
     let y = rect.center().y - text.size().y / 2.0;
     ui.painter().galley(egui::pos2(x, y), text, content);
+    if let Some(count) = count {
+        let colour = content_colour(ui, palette, rgb(m3.on_surface_variant));
+        let number = text_galley(ui, &count.to_string(), label_large(ui.ctx()), colour);
+        let pos = egui::pos2(
+            rect.right() - ITEM_PADDING - number.size().x,
+            rect.center().y - number.size().y / 2.0,
+        );
+        ui.painter().galley(pos, number, colour);
+    }
     response
 }
 
