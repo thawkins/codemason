@@ -3418,6 +3418,10 @@ pub struct App {
     /// behaviour can be exercised for both stores with no network access
     /// (FR-032, FR-037, NFR-003, NFR-004).
     pub plugin_store_fetcher: Arc<dyn StoreIndexFetcher>,
+    /// In-memory cache of marketplace indexes (Codex and Claude plugin stores, the
+    /// connector catalogue), filled by the background fetch and enrichment jobs
+    /// ([`App::start_store_fetch`], [`App::prefetch_store_indexes`]).
+    pub store_cache: crate::app::SharedStoreCache,
     /// The injectable manifest-metadata source the enrichment path drives (spec
     /// `pluginstores` FR-048).
     ///

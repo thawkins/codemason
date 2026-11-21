@@ -35,6 +35,8 @@ use crate::app::state::{
     percent_decode_path, save_clipboard_image_to_temp,
 };
 
+use crate::app::StoreCacheKey;
+
 // Helpers
 use crate::app::helpers::{MentionSpan, short_id, short_session_id};
 
@@ -1571,19 +1573,98 @@ impl App {
         kind: StoreKind,
         stores: &codemason_config::PluginStoresConfig,
     ) {
+        // Until the browser reads the store cache, this path both feeds the open
+        // panel's delivery slot and fills the cache from the same fetch.
+        self.start_plugin_cache_fetch(kind, stores, true);
+    }
+
+    /// Start a background fetch of the marketplace index for `key` into
+    /// [`App::store_cache`], followed by its manifest enrichment.
+    ///
+    /// A no-op while a fetch for `key` is already in flight. Plugin stores run on
+    /// the async runtime's blocking pool, so without a runtime the fetch is not
+    /// attempted and the in-flight marker is cleared again. The connector
+    /// catalogue runs on a plain OS thread (its blocking client owns a runtime);
+    /// when the subsystem is disabled the slot records the failure
+    /// `connectors.enabled = false`. No path panics.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - which marketplace index to fetch.
+    pub fn start_store_fetch(&mut self, key: StoreCacheKey) {
+        match key {
+            StoreCacheKey::Plugins(kind) => {
+                let (_dirs, plugins) = store_and_config(&self.cwd_path);
+                let stores = plugins.stores_or_default();
+                self.start_plugin_cache_fetch(kind, &stores, false);
+            }
+            StoreCacheKey::Connectors => self.start_connector_cache_fetch(),
+        }
+    }
+
+    /// Prefetch every marketplace index into [`App::store_cache`] at startup:
+    /// the Codex and Claude plugin stores and, when the connector subsystem is
+    /// enabled, the connector catalogue. A disabled catalogue is skipped without
+    /// recording or showing a failure.
+    pub fn prefetch_store_indexes(&mut self) {
+        self.start_store_fetch(StoreCacheKey::Plugins(StoreKind::Codex));
+        self.start_store_fetch(StoreCacheKey::Plugins(StoreKind::Claude));
+        let (_dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
+        if config.is_enabled() {
+            self.start_store_fetch(StoreCacheKey::Connectors);
+        }
+    }
+
+    /// Begin a cache fetch for `key` unless one is already in flight; returns the
+    /// new generation, or `None` when a fetch is in flight.
+    fn begin_store_cache_fetch(&self, key: StoreCacheKey) -> Option<u64> {
+        let mut cache = recover_poisoned(self.store_cache.lock(), "store_cache");
+        cache.needs_fetch(key, true).then(|| cache.begin(key))
+    }
+
+    /// Fetch the plugin store `kind` from every endpoint in `stores` off the
+    /// event loop, filling [`App::store_cache`] and, when `legacy` is set, also
+    /// delivering the outcome to [`App::plugin_store_result`] for the open panel
+    /// (FR-007, FR-016, FR-024, FR-026, FR-048).
+    ///
+    /// With `legacy` set the fetch always runs, even when a cache fetch is
+    /// already in flight (the cache is then left to that fetch). A refused base
+    /// endpoint (non-`https` or malformed, FR-024) fails the cache slot and, with
+    /// `legacy`, the open panel, with no fetch attempted.
+    fn start_plugin_cache_fetch(
+        &mut self,
+        kind: StoreKind,
+        stores: &codemason_config::PluginStoresConfig,
+        legacy: bool,
+    ) {
+        let key = StoreCacheKey::Plugins(kind);
+        let generation = self.begin_store_cache_fetch(key);
+        if generation.is_none() && !legacy {
+            return;
+        }
         // The store's base endpoint (config override or compiled default) is the
-        // primary marketplace: a refused base (non-https or malformed, FR-024) is
-        // reported as the panel's inline error with no fetch attempted. Added
-        // marketplaces (FR-048) are then appended; a refused added URL is skipped
-        // (one bad added URL does not blind the whole store).
+        // primary marketplace: a refused base is reported with no fetch attempted.
+        // Added marketplaces (FR-048) are then appended; a refused added URL is
+        // skipped (one bad added URL does not blind the whole store) and reported
+        // as a warning.
         if let Err(err) = kind.effective_endpoint_with_source(stores) {
-            self.plugin_store_failed(kind, err.to_string());
+            if let Some(generation) = generation {
+                recover_poisoned(self.store_cache.lock(), "store_cache").fail(
+                    key,
+                    generation,
+                    err.to_string(),
+                );
+            }
+            if legacy {
+                self.plugin_store_failed(kind, err.to_string());
+            }
             return;
         }
-        let (endpoints, _refused) = kind.effective_endpoints_with_source(stores);
-        if endpoints.is_empty() {
-            return;
-        }
+        let (endpoints, refused) = kind.effective_endpoints_with_source(stores);
+        let warnings: Vec<String> = refused
+            .map(|err| format!("a configured plugin marketplace was skipped: {err}"))
+            .into_iter()
+            .collect();
         let limits = FetchLimits::from(stores);
         // Resolve each endpoint's marketplace display name on the UI thread, so the
         // browse row can name the marketplace a plugin came from (FR-048) and the
@@ -1597,55 +1678,123 @@ impl App {
                 (endpoint, marketplace)
             })
             .collect();
-        let slot = Arc::clone(&self.plugin_store_result);
-        let fetcher = Arc::clone(&self.plugin_store_fetcher);
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn_blocking(move || {
-                let mut merged = StoreIndex::default();
-                let mut first_error: Option<StoreError> = None;
-                for (endpoint, marketplace) in &endpoints {
-                    match fetcher.fetch_index(kind, endpoint, &limits) {
-                        Ok(mut index) => {
-                            // Attribute every row to the marketplace it came from,
-                            // so a merged multi-marketplace panel names each source
-                            // (FR-048).
-                            for entry in &mut index.entries {
-                                entry.marketplace = marketplace.clone();
-                            }
-                            merged.store = merged.store.or(index.store);
-                            merged.skipped += index.skipped;
-                            merged.entries.extend(index.entries);
-                        }
-                        Err(err) => {
-                            if first_error.is_none() {
-                                first_error = Some(err);
-                            }
-                        }
-                    }
-                }
-                // A single-marketplace store keeps the exact prior behaviour: a
-                // failure is the panel's inline error. When at least one marketplace
-                // answered, the merged result is delivered even if another failed.
-                let outcome = if merged.entries.is_empty()
-                    && merged.store.is_none()
-                    && let Some(err) = first_error
-                {
-                    Err(err)
-                } else {
-                    Self::dedup_store_entries(&mut merged.entries);
-                    Ok(merged)
-                };
-                Self::deposit_plugin_store_result(&slot, kind, outcome);
-            });
-        } else {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
             // Without an async reactor (headless/unit-test contexts) the fetch
             // cannot run off-loop, so it is not attempted at all: running it
             // inline would block the caller and violate FR-016/FR-026. The panel
-            // stays in its loading state.
+            // stays in its loading state and the cache slot is not left in flight.
             tracing::debug!(
                 store = kind.token(),
                 "plugin-store fetch skipped: no async runtime available"
             );
+            if let Some(generation) = generation {
+                recover_poisoned(self.store_cache.lock(), "store_cache").cancel(key, generation);
+            }
+            return;
+        };
+        let cache = Arc::clone(&self.store_cache);
+        let legacy_slot = legacy.then(|| Arc::clone(&self.plugin_store_result));
+        let fetcher = Arc::clone(&self.plugin_store_fetcher);
+        let source = Arc::clone(&self.store_manifest_source);
+        handle.spawn_blocking(move || {
+            let (outcome, failed) =
+                fetch_merged_plugin_index(fetcher.as_ref(), kind, &endpoints, &limits);
+            if let Some(slot) = &legacy_slot {
+                Self::deposit_plugin_store_result(slot, kind, outcome.clone());
+            }
+            let Some(generation) = generation else {
+                return;
+            };
+            let index = match outcome {
+                Ok(index) => index,
+                Err(err) => {
+                    recover_poisoned(cache.lock(), "store_cache").fail(
+                        key,
+                        generation,
+                        err.panel_detail(kind),
+                    );
+                    return;
+                }
+            };
+            recover_poisoned(cache.lock(), "store_cache").fill_plugins(
+                kind,
+                generation,
+                index.entries.clone(),
+                index.skipped,
+                failed,
+                warnings,
+            );
+            let sink = |update: codemason_plugins::ManifestUpdate| {
+                recover_poisoned(cache.lock(), "store_cache")
+                    .push_plugin_update(kind, generation, update);
+            };
+            codemason_plugins::enrich_into(&index.entries, kind, source.as_ref(), &sink);
+            recover_poisoned(cache.lock(), "store_cache").finish_enrichment(key, generation);
+        });
+    }
+
+    /// Fetch the connector catalogue into [`App::store_cache`] on a plain OS
+    /// thread, then enrich its entries from their manifests (FR-043, FR-044).
+    ///
+    /// The fetch is blocking (`reqwest::blocking` builds and drops its own tokio
+    /// runtime), so it cannot run on the async blocking pool. A refused
+    /// marketplace URL is kept as a warning on the cached index.
+    fn start_connector_cache_fetch(&mut self) {
+        let key = StoreCacheKey::Connectors;
+        let Some(generation) = self.begin_store_cache_fetch(key) else {
+            return;
+        };
+        let (dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
+        if !config.is_enabled() {
+            // A disabled subsystem is inert: no catalogue fetch is attempted.
+            recover_poisoned(self.store_cache.lock(), "store_cache").fail(
+                key,
+                generation,
+                "connectors.enabled = false".to_string(),
+            );
+            return;
+        }
+        let cache = Arc::clone(&self.store_cache);
+        let source = Arc::clone(&self.catalogue_manifest_source);
+        let spawned = std::thread::Builder::new()
+            .name("connector-catalogue-fetch".to_string())
+            .spawn(move || {
+                let full =
+                    match codemason_connectors::search_installable_catalogue_full(&config, &dirs) {
+                        Ok(full) => full,
+                        Err(cause) => {
+                            recover_poisoned(cache.lock(), "store_cache")
+                                .fail(key, generation, cause);
+                            return;
+                        }
+                    };
+                let warnings: Vec<String> = full
+                    .refused_marketplace
+                    .map(|refused| {
+                        format!("a configured connector marketplace was skipped: {refused}")
+                    })
+                    .into_iter()
+                    .collect();
+                recover_poisoned(cache.lock(), "store_cache").fill_connectors(
+                    generation,
+                    full.descriptors.clone(),
+                    full.skipped,
+                    warnings,
+                );
+                let sink = |update: codemason_connectors::catalogue_enrich::ManifestUpdate| {
+                    recover_poisoned(cache.lock(), "store_cache")
+                        .push_connector_update(generation, update);
+                };
+                codemason_connectors::catalogue_enrich::enrich_catalogue_into(
+                    &full.descriptors,
+                    source.as_ref(),
+                    &sink,
+                );
+                recover_poisoned(cache.lock(), "store_cache").finish_enrichment(key, generation);
+            });
+        if let Err(err) = spawned {
+            tracing::warn!(error = %err, "connector-catalogue fetch thread could not start");
+            recover_poisoned(self.store_cache.lock(), "store_cache").cancel(key, generation);
         }
     }
 
@@ -6194,4 +6343,55 @@ pub fn emit_log_entry_to_tracing(level: LogLevel, message: &str) {
         // local filter admits it.
         LogLevel::Tool => emit_at!(Level::INFO, "tool"),
     }
+}
+
+/// Fetch the plugin store `kind` from every endpoint and merge the results
+/// (spec `pluginstores` FR-048).
+///
+/// Every row is attributed to the marketplace it came from and duplicate ids
+/// keep their first occurrence. The outcome is an error only when no endpoint
+/// answered; otherwise the merged index is returned even if some endpoints
+/// failed. The returned list names the marketplaces whose fetch failed.
+fn fetch_merged_plugin_index(
+    fetcher: &dyn StoreIndexFetcher,
+    kind: StoreKind,
+    endpoints: &[(StoreEndpoint, String)],
+    limits: &FetchLimits,
+) -> (Result<StoreIndex, StoreError>, Vec<String>) {
+    let mut merged = StoreIndex::default();
+    let mut first_error: Option<StoreError> = None;
+    let mut failed = Vec::new();
+    for (endpoint, marketplace) in endpoints {
+        match fetcher.fetch_index(kind, endpoint, limits) {
+            Ok(mut index) => {
+                // Attribute every row to the marketplace it came from, so a merged
+                // multi-marketplace panel names each source (FR-048).
+                for entry in &mut index.entries {
+                    entry.marketplace = marketplace.clone();
+                }
+                merged.store = merged.store.or(index.store);
+                merged.skipped += index.skipped;
+                merged.entries.extend(index.entries);
+            }
+            Err(err) => {
+                failed.push(marketplace.clone());
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+    }
+    // A single-marketplace store keeps the exact prior behaviour: a failure is
+    // the panel's inline error. When at least one marketplace answered, the
+    // merged result is delivered even if another failed.
+    let outcome = if merged.entries.is_empty()
+        && merged.store.is_none()
+        && let Some(err) = first_error
+    {
+        Err(err)
+    } else {
+        App::dedup_store_entries(&mut merged.entries);
+        Ok(merged)
+    };
+    (outcome, failed)
 }

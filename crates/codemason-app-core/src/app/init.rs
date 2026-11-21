@@ -311,6 +311,7 @@ impl App {
             plugin_store_install_result: Arc::new(std::sync::Mutex::new(None)),
             plugin_store_probe_result: Arc::new(std::sync::Mutex::new(None)),
             plugin_store_fetcher: codemason_plugins::default_fetcher(),
+            store_cache: crate::app::SharedStoreCache::default(),
             store_manifest_source: std::sync::Arc::new(
                 codemason_plugins::NetworkManifestSource::new(),
             ),

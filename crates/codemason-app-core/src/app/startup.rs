@@ -252,6 +252,9 @@ impl super::App {
         } else {
             None
         };
+
+        // Warm the marketplace index cache so the store browsers open instantly.
+        self.prefetch_store_indexes();
     }
 
     /// Whether the background code-index startup result is still awaited.
