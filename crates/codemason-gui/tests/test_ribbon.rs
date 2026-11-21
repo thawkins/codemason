@@ -274,3 +274,20 @@ fn test_ribbon_agent_tab_has_provider_and_resume() {
         RibbonAction::Menu(MenuAction::Slash("/resume"))
     );
 }
+
+#[test]
+fn test_ribbon_slash_command_keeps_the_unsent_draft() {
+    let mut rig = rig("document-light");
+    {
+        let app = rig.harness.state_mut().app_mut();
+        app.session.input = "half-typed prompt".to_string();
+        app.session.input_cursor = 4;
+    }
+    // The quick access Resume: with nothing halted it only reports so, and a
+    // toolbar click is not a prompt submission, so the draft stays.
+    rig.harness.get_by_label("Resume").click();
+    rig.harness.run();
+    let app = rig.harness.state().app();
+    assert_eq!(app.session.input, "half-typed prompt");
+    assert_eq!(app.session.input_cursor, 4);
+}

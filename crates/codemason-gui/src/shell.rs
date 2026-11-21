@@ -453,9 +453,7 @@ impl Shell {
                     sources.runtime.block_on(self.app.handle_key(key));
                 }
                 Some(MenuAction::Slash(line)) => {
-                    sources
-                        .runtime
-                        .block_on(self.app.execute_slash_command(line));
+                    run_slash_keeping_draft(&mut self.app, &sources.runtime, line);
                 }
                 Some(MenuAction::About) => dialogs::about::open(ctx),
                 None => tracing::debug!(?command, "menu command without an action"),
@@ -730,9 +728,7 @@ impl Shell {
                 sources.runtime.block_on(self.app.handle_key(key));
             }
             MenuAction::Slash(line) => {
-                sources
-                    .runtime
-                    .block_on(self.app.execute_slash_command(line));
+                run_slash_keeping_draft(&mut self.app, &sources.runtime, line);
             }
             // Opened above, before the runtime is needed.
             MenuAction::About => dialogs::about::open(ctx),
@@ -741,17 +737,9 @@ impl Shell {
     }
 
     /// Run a status-bar service chip's `/<command> on|off` as the ribbon runs
-    /// its slash commands, keeping the draft: running a slash command clears
-    /// the prompt (it is normally the prompt's own submission), and flipping
-    /// a service is not a submission.
+    /// its slash commands, which keeps the draft.
     fn run_service_command(&mut self, ctx: &egui::Context, line: &'static str) {
-        let draft = self.app.session.input.clone();
-        let cursor = self.app.session.input_cursor;
-        let menu = self.app.slash_menu.clone();
         self.run_ribbon_action(ctx, RibbonAction::Menu(MenuAction::Slash(line)));
-        self.app.session.input = draft;
-        self.app.session.input_cursor = cursor;
-        self.app.slash_menu = menu;
     }
 
     fn show_dock(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<egui::Rect> {
@@ -1358,5 +1346,22 @@ impl eframe::App for Shell {
         // still saves what `/quit` saves.
         self.app.quit();
         self.finish_quit();
+    }
+}
+
+/// Run a slash command picked from a menu, the ribbon or a status chip,
+/// keeping the unsent draft: `App::execute_slash_command` clears the prompt
+/// because it is normally the prompt's own submission, and a click is not.
+/// The draft, its cursor and the slash menu come back only when the command
+/// left the prompt empty, so one that writes the prompt keeps its text.
+fn run_slash_keeping_draft(app: &mut App, runtime: &Handle, line: &str) {
+    let draft = app.session.input.clone();
+    let cursor = app.session.input_cursor;
+    let menu = app.slash_menu.clone();
+    runtime.block_on(app.execute_slash_command(line));
+    if app.session.input.is_empty() {
+        app.session.input = draft;
+        app.session.input_cursor = cursor;
+        app.slash_menu = menu;
     }
 }
