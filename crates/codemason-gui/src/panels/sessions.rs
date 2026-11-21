@@ -55,6 +55,7 @@ use codemason_app_core::sessions_sidebar_state::{
     PINNED_KEY, SidebarRow, attention_of, backend_of, build_rows, click_row, open_row_menu,
     refresh_if_dirty, relative_age, selectable,
 };
+use codemason_app_core::styled::ThemeColor;
 use codemason_config::ExecutionBackendKind;
 use codemason_storage::{DiffStats, SessionRequest};
 use egui::{
@@ -624,18 +625,12 @@ fn session_atoms(
 fn request_colour(state: &str, palette: &Palette) -> Color32 {
     match state {
         "open" => palette.success,
-        // The forges' merged purple, lighter on a dark background.
-        "merged" if is_dark(palette) => Color32::from_rgb(0xa3, 0x71, 0xf7),
-        "merged" => Color32::from_rgb(0x82, 0x50, 0xdf),
+        // The forges show merged in purple: the theme's fifth categorical
+        // colour (its magenta).
+        "merged" => palette.color(ThemeColor::Categorical(4)),
         "closed" => palette.error,
         _ => palette.muted,
     }
-}
-
-/// Whether the theme's background is dark.
-fn is_dark(palette: &Palette) -> bool {
-    let [r, g, b, _] = palette.background.to_array();
-    u16::from(r) + u16::from(g) + u16::from(b) < 384
 }
 
 /// A request's state as a word: `Open`, `Merged`, `Closed`.
