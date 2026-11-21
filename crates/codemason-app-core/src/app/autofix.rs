@@ -2,8 +2,9 @@
 //! request (GitLab), and Auto-fix itself (spec SESSIONMENU M4-M5,
 //! FR-14 to FR-22).
 //!
-//! A binding is stored against the top-level session. `github_create_pr`
-//! and `gitlab_create_mr` create it automatically; `/autofix bind` creates it
+//! A binding is stored against the top-level session. `github_create_pr`,
+//! `gitlab_create_mr` and a `Bash` call running `gh pr create` /
+//! `glab mr create` create it automatically; `/autofix bind` creates it
 //! for a request that already exists. Lookups go through
 //! `codemason_agent::project::requests`, run off the UI thread, and report back
 //! as an `AgentNotice` in the session that asked.
@@ -32,7 +33,8 @@ pub(crate) const AUTOFIX_HELP: &str = "## /autofix - Pull/merge request binding\
 | `/autofix unbind` | Remove the binding |\n\
 | `/autofix on` / `/autofix off` | Turn Auto-fix on or off: wake this session when CI fails, the PR/MR conflicts, or a reviewer comments |\n\
 | `/autofix help` | Show this help |\n\n\
-A PR or MR the agent opens with `github_create_pr` / `gitlab_create_mr` is bound automatically. \
+A PR or MR the agent opens with `github_create_pr` / `gitlab_create_mr`, or with \
+`gh pr create` / `glab mr create` in a shell, is bound automatically. \
 Auto-fix never merges, never force-pushes and never resolves review threads; after \
 `vcs.autofix.max_attempts` wake-ups for one kind on one commit it pauses until `/autofix on`.";
 

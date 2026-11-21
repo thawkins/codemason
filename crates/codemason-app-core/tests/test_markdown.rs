@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use codemason_app_core::markdown::markdown_to_styled;
+use codemason_app_core::markdown::{autolink_bare_urls, markdown_to_styled};
 use codemason_app_core::styled::{TextStyle, ThemeColor};
 
 #[test]
@@ -85,4 +85,35 @@ fn test_has_table_finds_only_real_tables() {
     // A table inside a fenced code block is code.
     assert!(!has_table("```\n| a |\n|---|\n| 1 |\n```\n"));
     assert!(!has_table("no pipes here"));
+}
+
+#[test]
+fn test_markdown_autolink_bare_url() {
+    assert_eq!(
+        autolink_bare_urls("PR #77 is open: https://github.com/o/r/pull/77"),
+        "PR #77 is open: <https://github.com/o/r/pull/77>"
+    );
+    assert_eq!(
+        autolink_bare_urls("See https://example.com/a. Then (http://x.io/b)."),
+        "See <https://example.com/a>. Then (<http://x.io/b>)."
+    );
+    assert_eq!(
+        autolink_bare_urls("- https://en.wikipedia.org/wiki/Rust_(language)"),
+        "- <https://en.wikipedia.org/wiki/Rust_(language)>"
+    );
+}
+
+#[test]
+fn test_markdown_autolink_leaves_links_and_code_alone() {
+    for text in [
+        "no urls here",
+        "[PR](https://github.com/o/r/pull/1)",
+        "<https://github.com/o/r/pull/1>",
+        "`https://github.com/o/r/pull/1`",
+        "```\nhttps://github.com/o/r/pull/1\n```",
+        "![img](https://example.com/a.png)",
+        "https:// alone",
+    ] {
+        assert_eq!(autolink_bare_urls(text), text, "{text}");
+    }
 }
