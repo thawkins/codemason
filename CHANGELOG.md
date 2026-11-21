@@ -2,13 +2,37 @@
 
 ## [Unreleased]
 
+## [1.0.175] - 2026-11-21
+
+Prompt field and transcript polish, and Provider and Resume on the ribbon.
+
+The prompt field sits on the dock's bottom edge and grows upwards only, so a
+long prompt or a row of attachment thumbnails moves its top instead of pushing
+the transcript down. A long inline diff is capped at 10 lines and its **Open
+diff** button shows the message's diffs in a modal overlay carrying the Diff
+pane's own view, and a `Thinking` row over 3 lines stays closed with its line
+count at its right. The ribbon's **Agent** tab gains **Provider** before
+**Model** and a **Resume** button, Resume also being the last quick access
+button in the title strip, and two glyphs join the bundled Material Symbols
+subset. Also in this release: a slash command run from the ribbon, the quick
+access toolbar or the native menu no longer erases the unsent prompt, and an
+inline diff's horizontal scroll bar no longer covers its last line.
+
 ### Added
 
 - Added: the GUI ribbon's **Agent** tab has a **Provider** button (`/provider`) before **Model**, and a **Resume** button (`/resume`) at the end of its **Run** group. Resume is also the last quick access button in the title strip. Two glyphs (`cloud`, `play_arrow`) join the bundled Material Symbols subset as `Icon::Provider` and `Icon::Resume`.
 
+### Changed
+
+- Changed: the prompt field sits on the dock's bottom edge, level with the Sessions panel's bottom, with 8 points of padding round its controls and no margin outside its outline. It is as tall as its content and grows upwards only: the shell fits the prompt pane's split to the field's measured height each frame (`page::field_height`, `dock::fit_prompt`), so more text or attachment thumbnails move only its top. There is 8 points of space under the thumbnails.
+- Changed: a thought of more than 3 lines (`messages::THINKING_AUTO_OPEN_LINES`) stays under a closed `Thinking` row until the user opens it, even while the reply streams or with `/thinking-display show`; one of 3 lines or fewer starts open. Every `Thinking` row shows its line count at its right (`12 lines`).
+- Changed: an inline diff in the transcript shows at most 10 lines (`diff::INLINE_MAX_LINES`) across its hunks; a longer one ends in a `[n] more lines...` banner with the **Open diff** button. Open diff now shows the message's diffs in a modal overlay (`dialogs::diff_view`) with the Diff pane's own view and its close button at the top right, instead of opening the right-hand Diff pane; the overlay's keys are the pane's (`] [ n p v m`), Esc or a click outside closes it, and no other key or menu command reaches the session behind it.
+
 ### Fixed
 
 - Fixed: a slash command run from the GUI ribbon, the quick access toolbar or the native menu no longer erases the unsent prompt. The draft, its cursor and the slash menu are restored unless the command wrote the prompt itself (the status-bar service chips already did this; they now share the one helper, `run_slash_keeping_draft`).
+- Fixed: the horizontal scroll bar of an inline diff wider than the transcript was drawn over the diff's last line. The inline diff now uses egui's solid scroll bar, which takes its own row under the lines.
+- Fixed: the tool-rename guard's cost case timed the guard's subprocess on the wall clock and asserted it finished in under ten seconds. The guard scans a scratch copy of the tree and costs ~2.8 s of CPU, but a full-workspace `cargo nextest run` schedules ~16k tests across every core, so the same scan measured 10.07 s of wall clock and the case failed for the runner's load rather than for the guard's cost. `scripts/check_tool_rename.py --json` now reports `cpu_seconds` (`time.process_time()` around the scan) and the case asserts on that, which is what NFR-009's "a few seconds" clause is about; a zero reading fails, so a guard that stops measuring cannot silently pass.
 
 ## [1.0.174] - 2026-11-21
 
@@ -54,7 +78,6 @@ load.
 
 ### Fixed
 
-- Fixed: the horizontal scroll bar of an inline diff wider than the transcript was drawn over the diff's last line. The inline diff now uses egui's solid scroll bar, which takes its own row under the lines.
 - Fixed: a pull request the agent opened with `gh pr create` (or a merge request with `glab mr create`) in a shell command was never recorded against the session, so the PR/MRs submenu, the sidebar's pull-request count and Auto-fix never saw it. Only `github_create_pr`, `gitlab_create_mr` and `autofix_add` bound requests. The tool dispatcher now reads the request URL from such a `Bash` call's output and binds it to the top-level session, taking the title and head branch from `--title`/`-t` and `--head`/`-H` (`--source-branch`/`-s` for `glab`) (`binding::bind_from_shell`).
 - Fixed: bare `http(s)://` URLs in assistant replies (a PR link, for example) were drawn as plain text in the GUI transcript, because CommonMark links only `<url>` and `[text](url)`. `markdown::autolink_bare_urls` now wraps them in `<...>` before rendering, leaving existing links, images and code untouched and keeping trailing punctuation outside the link.
 - Fixed: an image whose decode had only started was drawn as a broken one. Both
@@ -149,9 +172,6 @@ scale is restored across restarts.
 
 ### Changed
 
-- Changed: the prompt field sits on the dock's bottom edge, level with the Sessions panel's bottom, with 8 points of padding round its controls and no margin outside its outline. It is as tall as its content and grows upwards only: the shell fits the prompt pane's split to the field's measured height each frame (`page::field_height`, `dock::fit_prompt`), so more text or attachment thumbnails move only its top. There is 8 points of space under the thumbnails.
-- Changed: a thought of more than 3 lines (`messages::THINKING_AUTO_OPEN_LINES`) stays under a closed `Thinking` row until the user opens it, even while the reply streams or with `/thinking-display show`; one of 3 lines or fewer starts open. Every `Thinking` row shows its line count at its right (`12 lines`).
-- Changed: an inline diff in the transcript shows at most 10 lines (`diff::INLINE_MAX_LINES`) across its hunks; a longer one ends in a `[n] more lines...` banner with the **Open diff** button. Open diff now shows the message's diffs in a modal overlay (`dialogs::diff_view`) with the Diff pane's own view and its close button at the top right, instead of opening the right-hand Diff pane; the overlay's keys are the pane's (`] [ n p v m`), Esc or a click outside closes it, and no other key or menu command reaches the session behind it.
 - Changed: Sessions panel rows are restyled. Each session row shows its title, a coloured attention dot while it needs a look (amber waiting, accent running, red failed, blue unread), then two aligned columns on the right: a pull-request icon with the session's request count, shown on every row with `0` when it has none (grey none, blue past, green while one is bound, amber while Auto-fix waits on you), and an icon for the execution backend the session runs on (monitor for the local computer, slatted container for Docker, three boxes for Podman, cloud for a remote system). The relative age, branch and request details move to the row's tooltip and accessible description. The open or cursor row sits on a rounded selection fill, multi-selected rows carry an accent bar on their left edge, project headings are small and muted with the disclosure triangle after the name, and rows are taller. A session's backend is its own stored `execution_backend`, else the global one from the config (`Storage::session_backends`, `sessions_sidebar_state::backend_of`).
 - Changed: the Sessions panel's project and `Pinned` headings are drawn at **20%
   over the session rows' own title size** (`panels::sessions::heading_size`),

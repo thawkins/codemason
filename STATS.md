@@ -1,19 +1,32 @@
 # Project Statistics
 
-**Version:** 1.0.174
+**Version:** 1.0.175
+
+> **Prompt field and transcript polish (1.0.175).** No crate is added or
+> removed. A GUI-only pass: `panels/diff.rs` and `page.rs` grow, a new
+> `dialogs/diff_view.rs` holds the diff overlay, and two glyphs join the bundled
+> Material Symbols subset (the `.ttf` goes 8,944 -> 9,200 bytes). Five GUI test
+> files grow (`test_diff_pane` +225, `test_activity_rows` +55, `test_ribbon`
+> +47, `test_dock` +42, `test_prompt` +42), so the workspace adds 3 Rust files
+> and 619 lines; the tool-rename cost case then moved to measuring the guard's
+> own CPU time instead of wall clock (+25 lines, `0234934`). The three tables
+> below are re-measured on this tree:
+> **818,630** crate lines, **2,236** crate files, **1,253** crate test files and
+> **16,094** crate tests (827,507 / 2,260 / 1,263 / 16,181 with the root
+> package). `cargo nextest run --workspace --no-fail-fast` ran **16,190 tests,
+> 0 failing**, with 16 skipped. That run first reported one failure -
+> `test_tool_rename_guard::test_the_guard_finishes_in_a_few_seconds`, which
+> timed the guard's subprocess on the wall clock and measured 10.07 s of it
+> because every core was busy; the guard costs ~2.8 s of CPU, so the case now
+> asserts the CPU time the guard reports for itself (`0234934`).
 
 > **Session request history, shell-created PRs and attachment thumbnails
 > (1.0.174).** No crate is added or removed. Three test files grow
 > (`test_session_request_history` +4, `test_request_binding` +3,
-> `test_markdown` +2). The three tables below are re-measured on this tree and
-> stand at **817,986** crate lines, **2,233** crate files, **1,253** crate test
-> files and **16,083** crate tests (826,863 / 2,257 / 1,263 / 16,170 with the
-> root package); `cargo nextest run --workspace --no-fail-fast` ran **16,117
-> tests, all passing**, with 16 skipped. A single-process `cargo test --workspace
-> --all-targets` reports two failures that pass under nextest: a process-wide
-> git-size override leaking between test files, and an egui harness that installs
-> no fonts and panics on a status glyph. Both are test-isolation bugs, not test
-> gaps.
+> `test_markdown` +2). A single-process `cargo test --workspace --all-targets`
+> reports two failures that pass under nextest: a process-wide git-size override
+> leaking between test files, and an egui harness that installs no fonts and
+> panics on a status glyph. Both are test-isolation bugs, not test gaps.
 
 > **GUI clipboard and shutdown fixes (1.0.173).** No crate is added or removed.
 > `codemason-app-core` gains two test files (`test_clipboard_routing`,
@@ -33,15 +46,15 @@
 > re-measured.
 
 > **Shell-created PR binding, bare-URL links, request popup and attachments
-> (unreleased, `1.0.173` tree).** No crate is added or removed. `codemason-tools-vcs`
+> (1.0.174, measured on the `1.0.173` tree).** No crate is added or removed. `codemason-tools-vcs`
 > gains `binding.rs` (`bind_from_shell`, +160 lines), `codemason-storage` grows
 > `session_request_history` to schema 14 with `additions`/`deletions` (+173), and
 > `codemason-app-core` gains `markdown::autolink_bare_urls` (+110) and
 > `material/thumbnail.rs` in the GUI (+209). The three tables below are
-> re-measured on this tree: `codemason-gui` 176 -> 179 files and 45,919 -> 47,801
+> measured on that tree: `codemason-gui` 176 -> 179 files and 45,919 -> 47,801
 > lines, `codemason-app-core` 165,228 -> 166,343, `codemason-storage` 22,807 ->
 > 23,105, `codemason-tools-vcs` 19,216 -> 19,466 and `codemason-agent` 186,871 ->
-> 187,150; the workspace stands at **2,233** crate files, **817,986** lines,
+> 187,150; the workspace stood at **2,233** crate files, **817,986** lines,
 > **1,253** test files and **16,083** crate tests (2,257 files, 826,863 lines,
 > 1,263 test files and 16,170 tests with the root package). `cargo nextest run
 > --workspace --no-fail-fast` ran **16,117 tests, all passing**, with 16 skipped. The request popup's three review fixes (`712c179`, `012a146`) and the shell-binding hardening (`db2175a`) add no crate or file: they edit `panels/sessions.rs`, `binding.rs`, `markdown.rs`, `processor.rs` and `storage.rs`, with 4 new tests in `test_session_request_history`, 3 in `test_request_binding` and 2 in `test_markdown`.
@@ -91,8 +104,8 @@
 > Distribution" and "Test Distribution" below are re-measured on this tree
 > (lines are `find crates/<crate> -name '*.rs' | xargs cat | wc -l`; test files
 > are `tests/test_*.rs`; tests are the `#[test]` / `#[tokio::test]` / `#[rstest]`
-> attribute count in `tests/` and `src/`, 16,083 in `crates/` and 87 in the root
-> `src/`+`tests/` tree, 16,170 in all). A full `cargo nextest run --workspace`
+> attribute count in `tests/` and `src/`, 16,094 in `crates/` and 87 in the root
+> `src/`+`tests/` tree, 16,181 in all). A full `cargo nextest run --workspace`
 > listed 16,117 tests at `1.0.174`, all passing. The attribute count differs from
 > the runner's count (parameterised and macro-generated cases). The other
 > sections below describe earlier releases and are not re-measured; the
@@ -357,12 +370,12 @@
 
 | Metric | Value |
 |---|---|
-| Total Rust lines | 826,863 (817,986 in `crates/` + 8,877 in root `src/`/`tests/`) |
-| Total Rust files | 2,257 (2,233 under `crates/` + 24 in root `src/`/`tests/`) |
-| Tests defined | 16,170 (`#[test]` / `#[tokio::test]` / `#[rstest]` attributes across `crates/`, `src/`, and root `tests/`) |
-| Test files | 1,263 consolidated `tests/test_*.rs` files (1,253 under the crate `tests/` trees + 10 in the root `tests/` tree), plus the `tests/inline/*` modules, 20 `tests/all.rs` roots and the shared support/prelude helpers (re-measured at `1.0.174`) |
+| Total Rust lines | 827,507 (818,630 in `crates/` + 8,877 in root `src/`/`tests/`) |
+| Total Rust files | 2,260 (2,236 under `crates/` + 24 in root `src/`/`tests/`) |
+| Tests defined | 16,181 (`#[test]` / `#[tokio::test]` / `#[rstest]` attributes across `crates/`, `src/`, and root `tests/`) |
+| Test files | 1,263 consolidated `tests/test_*.rs` files (1,253 under the crate `tests/` trees + 10 in the root `tests/` tree), plus the `tests/inline/*` modules, 20 `tests/all.rs` roots and the shared support/prelude helpers (re-measured at `1.0.175`) |
 | Test binaries | 19 consolidated `[[test]] name = "all"` integration targets (one per crate) plus the crate lib targets and the root bin and its `tests/all.rs` |
-| Tests executed | 16,117 passed / 0 failed / 16 skipped in the last full workspace `cargo nextest run` (2026-11-21, `1.0.174` tree) |
+| Tests executed | 16,189 passed / 0 failed / 16 skipped in the last full workspace `cargo nextest run` (1.0.175 tree; 16,190 run, the one failure since fixed in `0234934`) |
 | Line coverage | 86.7% (146,001 of 168,392 instrumented lines; measured before the TUI removal and not re-measured) |
 | Benchmark files | 16 (+1 in `vendor/html2text`) |
 | Tools registered | 152 in 21 families (`mf_screenshot` engine-gated above the shown count); 150 at the `1.0.168` tree, +2 from the `autofix_status` and `autofix_add` tools |
@@ -372,7 +385,7 @@
 | Research output formats | 6 (`report`, `executive-summary`, `comparison-table`, `source-bibliography`, `imrad`, `newsletter`) |
 | Documentation | 24 top-level how-tos, 23 files in `docs/howtos/tools/` (22 per-category tool how-tos + `INDEX.md`, + generated PDFs), 89 files in `docs/howtos/slashcommands/` (88 command pages + `INDEX.md`, + generated PDFs) |
 | Authors | 1 |
-| Version | 1.0.174 |
+| Version | 1.0.175 |
 
 The registry stands at **152 tools across 21 families** at `1.0.171`: the
 `autofix_status` and `autofix_add` tools took it from 150 to 152 (`system` 2 -> 3,
@@ -437,16 +450,16 @@ shows the file count, line count, and test-file count for each crate (including
 
 | Crate | Rust files | Rust lines | Test files |
 |---|---|---|---|
-| `codemason-agent` | 491 | 187,150 | 279 |
+| `codemason-agent` | 492 | 187,240 | 279 |
 | `codemason-app-core` | 361 | 166,343 | 262 |
 | `codemason-bench` | 36 | 11,051 | 9 |
 | `codemason-codeindex` | 82 | 25,550 | 50 |
 | `codemason-config` | 83 | 20,948 | 55 |
 | `codemason-connectors` | 46 | 19,777 | 21 |
-| `codemason-gui` | 179 | 47,801 | 97 |
+| `codemason-gui` | 180 | 48,331 | 97 |
 | `codemason-llm` | 102 | 40,096 | 41 |
 | `codemason-plugins` | 67 | 24,077 | 38 |
-| `codemason-research` | 195 | 79,158 | 80 |
+| `codemason-research` | 196 | 79,182 | 80 |
 | `codemason-server` | 29 | 12,305 | 15 |
 | `codemason-specs` | 41 | 21,801 | 21 |
 | `codemason-storage` | 66 | 23,105 | 58 |
@@ -456,10 +469,10 @@ shows the file count, line count, and test-file count for each crate (including
 | `codemason-tools-extended` | 163 | 62,535 | 81 |
 | `codemason-tools-vcs` | 79 | 19,466 | 33 |
 | `codemason-types` | 75 | 16,691 | 44 |
-| **Total** | **2,233** | **817,986** | **1,253** |
+| **Total** | **2,236** | **818,630** | **1,253** |
 
 The root package adds 24 files and 8,877 lines in `src/` and `tests/`, for
-2,257 files and 826,863 lines workspace-wide. `codemason-hyperresearch` appeared
+2,260 files and 827,507 lines workspace-wide. `codemason-hyperresearch` appeared
 in earlier revisions of this table; it was folded into `codemason-research` and
 no longer exists as a directory, which is why `crates/` holds 19 packages plus
 the root binary package.
@@ -503,7 +516,7 @@ codemason-surface                       2,502 lines (0.3%)
 | `codemason-research` | 80 | 1,505 |
 | `codemason-specs` | 21 | 719 |
 | `codemason-llm` | 41 | 689 |
-| `codemason-gui` | 97 | 609 |
+| `codemason-gui` | 97 | 620 |
 | `codemason-tools-vcs` | 33 | 508 |
 | `codemason-plugins` | 38 | 502 |
 | `codemason-config` | 55 | 474 |
@@ -516,7 +529,7 @@ codemason-surface                       2,502 lines (0.3%)
 | `codemason-server` | 15 | 224 |
 | `codemason-bench` | 9 | 150 |
 | `codemason-surface` | 8 | 70 |
-| **Total** | **1,253** | **16,083** |
+| **Total** | **1,253** | **16,094** |
 
 The per-crate test attributes above are counted directly from the tree
 (`#[test]` / `#[tokio::test]` attributes on a line of their own, including
