@@ -26,6 +26,30 @@
 
 ### Fixed
 
+- Fixed: an image whose decode had only started was drawn as a broken one. Both
+  the attachment thumbnail (`material::thumbnail`) and the transcript's images
+  (`panels::messages`) counted an image loadable as soon as a loader accepted
+  the URI, which `egui_extras` also reports for bytes still on their way
+  (`ImagePoll::Pending`). Building an `egui::Image` from one makes egui paint its
+  own failed-image mark once the decode then errors, and this window's fonts
+  cannot draw that mark at all. Both now share `image_load::picture_state`, whose
+  tri-state `Ready`/`Pending`/`Unavailable` is drawn as a picture, a placeholder
+  or its file name; only a `Ready` picture senses a click, so a thumbnail still
+  loading opens no empty viewer, and a transcript image still in flight is drawn
+  next frame instead of being labelled `(cannot be shown)`. The attachment strip
+  also culls before loading, so a thumbnail scrolled out of sight starts no
+  decode and stats no file, and a thumbnail's documented hover text is now
+  actually set (`on_hover_text`, which needs no sense of its own).
+- Fixed: image files were read from a `file://` URI the loader could not resolve
+  on Windows. `format!("file://{}", path.display())` leaves the text after the
+  scheme beginning with a drive letter, which `egui_extras` reads as a UNC
+  *host*, so `C:\shots\screen.png` became `\\C:\shots\screen.png` and the file was
+  never found. One `image_load::file_uri` now writes the third slash a URI puts
+  after an empty authority (`file:///C:/shots/screen.png`) and leaves a plain
+  absolute path as it stands, with `image_load::uri_path` as its inverse; every
+  site goes through them (`dialogs::image_view`, `panels::prompt`,
+  `panels::messages`, `material::thumbnail`), and neither encodes the path, so a
+  file named `My%20Doc.png` still resolves.
 - Fixed: the colour theme was forgotten on restart. Choosing a theme with `/theme <name>`, Enter in the theme picker or the command palette now also saves it as `"theme"` in the user-global `codemason.json` (or the `--config` file), editing only that key, so the next start opens in it (`App::commit_theme`, `theme_tokens::persist`). Esc in the picker still restores the previous theme and saves nothing. A project `.codemason/codemason.json` that sets `"theme"` still overrides it at startup.
 
 ## [1.0.173] - 2026-11-21
