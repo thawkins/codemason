@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added: an in-memory store index cache in `codemason-app-core`, prefetched at GUI startup for the Codex plugin, Claude plugin and Claude connector indexes; `--refresh` and the footer Refresh button re-fetch it, and marketplace add/remove refetches the affected index.
+- Added: material `badge`, `drawer_item_with_count` and `avatar_list_item` components in `codemason_gui::material`.
+
+### Changed
+
+- Changed: the GUI plugin browser is a wide three-pane Plugin Store dialog with a Codex | Claude switcher, and connectors open in a separate Connectors dialog with sign-in badges, requested scopes, credential name and MCP servers.
+
 ## [1.0.178] - 2026-11-21
 
 Theme editor hardening, and one copy of the scratch-directory plumbing.
