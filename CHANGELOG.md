@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: images staged for the next message are drawn as **removable thumbnails**
+  above the prompt (`material::thumbnail`, `panels::prompt::attachments_row`).
+  Each is a 64-point picture in a Material outline frame with a filled
+  `Icon::Cross` close mark (a 32-point hit target, `Remove image`) over its
+  top-right corner; the mark drops that one entry from
+  `SessionView::pending_attachments` (`App::remove_pending_attachment`) and
+  leaves the file itself alone, because an attachment is usually the user's own
+  image. A **double click** on a loaded picture opens it at full size in the same
+  viewer a transcript image opens (`dialogs::image_view`, so Close, Actual size
+  and Fit to window behave identically), and the attachment stays staged.
+  An index past the end of the list removes nothing and is not an error, since a
+  click can outrun the list by a frame. The strip is one horizontally scrolling
+  row, so many attachments stay above the prompt instead of pushing the editor
+  off the pane. The picture senses a click without taking focus
+  (`Sense::CLICK`, not `Sense::click()`), so `Tab` never lands on a thumbnail and
+  the prompt keeps the keyboard. An image the window cannot decode is drawn as
+  its file name inside the same frame, so a broken attachment can still be seen
+  and removed; having no picture, it reports no double click. Previously the row
+  listed the raw file names as plain text with no way to remove one.
+
 ## [1.0.172] - 2026-11-20
 
 Sessions panel restyle, a Help tab with About, and Markdown tables for

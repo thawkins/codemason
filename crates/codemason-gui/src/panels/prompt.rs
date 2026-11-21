@@ -59,8 +59,10 @@
 //!
 //! The `@` mention completions (`App::file_menu`) and the `/` command
 //! completions (`App::slash_menu`) are drawn as a popup at the prompt; their
-//! keys are forwarded to the App. The images staged with Alt+V
-//! (`pending_attachments`) are listed above the prompt. A right-click opens
+//! keys are forwarded to the App. The images staged for the next message
+//! (`pending_attachments`, from a paste, `Alt+V` or the file dialog) are
+//! drawn as removable thumbnails above the prompt, and a double click on one
+//! shows it at full size. A right-click opens
 //! the Cut/Copy/Paste context menu ([`crate::dialogs::context_menu`]).
 //!
 //! # The collapse button
@@ -81,8 +83,10 @@ use egui::{Event, Id};
 
 use codemason_app_core::input_event::{Key, KeyInput};
 
+use crate::dialogs::image_view::ImageRef;
 use crate::icons::Icon;
 use crate::keys::{Focus, is_key_text, is_prompt_app_key, is_prompt_edit_key, to_key_input};
+use crate::material;
 use crate::material::icon_button::{IconButtonKind, icon_button_inline};
 use crate::panels::messages::COLLAPSE_ALL_LABEL;
 
@@ -136,6 +140,10 @@ pub const SLASH_LABEL: &str = "Slash commands";
 
 /// Accessible label of the pending-attachments row.
 pub const ATTACHMENTS_LABEL: &str = "Attachments";
+
+/// The tallest the pending-attachments strip grows, in points: one
+/// thumbnail row plus room for its scrollbar.
+const THUMBNAIL_STRIP_HEIGHT: f32 = material::thumbnail::SIZE + crate::metrics::space::SM;
 
 /// Placeholder shown in an empty prompt.
 const HINT: &str = "Ask codemason...";
@@ -756,22 +764,65 @@ impl CompletionList<'_> {
     }
 }
 
-/// The images staged with Alt+V for the next message, above the prompt.
-fn attachments_row(ui: &mut egui::Ui, app: &App) {
-    let attachments = &app.session.pending_attachments;
-    if attachments.is_empty() {
+/// The images staged for the next message (a paste, `Alt+V`, or the file
+/// dialog), as thumbnails above the prompt, each with a close mark that
+/// drops it again.
+///
+/// The strip is one scrolling row, so many attachments stay above the prompt
+/// instead of pushing the editor off the pane.
+///
+/// A double click on a thumbnail shows that image at full size in the same
+/// view a transcript image opens ([`crate::dialogs::image_view`]).
+///
+/// A close mark's click and a picture's double click are collected while the
+/// strip is drawn and applied after the row, so the list is never mutated
+/// under its own iteration.
+fn attachments_row(ui: &mut egui::Ui, app: &mut App) {
+    if app.session.pending_attachments.is_empty() {
         return;
     }
-    let row = ui.horizontal(|ui| {
-        ui.weak(format!("{ATTACHMENTS_LABEL}:"));
-        for path in attachments {
-            let name = path.file_name().map_or_else(
-                || path.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
-            ui.label(name);
-        }
-    });
-    row.response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, ATTACHMENTS_LABEL));
+    let palette = crate::palette::palette_for(app, ui.ctx());
+    let mut removed = None;
+    let mut enlarged = None;
+    egui::ScrollArea::horizontal()
+        .id_salt("prompt_attachments")
+        .max_height(THUMBNAIL_STRIP_HEIGHT)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (index, path) in app.session.pending_attachments.iter().enumerate() {
+                    let name = attachment_name(path);
+                    let shown = material::thumbnail::thumbnail(
+                        ui,
+                        &palette,
+                        &material::thumbnail::file_uri(path),
+                        &name,
+                        material::thumbnail::SIZE,
+                    );
+                    if shown.close.clicked() {
+                        removed = Some(index);
+                    }
+                    if shown.picture.double_clicked() {
+                        enlarged = Some(path.clone());
+                    }
+                }
+            })
+            .response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, ATTACHMENTS_LABEL));
+        });
+    if let Some(index) = removed {
+        app.remove_pending_attachment(index);
+    }
+    if let Some(path) = enlarged {
+        crate::dialogs::image_view::open(ui.ctx(), ImageRef::file(&path));
+    }
+}
+
+/// An attachment's display name: its file name, or its whole path when it
+/// has none.
+fn attachment_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }

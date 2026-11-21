@@ -18,6 +18,7 @@
 //! - [`dialog`]: the basic dialog surface, headline, body and actions;
 //! - [`sheet`]: the navigation drawer, its items, and side sheets;
 //! - [`chip`]: assist and filter chips;
+//! - [`thumbnail`]: a removable image thumbnail;
 //! - [`feedback`]: slider, linear progress, plain tooltip and snackbar.
 //!
 //! The helpers here are the parts every component shares: the state layer
@@ -38,6 +39,7 @@ pub mod segmented;
 pub mod sheet;
 pub mod tabs;
 pub mod text_field;
+pub mod thumbnail;
 
 use egui::{Color32, CornerRadius, Response, Stroke, StrokeKind};
 
