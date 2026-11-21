@@ -899,10 +899,7 @@ fn read_theme(path: &Path) -> Result<ThemeTokens, String> {
         return Err("not a regular file".to_string());
     }
     if metadata.len() > MAX_THEME_BYTES {
-        return Err(format!(
-            "{} bytes is over the {MAX_THEME_BYTES} byte limit",
-            metadata.len()
-        ));
+        return Err(over_theme_limit(metadata.len()));
     }
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut json = String::new();
@@ -910,9 +907,16 @@ fn read_theme(path: &Path) -> Result<ThemeTokens, String> {
         .read_to_string(&mut json)
         .map_err(|e| e.to_string())?;
     if json.len() as u64 > MAX_THEME_BYTES {
-        return Err(format!("over the {MAX_THEME_BYTES} byte limit"));
+        return Err(over_theme_limit(json.len() as u64));
     }
     ThemeTokens::from_json(&json).map_err(|e| e.to_string())
+}
+
+/// The message both the reader and the writer give for a theme file that is
+/// larger than [`MAX_THEME_BYTES`], so a save that is refused and a load that
+/// skips the file read the same way.
+fn over_theme_limit(bytes: u64) -> String {
+    format!("{bytes} bytes is over the {MAX_THEME_BYTES} byte limit")
 }
 
 /// Adds the colours under `value` to `out`, keyed by their dotted path from
@@ -958,24 +962,19 @@ pub fn set_user_themes_dir_override(dir: Option<PathBuf>) {
 /// [`use_scratch_themes_dir_for_tests`].
 static THEMES_DIR_PIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
-/// Point [`user_themes_dir`] at the workspace scratch tree for this test
-/// process.
+/// Point [`user_themes_dir`] at `dir` for this test process.
 ///
 /// A test that builds an [`crate::app::App`] loads the user's themes
 /// directory, so a theme the developer saved with the theme editor would add
 /// its contrast warnings to the app's log and break "log is empty" assertions.
-/// Pinning the directory to a git-ignored `target/temp/themes` path keeps a
-/// test run independent of the machine it runs on. The first call wins and the
-/// pin outlives later [`set_user_themes_dir_override`] resets, so a test that
-/// keeps its own scratch directory still sets the override and takes
-/// precedence.
+/// Pinning the directory to a git-ignored scratch path keeps a test run
+/// independent of the machine it runs on. The first call wins and the pin
+/// outlives later [`set_user_themes_dir_override`] resets, so a test that keeps
+/// its own scratch directory still sets the override and takes precedence.
 #[doc(hidden)]
-pub fn use_scratch_themes_dir_for_tests() {
-    let _ = THEMES_DIR_PIN.set(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("target/temp/themes"),
-    ); // INTENTIONAL: first set wins; later calls are no-ops
+pub fn use_scratch_themes_dir_for_tests(dir: impl Into<PathBuf>) {
+    let _ = THEMES_DIR_PIN.set(dir.into());
+    // INTENTIONAL: first set wins; later calls are no-ops
 }
 
 /// The user's theme directory, `~/.config/codemason/themes`, where an edited
@@ -1030,10 +1029,7 @@ pub fn save_theme(theme: &ThemeTokens, path: &Path) -> anyhow::Result<()> {
     let mut json = serde_json::to_string_pretty(theme)?;
     json.push('\n');
     if json.len() as u64 > MAX_THEME_BYTES {
-        anyhow::bail!(
-            "{} bytes is over the {MAX_THEME_BYTES} byte limit",
-            json.len()
-        );
+        anyhow::bail!("{}", over_theme_limit(json.len() as u64));
     }
     let dir = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,

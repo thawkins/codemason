@@ -152,12 +152,7 @@ impl Drop for ScratchConfig {
 #[allow(dead_code)]
 pub fn scratch_config_target() -> ScratchConfig {
     let lock = crate::global_env_lock();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-    std::fs::create_dir_all(&root).expect("scratch root");
-    let dir = tempfile::Builder::new()
-        .prefix("config-writes-")
-        .tempdir_in(&root)
-        .expect("config scratch dir");
+    let dir = crate::scratch_tempdir("config-writes-");
     let path = dir.path().join("codemason.json");
     let previous = codemason_config::Config::config_write_target();
     codemason_config::Config::set_config_write_target(Some(path.clone()));

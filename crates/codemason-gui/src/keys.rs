@@ -332,11 +332,15 @@ fn is_field_edit_key(input: KeyInput) -> bool {
     is_prompt_edit_key(input) && !matches!(input.key, Key::Up | Key::Down)
 }
 
+/// Whether `input` holds none of Ctrl, Alt or Cmd (Shift alone is allowed).
+fn is_unmodified_by_command(input: KeyInput) -> bool {
+    !input.mods.ctrl && !input.mods.alt && !input.mods.cmd
+}
+
 /// Whether `input` moves egui's keyboard focus or presses the focused
 /// widget: Tab, Enter or Space with no modifier other than Shift.
 fn is_widget_key(input: KeyInput) -> bool {
-    let plain = !input.mods.ctrl && !input.mods.alt && !input.mods.cmd;
-    plain
+    is_unmodified_by_command(input)
         && matches!(
             input.key,
             Key::Tab | Key::BackTab | Key::Enter | Key::Char(' ')
@@ -392,9 +396,7 @@ pub fn is_prompt_app_key(input: KeyInput, focus: Focus) -> bool {
     let plain = !input.mods.shift && !input.mods.alt;
     match input.key {
         Key::Enter => true,
-        Key::Char('?') => {
-            question_opens_shortcuts && !input.mods.ctrl && !input.mods.alt && !input.mods.cmd
-        }
+        Key::Char('?') => question_opens_shortcuts && is_unmodified_by_command(input),
         Key::Up => completion_open || (up_to_app && plain),
         Key::Down => completion_open || (down_to_app && plain),
         Key::Delete => delete_to_app && plain && !input.mods.ctrl && !input.mods.cmd,

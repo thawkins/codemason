@@ -19,12 +19,7 @@ struct ScratchThemes {
 impl ScratchThemes {
     fn scrub_themes() -> Self {
         let lock = crate::global_env_lock();
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-        std::fs::create_dir_all(&root).expect("scratch root");
-        let dir = tempfile::Builder::new()
-            .prefix("theme-editor-")
-            .tempdir_in(&root)
-            .expect("scratch dir");
+        let dir = crate::scratch_tempdir("theme-editor-");
         set_user_themes_dir_override(Some(dir.path().join("themes")));
         Self { dir, _lock: lock }
     }
@@ -251,28 +246,6 @@ fn test_theme_editor_close_returns_preview_to_selection() {
 }
 
 #[test]
-fn test_theme_editor_reset_never_deletes_a_project_theme_file() {
-    let scratch = ScratchThemes::scrub_themes();
-    let mut app = make_app(&scratch);
-    let project = scratch.dir.path().join(".codemason").join("themes");
-    let mut theme = (*app.themes.get("nord").expect("nord")).clone();
-    theme.accent = RED;
-    let source = project.join("nord.json");
-    save_theme(&theme, &source).expect("save");
-    app.themes.load_dir(&project);
-
-    app.open_theme_editor("nord");
-    app.reset_theme_to_default();
-    assert!(source.is_file(), "a project theme file is never deleted");
-    assert!(app.theme_editor.is_some());
-    assert!(
-        app.status.starts_with("theme not reset: "),
-        "{}",
-        app.status
-    );
-}
-
-#[test]
 fn test_theme_editor_reset_reports_a_remaining_override() {
     let scratch = ScratchThemes::scrub_themes();
     let mut app = make_app(&scratch);
@@ -323,27 +296,35 @@ fn test_theme_editor_locks_the_input_without_the_picker() {
     assert!(!app.is_input_locked());
 }
 
-#[cfg(unix)]
-#[test]
-fn test_theme_editor_reset_keeps_a_project_symlink_into_the_user_dir() {
-    let scratch = ScratchThemes::scrub_themes();
-    let mut app = make_app(&scratch);
+/// Asserts that resetting `nord` leaves a project's copy in place and reports
+/// why.
+///
+/// A plain project theme file is the `false` arm; a project symlink into the
+/// user's folder is the `#[cfg(unix)]` caller's `true` arm, which also proves
+/// resetting never follows a link out of the project tree.
+fn assert_reset_refused_for_project_theme(scratch: &ScratchThemes, symlink: bool) {
+    let mut app = make_app(scratch);
     let mut theme = (*app.themes.get("nord").expect("nord")).clone();
     theme.accent = RED;
     let user_copy = scratch.themes().join("nord.json");
     save_theme(&theme, &user_copy).expect("save");
     let project = scratch.dir.path().join(".codemason").join("themes");
     std::fs::create_dir_all(&project).expect("project dir");
-    let link = project.join("nord.json");
-    std::os::unix::fs::symlink(&user_copy, &link).expect("symlink");
+    let source = project.join("nord.json");
+    if symlink {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&user_copy, &source).expect("symlink");
+    } else {
+        save_theme(&theme, &source).expect("save");
+    }
     app.themes.load_dir(&project);
-    assert_eq!(app.themes.source("nord"), Some(link.as_path()));
+    assert_eq!(app.themes.source("nord"), Some(source.as_path()));
 
     app.open_theme_editor("nord");
     app.reset_theme_to_default();
     assert!(
-        link.symlink_metadata().is_ok(),
-        "the project's symlink is not deleted"
+        source.symlink_metadata().is_ok(),
+        "a project theme file is never deleted"
     );
     assert!(user_copy.is_file());
     assert!(app.theme_editor.is_some());
@@ -352,4 +333,17 @@ fn test_theme_editor_reset_keeps_a_project_symlink_into_the_user_dir() {
         "{}",
         app.status
     );
+}
+
+#[test]
+fn test_theme_editor_reset_never_deletes_a_project_theme_file() {
+    let scratch = ScratchThemes::scrub_themes();
+    assert_reset_refused_for_project_theme(&scratch, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_theme_editor_reset_keeps_a_project_symlink_into_the_user_dir() {
+    let scratch = ScratchThemes::scrub_themes();
+    assert_reset_refused_for_project_theme(&scratch, true);
 }

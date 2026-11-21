@@ -96,11 +96,7 @@ pub fn permission_bits_enforced() -> bool {
 
     static ENFORCED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENFORCED.get_or_init(|| {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-        let Ok(()) = std::fs::create_dir_all(&root) else {
-            return true;
-        };
-        let Ok(dir) = tempfile::tempdir_in(&root) else {
+        let Ok(dir) = tempfile::tempdir_in(codemason_app_core::app::workspace_scratch_dir()) else {
             return true;
         };
         let Ok(()) = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
@@ -671,16 +667,26 @@ impl Drop for ScratchConfig {
     }
 }
 
+/// A fresh, git-ignored scratch directory under `target/temp` with `prefix` in
+/// its name.
+///
+/// Every test that needs a directory of its own uses this rather than a
+/// hard-coded path, so two tests never share one and a run leaves the
+/// repository byte-identical.
+pub fn scratch_tempdir(prefix: &str) -> tempfile::TempDir {
+    let root = codemason_app_core::app::workspace_scratch_dir();
+    std::fs::create_dir_all(&root).expect("scratch root");
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(&root)
+        .expect("scratch dir")
+}
+
 /// Points config writes at a fresh `codemason.json` under `target/temp` until
 /// the returned guard is dropped.
 pub fn scratch_config_target() -> ScratchConfig {
     let lock = global_env_lock();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-    std::fs::create_dir_all(&root).expect("scratch root");
-    let dir = tempfile::Builder::new()
-        .prefix("config-writes-")
-        .tempdir_in(&root)
-        .expect("config scratch dir");
+    let dir = scratch_tempdir("config-writes-");
     let path = dir.path().join("codemason.json");
     let previous = codemason_config::Config::config_write_target();
     codemason_config::Config::set_config_write_target(Some(path.clone()));

@@ -30,12 +30,7 @@ struct ScratchThemes {
 impl ScratchThemes {
     fn scrub_themes() -> Self {
         let lock = crate::global_env_lock();
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-        std::fs::create_dir_all(&root).expect("scratch root");
-        let dir = tempfile::Builder::new()
-            .prefix("theme-editor-gui-")
-            .tempdir_in(&root)
-            .expect("scratch dir");
+        let dir = crate::scratch_tempdir("theme-editor-gui-");
         set_user_themes_dir_override(Some(dir.path().join("themes")));
         Self { dir, _lock: lock }
     }
@@ -180,18 +175,23 @@ fn test_theme_editor_reset_hidden_for_user_theme() {
     assert!(harness.query_by_label(RESET_THEME).is_none());
 }
 
-/// Press and release `key` with no modifiers.
-fn press(harness: &mut Harness<'static, Shell>, key: egui::Key) {
+/// Press and release `key` with `modifiers`.
+fn press_with(harness: &mut Harness<'static, Shell>, key: egui::Key, modifiers: egui::Modifiers) {
     for pressed in [true, false] {
         harness.input_mut().events.push(egui::Event::Key {
             key,
             physical_key: Some(key),
             pressed,
             repeat: false,
-            modifiers: egui::Modifiers::NONE,
+            modifiers,
         });
     }
     harness.run();
+}
+
+/// Press and release `key` with no modifiers.
+fn press(harness: &mut Harness<'static, Shell>, key: egui::Key) {
+    press_with(harness, key, egui::Modifiers::NONE);
 }
 
 fn draft_accent(harness: &Harness<'static, Shell>) -> Rgb {
@@ -229,20 +229,6 @@ fn test_theme_editor_hex_field_sets_valid_colour_only() {
         .type_text("#c80a0a");
     harness.run();
     assert_eq!(draft_accent(&harness), Rgb(200, 10, 10));
-}
-
-/// Press and release `key` with `modifiers`.
-fn press_with(harness: &mut Harness<'static, Shell>, key: egui::Key, modifiers: egui::Modifiers) {
-    for pressed in [true, false] {
-        harness.input_mut().events.push(egui::Event::Key {
-            key,
-            physical_key: Some(key),
-            pressed,
-            repeat: false,
-            modifiers,
-        });
-    }
-    harness.run();
 }
 
 /// Saves an edited `nord` from the keyboard: Shift+Tab from Cancel edit
@@ -291,25 +277,15 @@ fn reset_from_keyboard(scratch: &ScratchThemes, picker: bool) {
 }
 
 #[test]
-fn test_theme_editor_keyboard_reaches_and_presses_save() {
-    let scratch = ScratchThemes::scrub_themes();
-    save_from_keyboard(&scratch, true);
-}
-
-#[test]
-fn test_theme_editor_keyboard_reaches_and_presses_reset() {
-    let scratch = ScratchThemes::scrub_themes();
-    reset_from_keyboard(&scratch, true);
-}
-
-#[test]
-fn test_theme_editor_without_picker_keyboard_presses_save() {
-    let scratch = ScratchThemes::scrub_themes();
-    save_from_keyboard(&scratch, false);
-}
-
-#[test]
-fn test_theme_editor_without_picker_keyboard_presses_reset() {
-    let scratch = ScratchThemes::scrub_themes();
-    reset_from_keyboard(&scratch, false);
+fn test_theme_editor_keyboard_reaches_and_presses_save_and_reset() {
+    // The picker behind the editor must not change how the keys reach the
+    // dialog, so every combination is exercised.
+    for picker in [true, false] {
+        let scratch = ScratchThemes::scrub_themes();
+        save_from_keyboard(&scratch, picker);
+    }
+    for picker in [true, false] {
+        let scratch = ScratchThemes::scrub_themes();
+        reset_from_keyboard(&scratch, picker);
+    }
 }

@@ -1,6 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.178] - 2026-11-21
+
+Theme editor hardening, and one copy of the scratch-directory plumbing.
+
+A review of the 1.0.177 theme editor closed four defects: `save_theme` wrote
+through a fixed temporary name that a project could plant as a symlink, it
+accepted a theme that `read_theme` would then refuse to load, Reset to default
+deleted a project's symlink into the user's themes folder, and Tab, Enter and
+Space never reached the editor's own Save and Reset. The same pass removed the
+duplication the feature left behind: one helper per repeated block in the
+theme and key code, and one `scratch_tempdir` per test crate instead of the
+`target/temp` path hand-assembled in seven places.
+
+### Changed
+
+- Changed: the theme and key code gained a helper per repeated block, with no behaviour change: `theme_tokens::over_theme_limit` is the one "N bytes is over the 65536 byte limit" message that `read_theme` and `save_theme` both give, `app::theme_editor::theme_file_is_in_user_dir` holds the canonical-parent check Reset performs, and `keys::is_unmodified_by_command` holds the Ctrl/Alt/Cmd test that `is_widget_key` and the prompt's `?` arm both need.
+- Changed: `theme_tokens::use_scratch_themes_dir_for_tests` takes the directory it pins instead of hard-coding the workspace layout, and `app::workspace_scratch_dir` is the single resolver for `target/temp` that the log root and the themes pin both use.
+- Changed: both `tests/all.rs` roots gain `scratch_tempdir(prefix)`, which replaces the `env!("CARGO_MANIFEST_DIR")` + `target/temp` + `tempdir_in` block that seven test helpers in `codemason-app-core` and `codemason-gui` each rebuilt for themselves.
+- Changed: the theme-editor test suites lost their duplicated bodies. `test_theme_editor.rs` drives its project-file and project-symlink reset cases through one `assert_reset_refused_for_project_theme`, `test_theme_editor_dialog.rs` routes `press` through `press_with` and covers Save and Reset from the keyboard with and without the picker in one case, and `test_theme_save.rs` drops an assertion on the fixed `.json.tmp` name that the atomic write no longer produces and that could therefore never fail.
 
 ### Fixed
 

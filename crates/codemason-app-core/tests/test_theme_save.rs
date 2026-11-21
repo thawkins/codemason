@@ -8,12 +8,7 @@ use codemason_app_core::theme_tokens::{
 
 /// A fresh scratch directory under `target/temp`.
 fn scratch() -> tempfile::TempDir {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-    std::fs::create_dir_all(&root).expect("scratch root");
-    tempfile::Builder::new()
-        .prefix("theme-save-")
-        .tempdir_in(&root)
-        .expect("scratch dir")
+    crate::scratch_tempdir("theme-save-")
 }
 
 /// The built-in theme `name`.
@@ -51,7 +46,6 @@ fn test_theme_save_creates_missing_dir() {
     let path = dir.path().join("a").join("b").join("nord.json");
     save_theme(&builtin("nord"), &path).expect("save");
     assert!(path.is_file());
-    assert!(!path.with_extension("json.tmp").exists());
 }
 
 #[test]

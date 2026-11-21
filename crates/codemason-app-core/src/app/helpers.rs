@@ -522,6 +522,18 @@ pub fn set_log_root_override(root: impl Into<std::path::PathBuf>) {
     let _ = LOG_ROOT_OVERRIDE.set(root.into()); // INTENTIONAL: first set wins; later calls are no-ops
 }
 
+/// The workspace scratch tree, `<workspace>/target/temp`, resolved from this
+/// crate's own `CARGO_MANIFEST_DIR` so the path is correct whatever directory
+/// the test binary runs in. It is git-ignored, so a test run never dirties the
+/// repository.
+#[doc(hidden)]
+#[must_use]
+pub fn workspace_scratch_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("target/temp")
+}
+
 /// Point TUI log spools at the workspace scratch tree for this test process.
 ///
 /// Resolves `<workspace>/target/temp/log` from the crate's own
@@ -533,12 +545,9 @@ pub fn set_log_root_override(root: impl Into<std::path::PathBuf>) {
 /// developer saved would add its contrast warnings to the app's log.
 #[doc(hidden)]
 pub fn use_scratch_log_root_for_tests() {
-    set_log_root_override(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("target/temp/log"),
-    );
-    crate::theme_tokens::use_scratch_themes_dir_for_tests();
+    let scratch = workspace_scratch_dir();
+    set_log_root_override(scratch.join("log"));
+    crate::theme_tokens::use_scratch_themes_dir_for_tests(scratch.join("themes"));
 }
 
 /// The directory TUI log spools live under (`<working dir>/log` by default).

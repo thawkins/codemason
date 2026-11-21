@@ -73,11 +73,7 @@ pub fn permission_bits_enforced() -> bool {
 
     static ENFORCED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENFORCED.get_or_init(|| {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp");
-        let Ok(()) = std::fs::create_dir_all(&root) else {
-            return true;
-        };
-        let Ok(dir) = tempfile::tempdir_in(&root) else {
+        let Ok(dir) = tempfile::tempdir_in(codemason_app_core::app::workspace_scratch_dir()) else {
             return true;
         };
         let Ok(()) = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
@@ -205,6 +201,22 @@ pub fn global_env_lock() -> MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+/// A fresh, git-ignored scratch directory under `target/temp` with `prefix` in
+/// its name.
+///
+/// Every test that needs a directory of its own uses this rather than a
+/// hard-coded path, so two tests never share one and a run leaves the
+/// repository byte-identical.
+pub fn scratch_tempdir(prefix: &str) -> tempfile::TempDir {
+    let root = codemason_app_core::app::workspace_scratch_dir();
+    std::fs::create_dir_all(&root).expect("scratch root");
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(&root)
+        .expect("scratch dir")
+}
+
 #[path = "test_about_gui.rs"]
 mod test_about_gui;
 #[path = "test_agents_teams_cursor_gui.rs"]
