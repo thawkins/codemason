@@ -283,14 +283,19 @@ const TRUNCATION_NOTE_BYTES: usize = 600;
 /// The estimated byte length of the result as sent.
 #[must_use]
 pub fn tool_result_bytes_for_llm(tool: &str, state: &ToolCallState) -> usize {
-    let len = tool_result_text(state).len();
+    let text = tool_result_text(state);
+    let len = text.len();
     if TOOL_RESULT_EXEMPT_TOOLS.contains(&tool) {
         return len.min(EXEMPT_TOOL_INLINE_LIMIT);
     }
     if len <= MAX_TOOL_RESULT_BYTES_FOR_LLM {
         return len;
     }
-    TOOL_RESULT_HEAD_CHARS_FOR_LLM + TOOL_RESULT_TAIL_CHARS_FOR_LLM + TRUNCATION_NOTE_BYTES
+    // The same character-boundary slices the request keeps, measured in
+    // bytes: a multi-byte script keeps far more bytes than characters.
+    truncate_at_char_boundary(&text, TOOL_RESULT_HEAD_CHARS_FOR_LLM).len()
+        + trailing_at_char_boundary(&text, TOOL_RESULT_TAIL_CHARS_FOR_LLM).len()
+        + TRUNCATION_NOTE_BYTES
 }
 
 fn truncate_at_char_boundary(text: &str, max_chars: usize) -> &str {

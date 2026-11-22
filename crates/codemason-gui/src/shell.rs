@@ -645,6 +645,16 @@ impl Shell {
             Ok(false) => {}
             Err(err) => tracing::warn!(%err, "dock visibility sync failed"),
         }
+        // A layout loaded with the sidebar hidden kept the Context tab where
+        // it was; pin it as soon as the sidebar is back.
+        match dock::pin_context_tab(&mut self.layout, &mut self.hidden) {
+            Ok(true) => {
+                self.layout_dirty = true;
+                ctx.request_repaint();
+            }
+            Ok(false) => {}
+            Err(err) => tracing::debug!(%err, "Context tab not pinned"),
+        }
         self.front_key_panes(ctx);
         self.sync_context_tab(ctx);
     }
@@ -658,6 +668,12 @@ impl Shell {
         let front = self.layout.panel_state(&PaneId::Context) == PanelState::Front;
         let wanted = self.app.show_context_panel;
         if wanted != self.context_shown {
+            if wanted && self.app.sidebar.focused {
+                // The sidebar would take the front back next frame
+                // (`front_key_panes`); it gives up the keyboard as when
+                // another pane covers it.
+                sessions_sidebar_state::unfocus(&mut self.app);
+            }
             let pane = match (wanted, front) {
                 (true, false) => Some(PaneId::Context),
                 (false, true) => Some(PaneId::Sessions),

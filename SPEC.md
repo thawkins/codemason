@@ -1832,13 +1832,19 @@ model's context window, so automatic pre-send compaction never fires on routine
 prompts that fill less than 70 % of the available context. Emergency overflow
 compaction is not subject to this floor.
 
-Pre-send compaction summarises the session's stored history and, like
-`/compact`, replaces it in storage with `[compaction_message, ...recent]`
-(`SessionProcessor::persist_compacted_history`), the summary backdated ahead of
-the kept tail. The kept tail is every stored message from the first one the
-compaction kept, so the turn's in-flight assistant message survives. Later
-steps and turns therefore load the compacted history instead of compacting the
-whole history again.
+Pre-send compaction summarises the turn's in-memory request (which keeps
+request-only messages such as background reports and hook observations, and
+not the turn's empty assistant placeholder) and sends the summary plus its
+verbatim tail from that step on. It then replaces the stored history, like
+`/compact`, in one transaction (`Storage::replace_messages` through
+`SessionProcessor::persist_compacted_history`) with
+`compaction::runner::compacted_stored_history`: the summary, dated ahead of
+everything it precedes; the tail of the pre-turn stored history the keep budget
+allows; and every row from the turn's assistant placeholder on, so the turn's
+in-place updates of that row still find it. Later turns therefore load the
+compacted history instead of compacting the whole history again. A storage
+failure leaves the stored history unchanged and is published as an
+`AgentNotice`; `/compact` returns it as an error.
 
 The compaction summary output length defaults to `1500` tokens (configurable
 via `compaction.summary_tokens`) and tool outputs are truncated to `2000`

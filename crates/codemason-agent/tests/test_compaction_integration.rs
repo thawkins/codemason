@@ -272,6 +272,17 @@ async fn test_pre_send_compaction_fires_and_persists_compaction_message() {
             "first request should be the summarisation prompt"
         );
 
+        // The conversation request after compaction carries no empty message:
+        // the turn's still-empty assistant placeholder stays out of it (an
+        // empty content array is an invalid Anthropic request).
+        for message in captured[1].messages.iter() {
+            let empty = match &message.content {
+                codemason_agent::llm::ChatContent::Text(t) => t.is_empty(),
+                codemason_agent::llm::ChatContent::Parts(parts) => parts.is_empty(),
+            };
+            assert!(!empty, "empty {} message sent", message.role);
+        }
+
         // A synthetic compaction message was persisted to storage.
         let stored = storage
             .get_messages(&session.id)

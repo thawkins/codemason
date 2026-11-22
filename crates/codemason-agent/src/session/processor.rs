@@ -2756,12 +2756,18 @@ impl SessionProcessor {
                     // tail, and send that from this step on.
                     compaction_attempted_this_turn = true;
                     if let Some(outcome) = self
-                        .run_pre_send_compaction(session_id, &turn, context_window)
+                        .run_pre_send_compaction(
+                            session_id,
+                            &turn,
+                            &chat_messages,
+                            context_window,
+                            &assistant_msg_id,
+                        )
                         .await
                     {
-                        // The same conversion the next step applies when it
-                        // loads the replaced history from storage.
-                        let new_chat = history_to_chat_messages(&outcome.new_messages).await;
+                        let new_chat = crate::compaction::convert::messages_to_chat_messages(
+                            &outcome.new_messages,
+                        );
                         chat_messages = Arc::new(new_chat);
                         compressed_this_turn = true;
                         // The history was replaced: no provider count
@@ -4333,29 +4339,36 @@ impl SessionProcessor {
         }
     }
 
-    /// Run the pre-send compaction of the session's stored history and
-    /// replace that history with the compacted form, as `/compact` does
-    /// ([`SessionProcessor::persist_compacted_history`]), so later steps and
-    /// turns load `[compaction_message, ...recent]` instead of compacting the
-    /// whole history again. The stored history is the source the turn's chat
-    /// messages were built from, so the outcome keeps every message intact
-    /// (tool metadata included). Returns `None` when the history cannot be
-    /// read or summarisation failed; the turn then continues with the
-    /// uncompressed history.
+    /// Run the pre-send compaction of the turn's request and store its
+    /// summary in place of the history it covers.
+    ///
+    /// The request is compacted from `chat_messages`, the in-memory request
+    /// of this turn: it holds request-only messages (background reports,
+    /// hook and verification observations) that are never stored, and not
+    /// the turn's empty assistant placeholder. The caller sends the outcome's
+    /// `new_messages` from this step on.
+    ///
+    /// The stored history is then replaced, in one transaction, by
+    /// [`crate::compaction::runner::compacted_stored_history`]: the summary, a verbatim tail of the
+    /// stored history from before this turn picked with the same keep
+    /// budget, and every row from the turn's assistant placeholder
+    /// (`assistant_msg_id`) on, so later turns load the compacted history
+    /// instead of compacting the whole history again, and this turn's
+    /// in-place updates of its assistant row still find it. A storage
+    /// failure leaves the stored history unchanged and is reported as a
+    /// notice; the turn still sends the compacted request.
+    ///
+    /// Returns `None` when summarisation failed; the turn then continues
+    /// with the uncompressed history.
     async fn run_pre_send_compaction(
         &self,
         session_id: &str,
         turn: &crate::session::loop_steps::TurnClient,
+        chat_messages: &[ChatMessage],
         context_window: usize,
+        assistant_msg_id: &str,
     ) -> Option<crate::compaction::CompactionOutcome> {
-        let sid = session_id.to_string();
-        let messages = match self.storage_op(move |s| s.get_messages(&sid)).await {
-            Ok(messages) => messages,
-            Err(e) => {
-                warn!(error = %e, "pre-send compaction skipped: history not readable");
-                return None;
-            }
-        };
+        let messages = crate::compaction::convert::chat_messages_to_messages(chat_messages);
         let previous_summary = messages
             .iter()
             .rev()
@@ -4370,7 +4383,7 @@ impl SessionProcessor {
         }
         let compact_result = crate::compaction::compact(
             session_id,
-            messages.clone(),
+            messages,
             &turn.model_ref.model_id,
             context_window,
             0,
@@ -4389,8 +4402,15 @@ impl SessionProcessor {
         .await;
         match compact_result {
             Ok(outcome) => {
-                let outcome = keep_stored_tail(&messages, outcome);
-                Some(self.persist_compacted_history(session_id, outcome).await)
+                self.store_pre_send_compaction(
+                    session_id,
+                    &outcome.compaction_message,
+                    &turn.session_config.compaction,
+                    context_window,
+                    assistant_msg_id,
+                )
+                .await;
+                Some(outcome)
             }
             Err(e) => {
                 warn!(
@@ -4399,6 +4419,45 @@ impl SessionProcessor {
                 );
                 None
             }
+        }
+    }
+
+    /// Replace the stored history of `session_id` with the compacted form a
+    /// pre-send compaction produced ([`crate::compaction::runner::compacted_stored_history`]). A read or
+    /// write failure leaves the stored history unchanged; it is logged and
+    /// published as an [`Event::AgentNotice`], since the turn goes on.
+    async fn store_pre_send_compaction(
+        &self,
+        session_id: &str,
+        summary: &Message,
+        config: &codemason_config::compaction::CompactionConfig,
+        context_window: usize,
+        assistant_msg_id: &str,
+    ) {
+        let sid = session_id.to_string();
+        let result = match self.storage_op(move |s| s.get_messages(&sid)).await {
+            Ok(stored) => {
+                let replacement = crate::compaction::runner::compacted_stored_history(
+                    stored,
+                    summary,
+                    config,
+                    context_window,
+                    assistant_msg_id,
+                );
+                self.persist_compacted_history(session_id, replacement)
+                    .await
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            warn!(session_id, error = %e, "pre-send compaction not stored");
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: format!(
+                    "Context was compacted for this request, but the compacted history \
+                     could not be saved ({e}); the next turn compacts again."
+                ),
+            });
         }
     }
 
@@ -5141,48 +5200,4 @@ impl SessionProcessor {
 /// char-boundary logic lives in one place.
 pub(crate) fn truncate_preview(s: &str, max_chars: usize) -> String {
     codemason_types::strutil::truncate_chars(s.trim(), max_chars)
-}
-
-/// Rebuild a pre-send compaction's kept tail from the stored history: every
-/// stored message from the first one the compaction kept onward, in order.
-///
-/// The compaction runner skips messages with no content when it picks the
-/// tail, and mid-turn the turn's own assistant message is still empty: it is
-/// stored and later updated in place. Persisting the runner's tail alone
-/// would delete it and fail that update, so the stored tail is kept whole
-/// (earlier compaction messages excepted; the new summary replaces them).
-///
-/// # Arguments
-///
-/// * `stored` - the stored history the compaction ran on.
-/// * `outcome` - the compaction's result.
-///
-/// # Returns
-///
-/// `outcome` with `new_messages` = `[compaction_message, ...stored tail]`, or
-/// unchanged when it kept no stored message.
-fn keep_stored_tail(
-    stored: &[Message],
-    outcome: crate::compaction::CompactionOutcome,
-) -> crate::compaction::CompactionOutcome {
-    let Some(start) = outcome
-        .new_messages
-        .get(1)
-        .and_then(|first_kept| stored.iter().position(|m| m.id == first_kept.id))
-    else {
-        return outcome;
-    };
-    let mut new_messages = Vec::with_capacity(stored.len() - start + 1);
-    new_messages.push(outcome.compaction_message.clone());
-    new_messages.extend(
-        stored[start..]
-            .iter()
-            .filter(|m| m.role != Role::Compaction)
-            .cloned(),
-    );
-    crate::compaction::CompactionOutcome {
-        kept_message_count: new_messages.len() - 1,
-        new_messages,
-        ..outcome
-    }
 }

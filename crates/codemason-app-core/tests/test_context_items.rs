@@ -167,3 +167,31 @@ fn test_context_items_reasoning_counts_only_when_the_provider_replays_it() {
     let items = history_items(std::slice::from_ref(&message), false);
     assert!(items.iter().all(|i| i.tokens < 100), "{items:?}");
 }
+
+#[test]
+fn test_context_items_cut_tool_results_count_multibyte_text_in_bytes() {
+    // 20,000 CJK characters (3 bytes each): the request keeps a 10,000
+    // character head and a 4,000 character tail, about 42,000 bytes.
+    let cjk = "\u{4e2d}".repeat(20_000);
+    let message = Message::new(
+        "s",
+        Role::Assistant,
+        vec![MessagePart::ToolCall {
+            tool: "bash".to_string(),
+            call_id: "c1".to_string(),
+            state: Box::new(ToolCallState {
+                status: ToolCallStatus::Completed,
+                input: json!({}),
+                output: Some(json!(cjk)),
+                error: None,
+                duration_ms: None,
+            }),
+        }],
+    );
+    let bytes = message_bytes(&message, true);
+    assert!(
+        bytes > 42_000,
+        "the kept slices are counted in bytes: {bytes}"
+    );
+    assert!(bytes < 44_000, "and only the kept slices: {bytes}");
+}

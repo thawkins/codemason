@@ -758,3 +758,55 @@ fn cap_head_transcript(head_transcript: &str, context_window: usize) -> String {
 #[cfg(test)]
 #[path = "../../tests/inline/test_compaction_runner.rs"]
 mod tests;
+
+/// The stored history a pre-send compaction leaves behind:
+/// `[summary, ...kept tail, ...this turn]`.
+///
+/// `stored` splits at the turn's assistant placeholder (`assistant_msg_id`):
+/// the rows before it are the history this turn started from, and the rows
+/// from it on (the placeholder, inbox messages delivered since) belong to the
+/// turn and are all kept, so the turn's in-place updates of its assistant row
+/// still find it. From the earlier rows, the runner's own split
+/// ([`select`]) keeps the verbatim tail the keep
+/// budget allows; earlier summaries are dropped for the new one, which is
+/// dated just before the first kept row so it loads first. The summary was
+/// written from the request's head, which is never newer than this tail,
+/// so no message is lost (a message can be in both).
+///
+/// # Arguments
+///
+/// * `stored` - the session's stored history, oldest first.
+/// * `summary` - the compaction message the summarisation produced.
+/// * `config` - the compaction settings (keep budget, tool output cap).
+/// * `context_window` - the model's context window, in tokens.
+/// * `assistant_msg_id` - the id of this turn's assistant placeholder.
+///
+/// # Returns
+///
+/// The messages to store, oldest first.
+#[must_use]
+pub fn compacted_stored_history(
+    stored: Vec<Message>,
+    summary: &Message,
+    config: &CompactionConfig,
+    context_window: usize,
+    assistant_msg_id: &str,
+) -> Vec<Message> {
+    let mut before = stored;
+    let split = before
+        .iter()
+        .position(|m| m.id == assistant_msg_id)
+        .unwrap_or(before.len());
+    let this_turn = before.split_off(split);
+    let kept = select(before, config, context_window).recent_messages;
+    let mut summary = summary.clone();
+    if let Some(first) = kept.first().or_else(|| this_turn.first()) {
+        let seeded = first.created_at - chrono::Duration::milliseconds(1);
+        summary.created_at = seeded;
+        summary.updated_at = seeded;
+    }
+    std::iter::once(summary)
+        .chain(kept)
+        .chain(this_turn.into_iter().filter(|m| m.role != Role::Compaction))
+        .collect()
+}

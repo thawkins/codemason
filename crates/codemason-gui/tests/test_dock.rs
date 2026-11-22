@@ -186,7 +186,7 @@ fn test_dock_pin_context_tab_moves_an_old_layouts_tab_beside_sessions() {
         "pinning does not cover the sidebar"
     );
     // Pinning a pinned tab changes nothing.
-    pin_context_tab(&mut layout, &mut hidden).expect("pin again");
+    assert!(!pin_context_tab(&mut layout, &mut hidden).expect("pin again"));
     assert_eq!(layout, default_layout());
 }
 

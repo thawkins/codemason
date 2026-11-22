@@ -497,6 +497,65 @@ fn test_context_tab_goes_with_the_hidden_sidebar_until_alt_c() {
 }
 
 #[test]
+fn test_context_tab_alt_c_stays_in_front_of_a_focused_sidebar() {
+    let mut rig = rig(|_, _| {});
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+    // Alt+S on a shown sidebar gives it the keyboard.
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    assert!(rig.harness.state().app().sidebar.focused);
+
+    alt(&mut rig.harness, egui::Key::C, "c");
+    for _ in 0..3 {
+        rig.harness.run();
+    }
+    let app = rig.harness.state().app();
+    assert!(app.show_context_panel, "Context stays shown");
+    assert!(
+        !app.sidebar.focused,
+        "the covered sidebar gave up the keyboard"
+    );
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Context),
+        PanelState::Front
+    );
+}
+
+#[test]
+fn test_context_tab_is_pinned_when_a_hidden_sidebar_comes_back() {
+    // A layout saved before the pin, with the Context tab in the right
+    // column, loaded while the sidebar is hidden.
+    let path = scratch_file("late-pin");
+    let mut old = default_layout();
+    old.apply(craft_ui::docking::Action::Move {
+        panel: PaneId::Context,
+        anchor: PaneId::Tasks,
+        placement: Placement::Tab { before: None },
+    })
+    .expect("move Context to the right column");
+    save_layout(&path, &old).expect("write old layout");
+    let mut rig = rig_with(|_, app| app.sidebar.visible = false, Some(path));
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+
+    // Alt+S shows the sidebar; the Context tab joins it.
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    rig.harness.run();
+    let layout = rig.harness.state().layout();
+    assert!(layout.contains(&PaneId::Sessions));
+    let sessions = layout.location(&PaneId::Sessions).expect("sessions docked");
+    assert_eq!(
+        sessions.placement,
+        Placement::Tab {
+            before: Some(PaneId::Context)
+        },
+        "{sessions:?}"
+    );
+}
+
+#[test]
 fn test_dock_context_tab_cannot_be_closed() {
     let mut rig = rig(|_, app| app.show_context_panel = true);
     rig.harness.run();

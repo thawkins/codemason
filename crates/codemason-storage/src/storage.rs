@@ -3386,6 +3386,53 @@ impl Storage {
         // otherwise a failure between them desyncs the search index from the
         // messages table.
         let tx = conn.transaction()?;
+        let n = Self::delete_messages_tx(&tx, session_id)?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Replaces all messages of a session with `messages`, in one
+    /// transaction: the old messages and their search-index rows are deleted
+    /// and the new ones inserted, or nothing changes.
+    ///
+    /// Used by compaction to swap a session's history for its compacted
+    /// form, so a failure part-way cannot leave an empty or partial history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any delete or insert fails; the stored history is
+    /// then unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::Message;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// storage.create_message(&Message::user_text("sess-1", "old")).unwrap();
+    /// storage
+    ///     .replace_messages("sess-1", &[Message::user_text("sess-1", "new")])
+    ///     .unwrap();
+    /// let stored = storage.get_messages("sess-1").unwrap();
+    /// assert_eq!(stored.len(), 1);
+    /// assert_eq!(stored[0].text_content(), "new");
+    /// ```
+    pub fn replace_messages(&self, session_id: &str, messages: &[Message]) -> Result<()> {
+        let mut conn = lock_conn!(self)?;
+        let tx = conn.transaction()?;
+        Self::delete_messages_tx(&tx, session_id)?;
+        for msg in messages {
+            Self::insert_message_tx(&tx, msg)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The three-table cascade of [`Storage::delete_messages`] (FTS rowids,
+    /// `message_fts_keys`, `messages`) inside the caller's transaction.
+    fn delete_messages_tx(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result<usize> {
         // SQLITE T-01: the key table carries `session_id`, so the scoped lookup
         // is an index seek on `idx_fts_keys_session` instead of a scan of the
         // whole virtual table.
@@ -3409,7 +3456,6 @@ impl Storage {
             "DELETE FROM messages WHERE session_id = ?1",
             params![session_id],
         )?;
-        tx.commit()?;
         Ok(n)
     }
 

@@ -428,13 +428,17 @@ pub fn default_layout() -> Layout<PaneId> {
 /// elsewhere, or hidden; this moves it (or opens it) into the group that
 /// holds the sessions sidebar, right after the sidebar's tab, and forgets
 /// where it was hidden. A layout without the sessions sidebar (hidden) is left
-/// alone, so the Context pane keeps its hidden place; it is pinned on a
-/// later load with the sidebar shown.
+/// alone, so the Context pane keeps its hidden place; the shell calls this
+/// again each frame, so it is pinned as soon as the sidebar is shown.
 ///
 /// # Arguments
 ///
 /// * `layout` - the layout to change.
 /// * `hidden` - the remembered locations of hidden panes.
+///
+/// # Returns
+///
+/// Whether the layout changed.
 ///
 /// # Errors
 ///
@@ -442,9 +446,9 @@ pub fn default_layout() -> Layout<PaneId> {
 pub fn pin_context_tab(
     layout: &mut Layout<PaneId>,
     hidden: &mut HiddenPanes,
-) -> Result<(), DockError> {
+) -> Result<bool, DockError> {
     if !layout.contains(&PaneId::Sessions) {
-        return Ok(());
+        return Ok(false);
     }
     hidden.remove(&PaneId::Context);
     // The tab after the sidebar's, which the Context tab goes before.
@@ -459,7 +463,7 @@ pub fn pin_context_tab(
             placement: Placement::Tab { before: next },
         }
     } else if next == Some(PaneId::Context) {
-        return Ok(());
+        return Ok(false);
     } else {
         Action::Move {
             panel: PaneId::Context,
@@ -475,7 +479,7 @@ pub fn pin_context_tab(
             panel: PaneId::Sessions,
         })?;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Size the split holding the prompt pane so the pane is `height` points
