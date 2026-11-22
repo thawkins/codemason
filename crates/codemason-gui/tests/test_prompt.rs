@@ -709,7 +709,12 @@ fn test_prompt_double_click_on_an_attachment_opens_the_image_view() {
     let path = dir.join("screen.png");
     std::fs::write(&path, PNG).expect("write png");
     let attached = path.clone();
-    let (_rt, mut harness) = rig(move |app| app.session.pending_attachments = vec![attached]);
+    let (_rt, mut harness) = rig_with(
+        move |app| app.session.pending_attachments = vec![attached],
+        // The picture decodes on a background thread, which repaints until it
+        // is done; four steps are not always enough for the file to arrive.
+        Harness::builder().with_max_steps(64),
+    );
     // The shell installs these at startup (`main_thread`); the harness is a
     // bare context, so a `file://` image would never load and the picture
     // would sense no click.

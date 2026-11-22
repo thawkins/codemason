@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.179] - 2026-11-22
+
+Plugin Store and Connectors browsers, and more of the marketplaces installable.
+
+The GUI plugin browser is now a three-pane Plugin Store with a Codex | Claude
+switcher, and connectors get their own Connectors dialog; both open from a new
+Addons group on the Agent tab, read from an index cache prefetched at startup,
+and draw only the rows in view. The parsers now load 188 Claude community
+plugins written in GitHub shorthand, honour `path` and `ref` on `url` sources,
+page through the full Claude connector directory, and keep tenant-hosted
+connectors behind a "Needs server URL" badge and an address prompt.
 
 ### Added
 
@@ -25,7 +35,12 @@
 - Fixed: cancelling a swarm aborts its synthesis call, and an answer for a swarm that is gone is dropped.
 - Fixed: the `/swarm` goal is kept in the swarm state instead of being blanked when the decomposition returns.
 - Fixed: SPEC lists `/swarm cancel`, not the non-existent `/swarm kill`, and documents the real decomposition format.
+- Changed: README.md opens with a CodeMason hero header (the `assets/branding` primary lockup, dark or light to match the reader's theme) and a GUI-first project description; the `ragent-tui` screenshots in `assets/screens/` are replaced by seven desktop GUI screenshots, and the ragent lineage moves to a short Origins section.
 - Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.
+
+### Security
+
+- Fixed: the `url` crate is updated to 2.5.9 for RUSTSEC-2026-0592, which failed the Cargo Deny and Dependency Audit checks.
 
 ## [1.0.178] - 2026-11-21
 
