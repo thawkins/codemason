@@ -1,7 +1,7 @@
 <div style="page-break-after: always; text-align: center; padding-top: 15em;">
 
 <h1 style="font-size: 3em; margin-bottom: 0.2em;">codemason</h1>
-<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.178</p>
+<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.179</p>
         <p style="font-size: 1.1em;">
           <strong>Date:</strong> 2026-11-13
       </p>
@@ -2817,6 +2817,8 @@ graph LR
 **Figure 7:** GUI Component Architecture — UI layout and event wiring
 
 ### 6.5 Plugin-Store Category and Marketplace Navigators
+
+In the GUI, the Codex plugin, Claude plugin and Claude connector indexes are prefetched at startup into an in-memory store index cache in `codemason-app-core`; the browsers read it (warnings surface on first open), `--refresh` or the footer Refresh button re-fetches it, and a marketplace add/remove refetches the affected index. The GUI presents plugins as a wide three-pane Plugin Store dialog with a Codex | Claude switcher and connectors as a separate Connectors dialog (sign-in badges, requested scopes, credential name, MCP servers); see `docs/superpowers/specs/2026-11-22-marketplace-browser-gui-design.md`.
 
 The plugin-store browse panel opened by `/plugins codex` and `/plugins claude`
 (spec `catnav`, `pluginstores` FR-052) splits its inner area into a left-hand

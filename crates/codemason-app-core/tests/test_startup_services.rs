@@ -73,7 +73,22 @@ fn scratch_env(tag: &str) -> ScratchEnv {
         std::env::set_var("HOME", dir.join("home"));
         std::env::set_var("XDG_CONFIG_HOME", dir.join("config"));
     }
+    // The startup prefetch must not reach the live connector catalogue.
+    std::fs::create_dir_all(dir.join("config/codemason")).expect("scratch config dir");
+    std::fs::write(
+        dir.join("config/codemason/codemason.json"),
+        r#"{"connectors":{"enabled":false}}"#,
+    )
+    .expect("scratch config");
     guard
+}
+
+/// An app whose store-index fetcher is offline with no endpoints, so the
+/// startup prefetch fails fast instead of reaching the live stores.
+fn offline_app() -> App {
+    let mut app = support::make_app();
+    app.set_plugin_store_fetcher(Arc::new(codemason_plugins::FixtureStoreFetcher::new()));
+    app
 }
 
 /// Make the processor's cached config enable or disable automation.
@@ -95,7 +110,7 @@ fn set_automation(app: &App, enabled: bool) {
 #[allow(clippy::await_holding_lock)] // the lock pins the cwd for the whole test
 async fn test_startup_services_install_the_spec_manager() {
     let _env = scratch_env("spec");
-    let mut app = support::make_app();
+    let mut app = offline_app();
 
     app.start_background_services();
 
@@ -114,7 +129,7 @@ async fn test_startup_services_install_the_spec_manager() {
 #[allow(clippy::await_holding_lock)] // the lock pins the cwd for the whole test
 async fn test_startup_services_start_the_cron_scheduler() {
     let _env = scratch_env("cron");
-    let mut app = support::make_app();
+    let mut app = offline_app();
 
     app.start_background_services();
 
@@ -125,7 +140,7 @@ async fn test_startup_services_start_the_cron_scheduler() {
 #[allow(clippy::await_holding_lock)] // the lock pins the cwd for the whole test
 async fn test_startup_services_skip_automation_when_disabled() {
     let _env = scratch_env("auto-off");
-    let mut app = support::make_app();
+    let mut app = offline_app();
     set_automation(&app, false);
 
     app.start_background_services();
@@ -140,7 +155,7 @@ async fn test_startup_services_skip_automation_when_disabled() {
 #[allow(clippy::await_holding_lock)] // the lock pins the cwd for the whole test
 async fn test_startup_services_start_automation_when_enabled() {
     let _env = scratch_env("auto-on");
-    let mut app = support::make_app();
+    let mut app = offline_app();
     set_automation(&app, true);
 
     app.start_background_services();
@@ -155,7 +170,7 @@ async fn test_startup_services_start_automation_when_enabled() {
 #[allow(clippy::await_holding_lock)] // the lock pins the cwd for the whole test
 async fn test_startup_services_deliver_the_code_index_result() {
     let _env = scratch_env("codeindex");
-    let mut app = support::make_app();
+    let mut app = offline_app();
     // As at launch, the first session exists before the services start, so
     // the outcome has a transcript to land in.
     app.open_startup_session(&StartupSession::New);
@@ -197,7 +212,7 @@ async fn test_run_startup_removes_stale_pasted_image_files() {
     let two_days_ago = SystemTime::now() - Duration::from_hours(48);
     filetime::set_file_mtime(&stale, filetime::FileTime::from_system_time(two_days_ago))
         .expect("age the stale file");
-    let mut app = support::make_app();
+    let mut app = offline_app();
 
     app.run_startup(
         &StartupSession::New,
@@ -211,4 +226,25 @@ async fn test_run_startup_removes_stale_pasted_image_files() {
         "a pasted image older than a day is removed"
     );
     assert!(fresh.exists(), "a recent pasted image is kept");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // the lock pins the cwd for the whole test
+async fn test_startup_services_prefetch_the_store_indexes() {
+    let _env = scratch_env("prefetch");
+    let mut app = offline_app();
+
+    app.start_background_services();
+
+    let cache = app.store_cache.lock().expect("store cache");
+    let codex = cache.plugin(codemason_plugins::StoreKind::Codex);
+    assert!(
+        codex.in_flight.is_some()
+            || !matches!(codex.data, codemason_app_core::app::SlotData::Empty),
+        "the Codex index fetch was started: {codex:?}"
+    );
+    assert!(
+        cache.connectors().in_flight.is_none(),
+        "the disabled connector catalogue is not fetched"
+    );
 }

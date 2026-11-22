@@ -47,6 +47,16 @@ pub enum ConnectorError {
         reason: String,
     },
 
+    /// The user's server address for a tenant-hosted connector was refused,
+    /// or an address was given to a connector that takes none.
+    #[error("connector '{id}': server address refused: {detail}")]
+    ServerUrl {
+        /// The connector id.
+        id: String,
+        /// Why the address was refused.
+        detail: String,
+    },
+
     /// An I/O failure while accessing the connector store or a connector
     /// directory (FR-001). Carries the full source-error chain so the underlying
     /// `io::Error` is reported rather than a bare "I/O error".

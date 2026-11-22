@@ -16,7 +16,8 @@ use crate::term_events::{KeyCode, KeyEvent, KeyModifiers};
 
 use codemason_app_core::app::App;
 use codemason_connectors::{
-    CategoryFilter, ConnectorAuthShape, ConnectorDescriptor, ConnectorId, ConnectorServer,
+    CatalogueBrowser, CategoryFilter, ConnectorAuthShape, ConnectorDescriptor, ConnectorId,
+    ConnectorServer,
 };
 
 #[path = "../../codemason-app-core/tests/support/mod.rs"]
@@ -31,6 +32,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 
@@ -65,21 +67,22 @@ fn sample() -> Vec<ConnectorDescriptor> {
 /// directly.
 fn open(entries: Vec<ConnectorDescriptor>, installed: &[&str], skipped: usize) -> App {
     let mut app = support::make_app();
-    app.open_connector_catalogue("", CategoryFilter::all(), false);
-    let browser = app.connector_store.as_mut().expect("panel open");
+    // Fill the browser directly: opening the real catalogue would start a live
+    // fetch thread on an empty cache.
+    let browser = app.connector_store.insert(CatalogueBrowser::new("", false));
     browser.set_installed(installed.iter().map(|s| (*s).to_string()).collect());
     browser.set_entries(entries, skipped);
     app
 }
 
 /// An app with the panel open on `category`, populated from `entries` exactly as
-/// [`App::poll_connector_catalogue_result`] fills it after an off-loop fetch:
+/// [`App::poll_store_cache`] fills it after an off-loop fetch:
 /// the entries land first and the launch category is applied against the real
 /// category set.
 fn open_with_category(entries: Vec<ConnectorDescriptor>, category: CategoryFilter) -> App {
     let mut app = support::make_app();
-    app.open_connector_catalogue("", category, false);
-    let browser = app.connector_store.as_mut().expect("panel open");
+    let browser = app.connector_store.insert(CatalogueBrowser::new("", false));
+    browser.set_pending_category(category);
     browser.set_entries(entries, 0);
     browser.apply_pending_category();
     app

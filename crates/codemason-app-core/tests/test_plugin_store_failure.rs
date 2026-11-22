@@ -12,11 +12,11 @@
 //! silently dropped.
 //!
 //! These tests drive the real renderer through a `TestBackend` and the real poll
-//! path through the shared delivery slot, so nothing is contacted over the
+//! path through the store cache, so nothing is contacted over the
 //! network and no plugin is installed.
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::{PluginStoreBrowser, PluginStoreFetchResult, PluginStoreStatus};
+use codemason_app_core::app::{PluginStoreBrowser, PluginStoreStatus};
 use codemason_plugins::{StoreEntry, StoreError, StoreIndex, StoreKind};
 
 #[path = "support/mod.rs"]
@@ -55,10 +55,14 @@ fn open_loading() -> App {
     app
 }
 
-/// Deposit one fetch outcome into the app's delivery slot.
+/// Record one fetch outcome in the store cache, as the fetch job would.
 fn deliver(app: &App, kind: StoreKind, outcome: Result<StoreIndex, StoreError>) {
-    let mut guard = app.plugin_store_result.lock().expect("slot");
-    *guard = Some(PluginStoreFetchResult { kind, outcome });
+    match outcome {
+        Ok(index) => {
+            support::deliver_plugin_index(app, kind, index.entries, index.skipped);
+        }
+        Err(err) => support::deliver_plugin_failure(app, kind, &err),
+    }
 }
 
 // -- Malformed entries are carried and counted (FR-025) ----------------------
@@ -91,7 +95,7 @@ fn a_delivered_index_carries_the_skipped_count_into_the_browser() {
         }),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     let browser = app.plugin_store.as_ref().expect("panel open");
     assert_eq!(browser.status, PluginStoreStatus::Ready);
@@ -103,7 +107,7 @@ fn a_delivered_index_carries_the_skipped_count_into_the_browser() {
 // -- A failed fetch is formatted inline and stays dismissible (FR-013) --------
 
 #[test]
-fn a_malformed_index_error_polled_from_the_slot_is_contained() {
+fn a_malformed_index_error_polled_from_the_cache_is_contained() {
     let mut app = open_loading();
     deliver(
         &app,
@@ -113,7 +117,7 @@ fn a_malformed_index_error_polled_from_the_slot_is_contained() {
         }),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     match &app.plugin_store.as_ref().expect("panel open").status {
         PluginStoreStatus::Failed(detail) => {

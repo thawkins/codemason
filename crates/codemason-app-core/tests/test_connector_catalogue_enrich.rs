@@ -4,16 +4,16 @@
 //! panel (spec `connectors` FR-044).
 //!
 //! The manifest source is replaced with an offline implementation, so no live
-//! catalogue or manifest is contacted (NFR-003). The enrichment is driven through
-//! the real wiring: a catalogue is delivered into the fetch slot and drained by
-//! `poll_connector_catalogue_result`, which starts the enrichment of the loaded
-//! entries.
-
-use std::sync::Arc;
+//! catalogue or manifest is contacted (NFR-003). The catalogue fetch has no
+//! offline seam, so the tests fill the store cache as the fetch job does and run
+//! the job's enrichment step (`enrich_catalogue_into` into the cached index);
+//! `poll_store_cache` applies the streamed updates to the open panel.
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::ConnectorCatalogueResult;
-use codemason_connectors::catalogue_enrich::{ManifestMeta, ManifestSource};
+use codemason_app_core::app::StoreCacheKey;
+use codemason_connectors::catalogue_enrich::{
+    ManifestMeta, ManifestSource, ManifestUpdate, enrich_catalogue_into,
+};
 use codemason_connectors::{
     CategoryFilter, ConnectorAuthShape, ConnectorDescriptor, ConnectorId, ConnectorServer,
 };
@@ -44,6 +44,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 
@@ -67,28 +68,42 @@ fn entry(id: &str) -> ConnectorDescriptor {
     }
 }
 
-/// An app with the connector panel open and no fetch started.
+/// An app with the connector panel open and no fetch started (the catalogue
+/// slot is marked in flight first, so the open starts no network fetch).
 fn open_loading() -> App {
     let mut app = support::make_app();
+    app.store_cache
+        .lock()
+        .expect("store cache")
+        .begin(StoreCacheKey::Connectors);
     app.open_connector_catalogue("", CategoryFilter::all(), false);
     app
 }
 
-/// Deliver a catalogue into the fetch slot, as the off-loop fetch would.
-fn deliver(app: &App, entries: Vec<ConnectorDescriptor>) {
-    let mut guard = app.connector_catalogue_result.lock().expect("slot");
-    *guard = Some(ConnectorCatalogueResult {
-        outcome: Ok(entries),
-        skipped: 0,
-        refused_marketplace: None,
-    });
+/// Deliver a catalogue into the store cache and enrich it from `source`, as the
+/// off-loop fetch job would; returns the slot generation.
+fn deliver(app: &App, entries: Vec<ConnectorDescriptor>, source: &dyn ManifestSource) -> u64 {
+    let generation = support::deliver_connectors(app, entries.clone(), 0, Vec::new());
+    let cache = std::sync::Arc::clone(&app.store_cache);
+    let sink = |update: ManifestUpdate| {
+        cache
+            .lock()
+            .expect("store cache")
+            .push_connector_update(generation, update);
+    };
+    enrich_catalogue_into(&entries, source, &sink);
+    cache
+        .lock()
+        .expect("store cache")
+        .finish_enrichment(StoreCacheKey::Connectors, generation);
+    generation
 }
 
-/// Drain streamed enrichment updates until the terminal `Finished` clears the
+/// Poll streamed enrichment updates until the finished enrichment clears the
 /// loading hint.
 async fn drain(app: &mut App) {
     for _ in 0..600 {
-        app.poll_connector_enrichment();
+        app.poll_store_cache();
         if app
             .connector_store
             .as_ref()
@@ -105,7 +120,7 @@ async fn drain(app: &mut App) {
 #[tokio::test]
 async fn enrichment_fills_the_description_the_catalogue_omitted() {
     let mut app = open_loading();
-    app.set_catalogue_manifest_source(Arc::new(FakeSource {
+    let source = FakeSource {
         meta_by_id: vec![(
             "linear".to_string(),
             ManifestMeta {
@@ -113,10 +128,9 @@ async fn enrichment_fills_the_description_the_catalogue_omitted() {
                 ..Default::default()
             },
         )],
-    }));
-    deliver(&app, vec![entry("linear")]);
+    };
+    deliver(&app, vec![entry("linear")], &source);
 
-    app.poll_connector_catalogue_result();
     drain(&mut app).await;
 
     let browser = app.connector_store.as_ref().expect("panel open");
@@ -135,7 +149,7 @@ async fn enrichment_fills_the_description_the_catalogue_omitted() {
 #[tokio::test]
 async fn enrichment_keeps_a_description_the_catalogue_already_declared() {
     let mut app = open_loading();
-    app.set_catalogue_manifest_source(Arc::new(FakeSource {
+    let source = FakeSource {
         meta_by_id: vec![(
             "linear".to_string(),
             ManifestMeta {
@@ -143,12 +157,11 @@ async fn enrichment_keeps_a_description_the_catalogue_already_declared() {
                 ..Default::default()
             },
         )],
-    }));
+    };
     let mut with_description = entry("linear");
     with_description.description = "Declared by the catalogue".to_string();
-    deliver(&app, vec![with_description]);
+    deliver(&app, vec![with_description], &source);
 
-    app.poll_connector_catalogue_result();
     drain(&mut app).await;
 
     let browser = app.connector_store.as_ref().expect("panel open");
@@ -163,30 +176,33 @@ async fn enrichment_keeps_a_description_the_catalogue_already_declared() {
     );
 }
 
-#[tokio::test]
-async fn an_update_from_a_stale_generation_is_dropped() {
-    // A second enrichment (a re-fetch) bumps the generation, so an update tagged
-    // with the earlier generation must not be applied to the current entries.
+#[test]
+fn an_update_from_a_stale_generation_is_dropped() {
+    // A re-fetch replaces the cached catalogue with a new generation, so an update
+    // tagged with the earlier generation must not be applied to the current
+    // entries.
     let mut app = open_loading();
-    app.set_catalogue_manifest_source(Arc::new(FakeSource {
-        meta_by_id: vec![(
-            "linear".to_string(),
-            ManifestMeta {
-                description: Some("Manage Linear issues".to_string()),
-                ..Default::default()
+    let stale = support::deliver_connectors(&app, vec![entry("linear")], 0, Vec::new());
+    app.poll_store_cache();
+    // A re-fetch lands before the first fetch's enrichment reports.
+    support::deliver_connectors(&app, vec![entry("linear")], 0, Vec::new());
+    {
+        let mut cache = app.store_cache.lock().expect("store cache");
+        cache.push_connector_update(
+            stale,
+            ManifestUpdate {
+                id: "linear".to_string(),
+                meta: ManifestMeta {
+                    description: Some("Manage Linear issues".to_string()),
+                    ..Default::default()
+                },
             },
-        )],
-    }));
-    deliver(&app, vec![entry("linear")]);
+        );
+        cache.finish_enrichment(StoreCacheKey::Connectors, stale);
+    }
 
-    app.poll_connector_catalogue_result();
-    // Bump past the started generation before draining, simulating a re-fetch.
-    app.connector_enrich_generation
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    for _ in 0..200 {
-        app.poll_connector_enrichment();
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    for _ in 0..3 {
+        app.poll_store_cache();
     }
 
     let browser = app.connector_store.as_ref().expect("panel open");

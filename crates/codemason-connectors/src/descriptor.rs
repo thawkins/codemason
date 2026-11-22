@@ -249,6 +249,12 @@ pub struct ConnectorServer {
     /// Extra HTTP headers for an `sse`/`http` transport.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// For a tenant-hosted `sse`/`http` server with no fixed `url`: the regular
+    /// expression the user's own server address must match (the Claude
+    /// directory's `url_regex`). Such a server is installable only once the
+    /// address is supplied ([`ConnectorDescriptor::with_server_url`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url_pattern: Option<String>,
 }
 
 /// Hand-written `Debug` for [`ConnectorServer`].
@@ -267,6 +273,7 @@ impl fmt::Debug for ConnectorServer {
             .field("env_keys", &self.env.keys().collect::<Vec<_>>())
             .field("url", &self.url)
             .field("header_keys", &self.headers.keys().collect::<Vec<_>>())
+            .field("url_pattern", &self.url_pattern)
             .finish()
     }
 }
@@ -417,6 +424,17 @@ impl ConnectorServer {
         }
     }
 
+    /// Whether this is a tenant-hosted `sse`/`http` server that has no `url`
+    /// yet but declares the [`Self::url_pattern`] the user's address must match.
+    #[must_use]
+    pub fn needs_url(&self) -> bool {
+        matches!(
+            self.transport_kind(),
+            Some(McpTransport::Sse | McpTransport::Http)
+        ) && !self.url.as_deref().is_some_and(non_empty)
+            && self.url_pattern.as_deref().is_some_and(non_empty)
+    }
+
     /// The recorded unsupported-capability label for this server, if it is not
     /// expressible as an MCP server (FR-025).
     ///
@@ -553,7 +571,10 @@ impl ConnectorDescriptor {
         let mut supported = 0usize;
         for server in &self.servers {
             match server.unsupported_label() {
+                // A tenant-hosted server becomes connectable once the user
+                // supplies its address, so it counts as installable here.
                 None => supported += 1,
+                Some(_) if server.needs_url() => supported += 1,
                 Some(label) => self
                     .unsupported
                     .push(format!("server '{}': {label}", server.id)),
@@ -567,6 +588,64 @@ impl ConnectorDescriptor {
             });
         }
         Ok(())
+    }
+
+    /// The address pattern of the first server that still needs the user's own
+    /// server address, or `None` when every server has its `url` (a
+    /// tenant-hosted connector such as Glean or Databricks).
+    #[must_use]
+    pub fn server_url_pattern(&self) -> Option<&str> {
+        self.servers
+            .iter()
+            .find(|server| server.needs_url())
+            .and_then(|server| server.url_pattern.as_deref())
+    }
+
+    /// This descriptor with `url` filled in as the address of every server that
+    /// [needs one](ConnectorServer::needs_url).
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - the user's own server address; it must be an `https` URL and
+    ///   match each server's [`ConnectorServer::url_pattern`].
+    ///
+    /// # Errors
+    ///
+    /// [`ConnectorError::ServerUrl`] when the connector needs no address, the
+    /// address is not `https`, or it does not match the pattern.
+    pub fn with_server_url(mut self, url: &str) -> Result<Self, ConnectorError> {
+        let url = url.trim();
+        let refuse = |detail: String| ConnectorError::ServerUrl {
+            id: self.id.to_string(),
+            detail,
+        };
+        if self.server_url_pattern().is_none() {
+            return Err(refuse(
+                "this connector has a fixed server address".to_string(),
+            ));
+        }
+        match url::Url::parse(url) {
+            Ok(parsed) if parsed.scheme() == "https" && parsed.host_str().is_some() => {}
+            _ => return Err(refuse(format!("'{url}' is not an https address"))),
+        }
+        for server in &self.servers {
+            if !server.needs_url() {
+                continue;
+            }
+            let pattern = server.url_pattern.as_deref().unwrap_or_default();
+            let regex = regex::Regex::new(pattern)
+                .map_err(|e| refuse(format!("the catalogue's address pattern is invalid: {e}")))?;
+            if !regex.is_match(url) {
+                return Err(refuse(format!("'{url}' does not match {pattern}")));
+            }
+        }
+        for server in &mut self.servers {
+            if server.needs_url() {
+                server.url = Some(url.to_string());
+                server.url_pattern = None;
+            }
+        }
+        Ok(self)
     }
 
     /// The servers codemason can express as MCP servers (FR-025).

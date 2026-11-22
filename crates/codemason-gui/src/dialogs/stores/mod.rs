@@ -1,0 +1,399 @@
+//! The plugin-store browser (`App::plugin_store`, `/plugins codex|claude`)
+//! and the connector-catalogue browser (`App::connector_store`,
+//! `/connectors claude`), drawn as one wide three-pane Material dialog.
+//!
+//! app-core runs both panels from the keyboard (`input::handle_key`):
+//! Tab/Shift+Tab cycle focus between the result list, the category
+//! navigator and the marketplace navigator; Up/Down move the focused pane
+//! (a navigator applies its filter at once); Enter over a navigator applies
+//! it and focuses the results, Enter over the results installs the
+//! highlighted entry; `c` clears the focused navigator; typed characters
+//! edit the search query, Backspace removes one and Esc on an empty query
+//! closes. The keys reach the App through the router like any other key.
+//!
+//! Each frame reads one [`snapshot::StoreSnapshot`] of the open browser and
+//! [`frame`] draws it: the header (title, the Codex | Claude switcher for
+//! plugins, the search field, close), the filter rail, the result list,
+//! the details pane and the footer. [`plugin`] draws the plugin-specific
+//! row and detail parts, [`connector`] the connector-specific ones.
+//! Clicks mirror the keyboard: a filter row selects that filter and
+//! focuses its pane, a result row moves the highlight; a double
+//! click on a result, a row's Install or the details' Install moves the
+//! highlight there, focuses the results and sends Enter. Clear search,
+//! Close, Refresh, Retry and the switcher call the App's own actions.
+//! Install on a tenant-hosted connector (tagged "Needs server URL") opens
+//! the App's server-address prompt, drawn over the catalogue; its typed keys
+//! and pastes ([`prepare_connector_store`]) reach the App.
+//!
+//! Dependencies: `codemason-app-core`, `codemason-connectors`,
+//! `codemason-plugins` (`StoreKind`) and `egui`.
+
+pub mod connector;
+pub mod frame;
+pub mod plugin;
+pub mod snapshot;
+
+use codemason_app_core::app::{App, StorePane};
+use codemason_app_core::input_event::Key;
+use codemason_connectors::CataloguePane;
+use codemason_plugins::StoreKind;
+
+use super::{plain, send_key, send_slash};
+use snapshot::StoreSnapshot;
+
+/// Accessible label of the category navigator.
+pub const CATEGORIES_LABEL: &str = "Categories";
+
+/// Accessible label of the marketplace navigator.
+pub const MARKETPLACES_LABEL: &str = "Marketplaces";
+
+/// Accessible label of the result list.
+pub const RESULTS_LABEL: &str = "Results";
+
+/// Accessible label of the details pane.
+pub const DETAILS_LABEL: &str = "Details";
+
+/// The button that installs a result (Enter on the results).
+pub const INSTALL: &str = "Install";
+
+/// The badge an installed result shows.
+pub const INSTALLED: &str = "Installed";
+
+/// The button an installed result shows instead of Install; it uninstalls
+/// the result.
+pub const UNINSTALL: &str = "Uninstall";
+
+/// The button that clears the search query.
+pub const CLEAR_SEARCH: &str = "Clear search";
+
+/// The button that closes the panel.
+pub const CLOSE: &str = "Close";
+
+/// The footer button that re-fetches the index.
+pub const REFRESH: &str = "Refresh";
+
+/// The button a failed fetch shows to fetch again.
+pub const RETRY: &str = "Retry";
+
+/// The footer note shown while a Refresh re-fetches the shown index.
+pub const REFRESHING: &str = "Refreshing...";
+
+/// The footer note's prefix when a Refresh failed over the shown index.
+pub const REFRESH_FAILED: &str = "Refresh failed";
+
+/// The plugin store's title.
+pub const PLUGIN_STORE_TITLE: &str = "Plugin Store";
+
+/// The connector catalogue's title.
+pub const CONNECTORS_TITLE: &str = "Connectors";
+
+/// The server-address prompt's field label (a tenant-hosted connector).
+pub const SERVER_ADDRESS: &str = "Server address";
+
+/// The server-address prompt's cancel button.
+pub const CANCEL: &str = "Cancel";
+
+/// The plugin store's kind switcher, in [`StoreKind`] order.
+pub const KIND_OPTIONS: [&str; 2] = ["Codex", "Claude"];
+
+/// The search field's tooltip.
+pub const SEARCH_TOOLTIP: &str = "Type to search - Esc clears, then closes";
+
+/// The panes' tooltip.
+pub const PANES_TOOLTIP: &str = "Tab switches pane - Up/Down move - Enter installs";
+
+/// What a click in the dialog asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Click {
+    /// A category row: select it and focus the category pane.
+    Category(usize),
+    /// A marketplace row: select it and focus the marketplace pane.
+    Marketplace(usize),
+    /// A result row: move the highlight there; `install` on a double click.
+    Result {
+        /// The row's index in the shown results.
+        index: usize,
+        /// Whether to install it too.
+        install: bool,
+    },
+    /// A row's own Install: move the highlight there and install it.
+    RowInstall(usize),
+    /// The details pane's Install: install the highlighted result.
+    Install,
+    /// A row's own Uninstall: move the highlight there and uninstall it.
+    RowUninstall(usize),
+    /// The details pane's Uninstall: uninstall the highlighted result.
+    Uninstall,
+    /// Clear the search query.
+    ClearSearch,
+    /// Close the dialog.
+    Close,
+    /// Re-fetch the index (the footer's Refresh).
+    Refresh,
+    /// Fetch again after a failure.
+    Retry,
+    /// Show the other plugin store.
+    SwitchKind(StoreKind),
+}
+
+/// Draw the plugin-store browser while the App shows it.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose `plugin_store` is drawn.
+///
+/// # Returns
+///
+/// `true` while the panel is open.
+pub fn show_plugin_store(ctx: &egui::Context, app: &mut App) -> bool {
+    let Some(browser) = app.plugin_store.as_ref() else {
+        return false;
+    };
+    let snap = StoreSnapshot::plugin(browser);
+    let palette = crate::palette::palette_for(app, ctx);
+    let Some(click) = frame::draw(
+        ctx,
+        &palette,
+        "codemason_plugin_store",
+        &snap,
+        &plugin::LOOK,
+    ) else {
+        return true;
+    };
+    apply_plugin(ctx, app, click);
+    true
+}
+
+/// Do what `click` asks of the plugin store.
+fn apply_plugin(ctx: &egui::Context, app: &mut App, click: Click) {
+    match click {
+        Click::ClearSearch => app.plugin_store_clear_search(),
+        Click::Close => app.close_plugin_store(),
+        Click::Refresh | Click::Retry => app.refresh_open_store(),
+        Click::SwitchKind(kind) => app.switch_plugin_store_kind(kind),
+        Click::Category(row) => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.category_select_row(row);
+                browser.focus = StorePane::Categories;
+            }
+        }
+        Click::Marketplace(row) => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.marketplace_select_row(row);
+                browser.focus = StorePane::Marketplaces;
+            }
+        }
+        Click::Result { index, install } => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.cursor = index;
+                if install {
+                    browser.focus = StorePane::Results;
+                    send_key(ctx, plain(Key::Enter));
+                }
+            }
+        }
+        Click::RowInstall(index) => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.cursor = index;
+                browser.focus = StorePane::Results;
+                send_key(ctx, plain(Key::Enter));
+            }
+        }
+        Click::Install => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.focus = StorePane::Results;
+                send_key(ctx, plain(Key::Enter));
+            }
+        }
+        Click::RowUninstall(index) => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.cursor = index;
+                browser.focus = StorePane::Results;
+            }
+            uninstall(ctx, app.plugin_store_uninstall_commands());
+        }
+        Click::Uninstall => uninstall(ctx, app.plugin_store_uninstall_commands()),
+    }
+    // The click changed state after this frame was drawn; draw it now
+    // rather than on the next input event.
+    ctx.request_repaint();
+}
+
+/// Queue `lines` (an uninstall's disable then remove commands) for the
+/// shell to run as typed slash commands.
+fn uninstall(ctx: &egui::Context, lines: Vec<String>) {
+    for line in lines {
+        send_slash(ctx, line);
+    }
+}
+
+/// Draw the connector-catalogue browser while the App shows it.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose `connector_store` is drawn.
+///
+/// # Returns
+///
+/// `true` while the panel is open.
+pub fn show_connector_store(ctx: &egui::Context, app: &mut App) -> bool {
+    let Some(browser) = app.connector_store.as_ref() else {
+        return false;
+    };
+    let snap = StoreSnapshot::connector(browser);
+    let prompt = browser.server_url_prompt.clone();
+    let palette = crate::palette::palette_for(app, ctx);
+    let click = frame::draw(
+        ctx,
+        &palette,
+        "codemason_connector_store",
+        &snap,
+        &connector::LOOK,
+    );
+    if let Some(prompt) = prompt {
+        // Over the catalogue, the prompt takes every click and key.
+        server_url_prompt(ctx, &palette, &prompt);
+        return true;
+    }
+    if let Some(click) = click {
+        apply_connector(ctx, app, click);
+    }
+    true
+}
+
+/// Take this frame's pastes into the connector catalogue's open
+/// server-address prompt, before the key router (egui delivers Ctrl+V as a
+/// paste event only, so app-core never sees it as keys).
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context, before the router reads input.
+/// * `app` - the App whose prompt receives the paste.
+pub fn prepare_connector_store(ctx: &egui::Context, app: &mut App) {
+    if !app.connector_url_prompt_open() {
+        return;
+    }
+    let mut pasted = Vec::new();
+    ctx.input_mut(|input| {
+        input.events.retain(|event| match event {
+            egui::Event::Paste(text) => {
+                pasted.push(text.clone());
+                false
+            }
+            _ => true,
+        });
+    });
+    for text in pasted {
+        app.connector_url_prompt_insert(&text);
+    }
+}
+
+/// The server-address prompt of a tenant-hosted connector: what it needs,
+/// the address field (typed keys and pastes reach it through the App), the
+/// refusal if the last address was refused, and Cancel / Install, which
+/// send Esc / Enter.
+fn server_url_prompt(
+    ctx: &egui::Context,
+    palette: &crate::palette::Palette,
+    prompt: &codemason_connectors::ServerUrlPrompt,
+) {
+    use crate::material::button::{ButtonKind, button};
+    use crate::material::dialog::{dialog_actions, dialog_body};
+    use crate::material::text_field::outlined_value;
+    let title = format!("Connect {}", prompt.name);
+    super::material_modal(
+        ctx,
+        palette,
+        "codemason_connector_url",
+        &title,
+        480.0,
+        |ui| {
+            dialog_body(
+                ui,
+                palette,
+                &format!(
+                    "{} runs on your organisation's own server. Enter its https address; \
+                 it must match {}",
+                    prompt.name, prompt.pattern
+                ),
+            );
+            ui.add_space(crate::metrics::space::MD);
+            outlined_value(
+                ui,
+                palette,
+                SERVER_ADDRESS,
+                &prompt.value,
+                true,
+                prompt.error.as_deref(),
+                prompt.error.is_some(),
+            );
+            ui.add_space(crate::metrics::space::MD);
+            dialog_actions(ui, |ui| {
+                if button(ui, palette, ButtonKind::Filled, None, INSTALL).clicked() {
+                    send_key(ctx, plain(Key::Enter));
+                }
+                if button(ui, palette, ButtonKind::Text, None, CANCEL).clicked() {
+                    send_key(ctx, plain(Key::Esc));
+                }
+            });
+        },
+    );
+}
+
+/// Do what `click` asks of the connector catalogue.
+fn apply_connector(ctx: &egui::Context, app: &mut App, click: Click) {
+    match click {
+        Click::ClearSearch => app.connector_catalogue_clear_search(),
+        Click::Close => app.close_connector_catalogue(),
+        Click::Refresh | Click::Retry => app.refresh_open_store(),
+        // The catalogue has one kind; it shows no switcher.
+        Click::SwitchKind(_) => {}
+        Click::Category(row) => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.category_select_row(row);
+                browser.focus = CataloguePane::Categories;
+            }
+        }
+        Click::Marketplace(row) => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.marketplace_select_row(row);
+                browser.focus = CataloguePane::Marketplaces;
+            }
+        }
+        Click::Result { index, install } => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.cursor = index;
+                if install {
+                    browser.focus = CataloguePane::Results;
+                    send_key(ctx, plain(Key::Enter));
+                }
+            }
+        }
+        Click::RowInstall(index) => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.cursor = index;
+                browser.focus = CataloguePane::Results;
+                send_key(ctx, plain(Key::Enter));
+            }
+        }
+        Click::Install => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.focus = CataloguePane::Results;
+                send_key(ctx, plain(Key::Enter));
+            }
+        }
+        Click::RowUninstall(index) => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.cursor = index;
+                browser.focus = CataloguePane::Results;
+            }
+            uninstall(ctx, app.connector_catalogue_uninstall_commands());
+        }
+        Click::Uninstall => uninstall(ctx, app.connector_catalogue_uninstall_commands()),
+    }
+    // The click changed state after this frame was drawn; draw it now
+    // rather than on the next input event.
+    ctx.request_repaint();
+}

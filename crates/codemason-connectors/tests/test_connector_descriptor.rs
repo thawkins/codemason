@@ -18,6 +18,7 @@ fn stdio_server(id: &str) -> ConnectorServer {
         env: std::collections::BTreeMap::new(),
         url: None,
         headers: std::collections::BTreeMap::new(),
+        url_pattern: None,
     }
 }
 

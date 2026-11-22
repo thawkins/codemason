@@ -24,8 +24,7 @@ use crate::term_events::{
 
 use codemason_app_core::app::App;
 use codemason_connectors::{
-    CatalogueBrowser, CategoryFilter, ConnectorAuthShape, ConnectorDescriptor, ConnectorId,
-    ConnectorServer,
+    CatalogueBrowser, ConnectorAuthShape, ConnectorDescriptor, ConnectorId, ConnectorServer,
 };
 
 #[path = "../../codemason-app-core/tests/support/mod.rs"]
@@ -40,6 +39,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 
@@ -86,8 +86,9 @@ fn left_click(col: u16, row: u16) -> MouseEvent {
 /// `communication` (2), `developer` (3), `productivity` (4).
 fn open() -> App {
     let mut app = support::make_app();
-    app.open_connector_catalogue("", CategoryFilter::all(), false);
-    let browser = app.connector_store.as_mut().expect("panel open");
+    // Fill the browser directly: opening the real catalogue would start a live
+    // fetch thread on an empty cache.
+    let browser = app.connector_store.insert(CatalogueBrowser::new("", false));
     browser.set_entries(
         vec![
             descriptor("google-drive", "productivity"),
@@ -143,8 +144,9 @@ fn attributed(id: &str, marketplace: &str) -> ConnectorDescriptor {
 /// marketplace navigator has rows `ALL` (0), `acme` (1), `official` (2).
 fn open_with_marketplaces() -> App {
     let mut app = support::make_app();
-    app.open_connector_catalogue("", CategoryFilter::all(), false);
-    let browser = app.connector_store.as_mut().expect("panel open");
+    // Fill the browser directly: opening the real catalogue would start a live
+    // fetch thread on an empty cache.
+    let browser = app.connector_store.insert(CatalogueBrowser::new("", false));
     browser.set_entries(
         vec![
             attributed("community-one", "acme"),

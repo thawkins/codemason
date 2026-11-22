@@ -18,6 +18,41 @@
 - Changed: the Context pane is a pinned tab beside the Sessions tab in the left column. It cannot be closed, floated or moved; `Alt+C` or a click on the tab brings it to the front, and `Alt+C` again gives the front back to Sessions. Hiding the sidebar takes the tab with it, so the left column still collapses. Showing it no longer hides the Log, Profile, Tasks or Memory panes, and opening those no longer hides it. A saved layout with the pane elsewhere has it moved beside Sessions on load.
 - Changed: `codemason_app_core::context_panel` builds a structured `ContextView` (`context_view`) instead of styled text lines; `ContextView::text_lines` is the copy source of the panel's selection. `ContextPartitionSnapshot` is no longer `Copy`.
 
+## [1.0.179] - 2026-11-22
+
+Plugin Store and Connectors browsers, and more of the marketplaces installable.
+
+The GUI plugin browser is now a three-pane Plugin Store with a Codex | Claude
+switcher, and connectors get their own Connectors dialog; both open from a new
+Addons group on the Agent tab, read from an index cache prefetched at startup,
+and draw only the rows in view. The parsers now load 188 Claude community
+plugins written in GitHub shorthand, honour `path` and `ref` on `url` sources,
+page through the full Claude connector directory, and keep tenant-hosted
+connectors behind a "Needs server URL" badge and an address prompt.
+
+### Added
+
+- Added: an in-memory store index cache in `codemason-app-core`, prefetched at GUI startup for the Codex plugin, Claude plugin and Claude connector indexes; `--refresh` and the footer Refresh button re-fetch it, and marketplace add/remove refetches the affected index.
+- Added: material `badge`, `drawer_item_with_count` and `avatar_list_item` components in `codemason_gui::material`.
+- Added: an installed plugin or connector shows an Uninstall button (on its row and in the details pane) that runs `disable` then `remove` for it.
+- Added: tenant-hosted connectors (about 58 Claude directory entries such as Glean, Databricks and Metabase, whose server address is the organisation's own) are listed with a "Needs server URL" badge instead of being skipped; Install asks for the address in a prompt and checks it against the catalogue's pattern, and `/connectors add <id> --url <address>` does the same from the command line.
+- Added: an Addons group on the ribbon's Agent tab with Plugins (`/plugins claude`) and Connectors (`/connectors claude`) buttons, and their `extension` and `hub` icons in the bundled Material Symbols subset.
+
+### Changed
+
+- Changed: the GUI plugin browser is a wide three-pane Plugin Store dialog with a Codex | Claude switcher, and connectors open in a separate Connectors dialog with sign-in badges, requested scopes, credential name and MCP servers.
+- Changed: the store dialogs draw only the result rows in view, so large indexes no longer lag; the Codex | Claude switcher marks the selected store by highlight instead of a check mark.
+- Fixed: the store dialogs' search field (and every other key-driven Material field, such as the connector server-address prompt and the provider key fields) draws a text cursor after its text while it takes typing, so it reads as focused.
+- Fixed: plugin `url` sources that carry a `path` now install that subdirectory, and a `ref` pins the checkout, in both the Claude and Codex stores (previously the whole repository at `HEAD`).
+- Fixed: the Claude connector catalogue follows the directory feed's `next_cursor` pages (all ~1200 connectors instead of the first 100), and a connector with only a UUID id and a display name that is not a valid id (`Health Data Avatar (HDA)`) is named by its slugified display name instead of being skipped.
+- Fixed: Claude marketplace `git-subdir` entries that name their repository in GitHub `owner/repo` shorthand (188 entries in `anthropics/claude-plugins-community`) are now installable instead of being skipped as malformed.
+- Changed: README.md opens with a CodeMason hero header (the `assets/branding` primary lockup, dark or light to match the reader's theme) and a GUI-first project description; the `ragent-tui` screenshots in `assets/screens/` are replaced by seven desktop GUI screenshots, and the ragent lineage moves to a short Origins section.
+- Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.
+
+### Security
+
+- Fixed: the `url` crate is updated to 2.5.9 for RUSTSEC-2026-0592, which failed the Cargo Deny and Dependency Audit checks.
+
 ## [1.0.178] - 2026-11-21
 
 Theme editor hardening, and one copy of the scratch-directory plumbing.

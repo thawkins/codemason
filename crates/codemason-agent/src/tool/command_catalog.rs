@@ -506,7 +506,7 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
     },
     CommandCatalogEntry {
         trigger: "connectors",
-        description: "Connector management: /connectors list [--verbose] [--category <name>] | claude [query] [--category <name>] [--refresh] | add <id|source> [--force] | remove <id> | enable <id> | disable <id> | connect <id> | disconnect <id> | auth <id> | test <id> | stores [--check] | marketplace show | help",
+        description: "Connector management: /connectors list [--verbose] [--category <name>] | claude [query] [--category <name>] [--refresh] | add <id|source> [--force] [--url <address>] | remove <id> | enable <id> | disable <id> | connect <id> | disconnect <id> | auth <id> | test <id> | stores [--check] | marketplace show | help",
         subcommands: CONNECTORS_SUBS,
         flags: CONNECTORS_FLAGS,
     },

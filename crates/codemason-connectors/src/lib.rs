@@ -57,7 +57,7 @@ pub mod store;
 pub mod store_index;
 pub mod store_ops;
 
-pub use add::{AddError, InstallSource, add, classify_source};
+pub use add::{AddError, InstallSource, add, add_with_server_url, classify_source};
 pub use auth::{
     AuthAction, AuthError, AuthRequirement, AuthState, CredentialStore, EnvSource,
     InMemoryCredentialStore, MapEnv, NullCredentialStore, ProcessEnv, clear_secret,
@@ -68,19 +68,19 @@ pub use bridge::{
 };
 pub use browse::{
     ALL_CATEGORY, CatalogueBrowseStatus, CatalogueBrowser, CataloguePane, CategoryFilter,
-    CategoryFilterState, INSTALLED_CATEGORY, browse_install_report, build_categories,
-    entry_matches, is_installed_row_label,
+    CategoryFilterState, INSTALLED_CATEGORY, ServerUrlPrompt, browse_install_report,
+    build_categories, entry_matches, is_installed_row_label,
 };
 pub use commands::{
-    AuthOutcome, AuthOutcomeError, CatalogueDescriptors, ConnectorArgError, ConnectorCommand,
-    ConnectorCommandEnv, MarketplaceArgError, MarketplaceCommand, auth_report, canonical_id,
-    connect_report, disable_report, disconnect_report, enable_report,
+    AuthOutcome, AuthOutcomeError, CatalogueCacheMode, CatalogueDescriptors, ConnectorArgError,
+    ConnectorCommand, ConnectorCommandEnv, MarketplaceArgError, MarketplaceCommand, auth_report,
+    canonical_id, connect_report, disable_report, disconnect_report, enable_report,
     fetch_catalogue_descriptors_full, fetch_catalogue_descriptors_network,
-    fetch_catalogue_descriptors_with_skipped, is_known_subcommand, lifecycle_error_report,
-    marketplace_bare, marketplace_command_requested, marketplace_show_requested,
-    parse_connector_command, parse_marketplace_command, render_marketplace_list_report,
-    render_marketplace_show_report, resolve_connector_reference, run_connector_subcommand,
-    run_connector_subcommand_async, run_connector_subcommand_env,
+    fetch_catalogue_descriptors_with_mode, fetch_catalogue_descriptors_with_skipped,
+    is_known_subcommand, lifecycle_error_report, marketplace_bare, marketplace_command_requested,
+    marketplace_show_requested, parse_connector_command, parse_marketplace_command,
+    render_marketplace_list_report, render_marketplace_show_report, resolve_connector_reference,
+    run_connector_subcommand, run_connector_subcommand_async, run_connector_subcommand_env,
     run_connector_subcommand_stores_check, run_marketplace_command, search_installable_catalogue,
     search_installable_catalogue_full, search_installable_catalogue_with_skipped, store_and_config,
 };
@@ -93,8 +93,9 @@ pub use entry::{ConnectorEntry, ConnectorEntryError, normalise_transport};
 pub use error::ConnectorError;
 pub use fetch::{
     CACHE_DIR, CatalogueCache, CatalogueFetcher, CatalogueLimits, ConnectorCatalogue,
-    FetchedCatalogue, FixtureCatalogueFetcher, NetworkCatalogueFetcher, default_fetcher,
-    fetch_bytes, fetch_catalogue, now_unix_secs, read_capped,
+    FetchedCatalogue, FixtureCatalogueFetcher, MAX_CATALOGUE_PAGES, NetworkCatalogueFetcher,
+    default_fetcher, fetch_bytes, fetch_catalogue, fetch_catalogue_pages, now_unix_secs,
+    read_capped,
 };
 pub use harness::{
     HarnessError, HarnessReport, HarnessStep, McpProbe, ProbeTool, StepOutcome, render_report,

@@ -66,6 +66,7 @@ fn server_map_converts_transport_url_and_headers() {
         env: Default::default(),
         url: Some("https://mcp.example/mcp".to_string()),
         headers: std::collections::BTreeMap::from([("X-Key".to_string(), "v".to_string())]),
+        url_pattern: None,
     };
     server.env.insert("TOKEN".to_string(), "secret".to_string());
     let descriptor = descriptor("web", vec![server]);

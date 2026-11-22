@@ -349,13 +349,7 @@ fn resolve_codex_source(source: &Value, origin: &Url) -> ResolvedSource {
                         "codex source: local entry without a path".to_string(),
                     )
                 }),
-            Some("url") => map
-                .get("url")
-                .and_then(Value::as_str)
-                .map(git_https_source)
-                .unwrap_or_else(|| {
-                    ResolvedSource::Unsupported("codex source: url entry without a url".to_string())
-                }),
+            Some("url") => url_source(map, "codex"),
             Some("git-subdir") => git_subdir_source(map, "codex"),
             Some(other) => {
                 ResolvedSource::Unsupported(format!("codex source: unsupported kind {other}"))
@@ -373,15 +367,7 @@ fn resolve_claude_source(source: &Value, origin: &Url) -> ResolvedSource {
     match source {
         Value::String(raw) => resolve_relative(raw, origin),
         Value::Object(map) => match map.get("source").and_then(Value::as_str) {
-            Some("url") | Some("git") | Some("github") => map
-                .get("url")
-                .and_then(Value::as_str)
-                .map(git_https_source)
-                .unwrap_or_else(|| {
-                    ResolvedSource::Unsupported(
-                        "claude source: url entry without a url".to_string(),
-                    )
-                }),
+            Some("url") | Some("git") | Some("github") => url_source(map, "claude"),
             Some("git-subdir") => git_subdir_source(map, "claude"),
             Some(other) => {
                 ResolvedSource::Unsupported(format!("claude source: unsupported kind {other}"))
@@ -503,21 +489,51 @@ fn git_subdir_source(map: &Map<String, Value>, store: &str) -> ResolvedSource {
     ResolvedSource::Ready(format!("git+{normalized}#{ref_name}:{path}"))
 }
 
-/// Resolve a whole-repository git source into `git+<https-url>#HEAD`.
-fn git_https_source(raw: &str) -> ResolvedSource {
+/// Resolve a `url` source object. With a non-empty `path` it names a
+/// subdirectory and resolves like `git-subdir`; otherwise it is the whole
+/// repository at its `ref` (default `HEAD`): `git+<https-url>#<ref>`.
+fn url_source(map: &Map<String, Value>, store: &str) -> ResolvedSource {
+    let Some(raw) = map.get("url").and_then(Value::as_str) else {
+        return ResolvedSource::Unsupported(format!("{store} source: url entry without a url"));
+    };
+    if nonblank_field(map, "path").is_some() {
+        return git_subdir_source(map, store);
+    }
+    let ref_name = nonblank_field(map, "ref").unwrap_or_else(|| "HEAD".to_string());
     let normalized = normalize_git_https(raw);
     if normalized.starts_with("https://") {
-        ResolvedSource::Ready(format!("git+{normalized}#HEAD"))
+        ResolvedSource::Ready(format!("git+{normalized}#{ref_name}"))
     } else {
         ResolvedSource::Unsupported(format!("non-https git remote {raw}"))
     }
 }
 
-/// Strip a `git+` prefix and a trailing `.git` from a git remote URL.
+/// Strip a `git+` prefix and a trailing `.git` from a git remote URL, and
+/// expand GitHub `owner/repo` shorthand (used by the Claude community
+/// marketplace) to `https://github.com/owner/repo`.
 fn normalize_git_https(raw: &str) -> String {
     let mut s = raw.trim();
     if let Some(rest) = s.strip_prefix("git+") {
         s = rest;
     }
-    s.strip_suffix(".git").unwrap_or(s).to_string()
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    if is_github_shorthand(s) {
+        format!("https://github.com/{s}")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Whether `s` is GitHub `owner/repo` shorthand: exactly two non-empty
+/// segments of ASCII letters, digits, `-`, `_` or `.`, and no scheme.
+fn is_github_shorthand(s: &str) -> bool {
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    matches!(s.split_once('/'), Some((owner, repo)) if valid(owner) && valid(repo))
 }

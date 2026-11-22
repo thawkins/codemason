@@ -573,6 +573,16 @@ mod test_stats_command;
 mod test_status_expiry;
 #[path = "test_statusbar_last_prompt.rs"]
 mod test_statusbar_last_prompt;
+#[path = "test_store_cache.rs"]
+mod test_store_cache;
+#[path = "test_store_cache_fetch.rs"]
+mod test_store_cache_fetch;
+#[path = "test_store_cache_marketplace.rs"]
+mod test_store_cache_marketplace;
+#[path = "test_store_cache_open.rs"]
+mod test_store_cache_open;
+#[path = "test_store_uninstall.rs"]
+mod test_store_uninstall;
 #[path = "test_stream_metrics.rs"]
 mod test_stream_metrics;
 #[path = "test_styled.rs"]

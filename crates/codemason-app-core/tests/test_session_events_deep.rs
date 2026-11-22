@@ -23,8 +23,8 @@ use crate::term_events::handle_key;
 use codemason_agent::event::Event;
 use codemason_app_core::app::App;
 use codemason_app_core::app::{
-    ConnectorCatalogueInstallResult, ConnectorEnrichResult, PluginStoreBrowser,
-    PluginStoreInstallResult, PluginStoreStatus, StorePane,
+    ConnectorCatalogueInstallResult, PluginStoreBrowser, PluginStoreInstallResult,
+    PluginStoreStatus, StorePane,
 };
 use codemason_connectors::{
     CatalogueBrowser, ConnectorAuthShape, ConnectorDescriptor, ConnectorId, ConnectorServer,
@@ -58,6 +58,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 
@@ -290,15 +291,17 @@ fn refresh_connector_catalogue_installed_is_noop_without_panel() {
 
 #[test]
 fn connector_catalogue_poll_result_records_refused_marketplace() {
-    use codemason_app_core::app::ConnectorCatalogueResult;
-
     let mut app = open_connector_catalogue(Vec::new());
-    *app.connector_catalogue_result.lock().expect("slot") = Some(ConnectorCatalogueResult {
-        outcome: Ok(vec![connector("github", "developer")]),
-        skipped: 1,
-        refused_marketplace: Some("https://evil.example/marketplace.json".to_string()),
-    });
-    app.poll_connector_catalogue_result();
+    support::deliver_connectors(
+        &app,
+        vec![connector("github", "developer")],
+        1,
+        vec![
+            "a configured connector marketplace was skipped: https://evil.example/marketplace.json"
+                .to_string(),
+        ],
+    );
+    app.poll_store_cache();
     assert!(
         app.log_entries
             .iter()
@@ -309,15 +312,9 @@ fn connector_catalogue_poll_result_records_refused_marketplace() {
 
 #[test]
 fn connector_catalogue_poll_result_failure_sets_panel_failed_status() {
-    use codemason_app_core::app::ConnectorCatalogueResult;
-
     let mut app = open_connector_catalogue(Vec::new());
-    *app.connector_catalogue_result.lock().expect("slot") = Some(ConnectorCatalogueResult {
-        outcome: Err("network down".to_string()),
-        skipped: 0,
-        refused_marketplace: None,
-    });
-    app.poll_connector_catalogue_result();
+    support::deliver_connector_failure(&app, "network down");
+    app.poll_store_cache();
     assert!(
         matches!(
             app.connector_store.as_ref().expect("panel open").status,
@@ -329,15 +326,9 @@ fn connector_catalogue_poll_result_failure_sets_panel_failed_status() {
 
 #[test]
 fn connector_catalogue_poll_result_without_panel_stays_closed() {
-    use codemason_app_core::app::ConnectorCatalogueResult;
-
     let mut app = support::make_app();
-    *app.connector_catalogue_result.lock().expect("slot") = Some(ConnectorCatalogueResult {
-        outcome: Ok(vec![connector("github", "developer")]),
-        skipped: 0,
-        refused_marketplace: None,
-    });
-    app.poll_connector_catalogue_result();
+    support::deliver_connectors(&app, vec![connector("github", "developer")], 0, Vec::new());
+    app.poll_store_cache();
     assert!(app.connector_store.is_none());
 }
 
@@ -346,27 +337,26 @@ fn connector_catalogue_poll_enrichment_applies_matching_generation() {
     use codemason_connectors::catalogue_enrich::{ManifestMeta, ManifestUpdate};
 
     let mut app = open_connector_catalogue(vec![connector("github", "developer")]);
-    let generation = app
-        .connector_enrich_generation
-        .load(std::sync::atomic::Ordering::SeqCst);
-    app.connector_enrich_result
-        .lock()
-        .expect("slot")
-        .push(ConnectorEnrichResult::Update {
+    let generation =
+        support::deliver_connectors(&app, vec![connector("github", "developer")], 0, Vec::new());
+    {
+        let mut cache = app.store_cache.lock().expect("store cache");
+        cache.push_connector_update(
             generation,
-            update: ManifestUpdate {
+            ManifestUpdate {
                 id: "github".to_string(),
                 meta: ManifestMeta {
                     version: Some("2.0.0".to_string()),
                     description: Some("filled in".to_string()),
                 },
             },
-        });
-    app.connector_enrich_result
-        .lock()
-        .expect("slot")
-        .push(ConnectorEnrichResult::Finished { generation });
-    app.poll_connector_enrichment();
+        );
+        cache.finish_enrichment(
+            codemason_app_core::app::StoreCacheKey::Connectors,
+            generation,
+        );
+    }
+    app.poll_store_cache();
     assert!(
         app.connector_store
             .as_ref()
@@ -383,24 +373,25 @@ fn connector_catalogue_poll_enrichment_drops_stale_generation() {
     use codemason_connectors::catalogue_enrich::{ManifestMeta, ManifestUpdate};
 
     let mut app = open_connector_catalogue(vec![connector("github", "developer")]);
-    let stale = app
-        .connector_enrich_generation
-        .load(std::sync::atomic::Ordering::SeqCst)
-        .wrapping_sub(1);
-    app.connector_enrich_result
+    let stale =
+        support::deliver_connectors(&app, vec![connector("github", "developer")], 0, Vec::new());
+    app.poll_store_cache();
+    // A re-fetch replaces the cached catalogue before the stale update arrives.
+    support::deliver_connectors(&app, vec![connector("github", "developer")], 0, Vec::new());
+    app.store_cache
         .lock()
-        .expect("slot")
-        .push(ConnectorEnrichResult::Update {
-            generation: stale,
-            update: ManifestUpdate {
+        .expect("store cache")
+        .push_connector_update(
+            stale,
+            ManifestUpdate {
                 id: "github".to_string(),
                 meta: ManifestMeta {
                     version: None,
                     description: Some("stale description".to_string()),
                 },
             },
-        });
-    app.poll_connector_enrichment();
+        );
+    app.poll_store_cache();
     assert!(
         !app.connector_store
             .as_ref()
@@ -416,7 +407,7 @@ fn connector_catalogue_poll_enrichment_drops_stale_generation() {
 fn connector_catalogue_poll_enrichment_empty_queue_is_noop() {
     let mut app = open_connector_catalogue(vec![connector("github", "developer")]);
     let status_before = app.status.clone();
-    app.poll_connector_enrichment();
+    app.poll_store_cache();
     assert!(app.connector_store.is_some());
     assert_eq!(app.status, status_before);
 }
@@ -599,26 +590,28 @@ fn plugin_store_close_is_idempotent() {
 
 #[test]
 fn plugin_store_poll_result_empty_index_and_failed_fetch() {
-    use codemason_app_core::app::PluginStoreFetchResult;
-
     let mut app = open_plugin_store(StoreKind::Codex, Vec::new());
-    *app.plugin_store_result.lock().expect("slot") = Some(PluginStoreFetchResult {
-        kind: StoreKind::Codex,
-        outcome: Ok(StoreIndex::default()),
-    });
-    app.poll_plugin_store_result();
+    let empty = StoreIndex::default();
+    support::deliver_plugin_index(&app, StoreKind::Codex, empty.entries, empty.skipped);
+    app.poll_store_cache();
     assert_eq!(
         app.plugin_store.as_ref().expect("panel").status,
         PluginStoreStatus::Empty
     );
 
-    *app.plugin_store_result.lock().expect("slot") = Some(PluginStoreFetchResult {
-        kind: StoreKind::Codex,
-        outcome: Err(StoreError::Network {
+    // The cache keeps an earlier index over a later failure, so the failure is
+    // delivered to a slot with no earlier data.
+    app.store_cache.lock().expect("store cache").invalidate(
+        codemason_app_core::app::StoreCacheKey::Plugins(StoreKind::Codex),
+    );
+    support::deliver_plugin_failure(
+        &app,
+        StoreKind::Codex,
+        &StoreError::Network {
             detail: "refused".to_string(),
-        }),
-    });
-    app.poll_plugin_store_result();
+        },
+    );
+    app.poll_store_cache();
     assert!(matches!(
         app.plugin_store.as_ref().expect("panel").status,
         PluginStoreStatus::Failed(_)
@@ -627,20 +620,19 @@ fn plugin_store_poll_result_empty_index_and_failed_fetch() {
 
 #[test]
 fn plugin_store_poll_result_stale_kind_is_ignored() {
-    use codemason_app_core::app::PluginStoreFetchResult;
-
     let mut app = open_plugin_store(StoreKind::Codex, vec![store_entry("alpha", "one")]);
     assert_eq!(
         app.plugin_store.as_ref().expect("panel").status,
         PluginStoreStatus::Ready
     );
-    *app.plugin_store_result.lock().expect("slot") = Some(PluginStoreFetchResult {
-        kind: StoreKind::Claude,
-        outcome: Err(StoreError::Network {
+    support::deliver_plugin_failure(
+        &app,
+        StoreKind::Claude,
+        &StoreError::Network {
             detail: "should be ignored".to_string(),
-        }),
-    });
-    app.poll_plugin_store_result();
+        },
+    );
+    app.poll_store_cache();
     assert_eq!(
         app.plugin_store.as_ref().expect("panel").status,
         PluginStoreStatus::Ready,
@@ -652,7 +644,7 @@ fn plugin_store_poll_result_stale_kind_is_ignored() {
 fn plugin_store_poll_result_noop_when_empty_slot() {
     let mut app = open_plugin_store(StoreKind::Codex, Vec::new());
     let status_before = app.status.clone();
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
     assert!(app.plugin_store.is_some());
     assert_eq!(app.status, status_before);
 }

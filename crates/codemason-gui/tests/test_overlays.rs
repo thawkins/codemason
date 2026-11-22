@@ -30,7 +30,7 @@ use codemason_gui::dialogs::lists::{
 };
 use codemason_gui::dialogs::output_view::OUTPUT_LABEL;
 use codemason_gui::dialogs::progress::{DOWNLOAD_LABEL, LOADING_LABEL};
-use codemason_gui::dialogs::stores::{CONNECTORS_TITLE, RESULTS_LABEL, plugin_store_title};
+use codemason_gui::dialogs::stores::{CONNECTORS_TITLE, PLUGIN_STORE_TITLE, RESULTS_LABEL};
 use codemason_gui::dialogs::{ActiveDialog, active};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::panels::messages::MESSAGES_LABEL;
@@ -86,6 +86,22 @@ fn key_event(key: egui::Key, pressed: bool, modifiers: egui::Modifiers) -> egui:
 
 /// Press and release `key` with its typed text, as egui-winit sends them.
 fn type_key(harness: &mut Harness<'static, Shell>, key: egui::Key, text: Option<&str>) {
+    push_key(harness, key, text);
+    harness.run();
+}
+
+/// [`type_key`] over a dialog that keeps repainting (a store's loading
+/// progress bar), running a fixed number of frames instead of settling.
+fn type_key_animated(harness: &mut Harness<'static, Shell>, key: egui::Key, text: Option<&str>) {
+    push_key(harness, key, text);
+    harness.run_steps(ANIMATED_STEPS);
+}
+
+/// Frames to run over a dialog that keeps repainting.
+const ANIMATED_STEPS: usize = 4;
+
+/// Queue a press and release of `key` with its typed text.
+fn push_key(harness: &mut Harness<'static, Shell>, key: egui::Key, text: Option<&str>) {
     let input = harness.input_mut();
     input
         .events
@@ -96,7 +112,6 @@ fn type_key(harness: &mut Harness<'static, Shell>, key: egui::Key, text: Option<
     input
         .events
         .push(key_event(key, false, egui::Modifiers::NONE));
-    harness.run();
 }
 
 /// Whether a dialog labelled `title` is drawn.
@@ -111,12 +126,12 @@ fn test_plugin_store_renders_and_typing_edits_its_query() {
     let (_rt, _events, mut harness) = rig(|app| {
         app.plugin_store = Some(PluginStoreBrowser::new(StoreKind::Codex, "", false));
     });
-    harness.run();
+    harness.run_steps(ANIMATED_STEPS);
     assert_eq!(
         active(harness.state().app()),
         Some(ActiveDialog::PluginStore)
     );
-    assert!(dialog_shown(&harness, &plugin_store_title("Codex")));
+    assert!(dialog_shown(&harness, PLUGIN_STORE_TITLE));
     harness.get_by_label_contains("Loading the store index");
     assert!(
         harness
@@ -124,15 +139,15 @@ fn test_plugin_store_renders_and_typing_edits_its_query() {
             .is_some()
     );
 
-    type_key(&mut harness, egui::Key::A, Some("a"));
-    type_key(&mut harness, egui::Key::B, Some("b"));
+    type_key_animated(&mut harness, egui::Key::A, Some("a"));
+    type_key_animated(&mut harness, egui::Key::B, Some("b"));
     let app = harness.state().app();
     assert_eq!(
         app.plugin_store.as_ref().map(|b| b.query.as_str()),
         Some("ab")
     );
     assert_eq!(app.session.input, "", "typing never reaches the prompt");
-    harness.get_by_label_contains("search: ab");
+    harness.get_by_label_contains("search \"ab\"");
 }
 
 #[test]
@@ -140,11 +155,11 @@ fn test_connector_store_renders_and_esc_edits_then_closes() {
     let (_rt, _events, mut harness) = rig(|app| {
         app.connector_store = Some(CatalogueBrowser::new("", false));
     });
-    harness.run();
+    harness.run_steps(ANIMATED_STEPS);
     assert!(dialog_shown(&harness, CONNECTORS_TITLE));
     harness.get_by_label_contains("Loading the catalogue");
 
-    type_key(&mut harness, egui::Key::X, Some("x"));
+    type_key_animated(&mut harness, egui::Key::X, Some("x"));
     assert_eq!(
         harness
             .state()
@@ -156,9 +171,9 @@ fn test_connector_store_renders_and_esc_edits_then_closes() {
     );
     assert_eq!(harness.state().app().session.input, "");
     // Esc removes the query's last character, then closes on an empty one.
-    type_key(&mut harness, egui::Key::Escape, None);
+    type_key_animated(&mut harness, egui::Key::Escape, None);
     assert!(harness.state().app().connector_store.is_some());
-    type_key(&mut harness, egui::Key::Escape, None);
+    type_key_animated(&mut harness, egui::Key::Escape, None);
     assert!(harness.state().app().connector_store.is_none());
     assert!(!dialog_shown(&harness, CONNECTORS_TITLE));
 }
@@ -519,20 +534,20 @@ fn test_overlay_dispatch_follows_app_core_key_priority() {
             line_cache: OutputViewLineCache::default(),
         });
     });
-    harness.run();
+    harness.run_steps(ANIMATED_STEPS);
     // The store takes keys before the shortcuts panel, as in app-core.
     assert_eq!(
         active(harness.state().app()),
         Some(ActiveDialog::PluginStore)
     );
-    assert!(dialog_shown(&harness, &plugin_store_title("Claude")));
+    assert!(dialog_shown(&harness, PLUGIN_STORE_TITLE));
     assert!(!dialog_shown(&harness, "Output: build"));
 
     // Esc on the empty query closes the store; the shortcuts panel is next.
-    type_key(&mut harness, egui::Key::Escape, None);
+    type_key_animated(&mut harness, egui::Key::Escape, None);
     assert_eq!(active(harness.state().app()), Some(ActiveDialog::Shortcuts));
     // Esc closes the panel; the output overlay, last in the order, is next.
-    type_key(&mut harness, egui::Key::Escape, None);
+    type_key_animated(&mut harness, egui::Key::Escape, None);
     assert_eq!(
         active(harness.state().app()),
         Some(ActiveDialog::OutputView)

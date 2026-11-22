@@ -382,6 +382,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx, app),
         Some(ActiveDialog::ContextMenu) => context_menu::prepare(ctx, app),
         Some(ActiveDialog::Palette) => palette::prepare(ctx),
+        Some(ActiveDialog::ConnectorStore) => stores::prepare_connector_store(ctx, app),
         Some(
             ActiveDialog::ConfigSavePicker
             | ActiveDialog::ThemeEditor
@@ -389,7 +390,6 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
             | ActiveDialog::HistoryPicker
             | ActiveDialog::RouterSave
             | ActiveDialog::PluginStore
-            | ActiveDialog::ConnectorStore
             | ActiveDialog::BackendPanel
             | ActiveDialog::McpDiscover
             | ActiveDialog::PluginsList
@@ -448,6 +448,40 @@ pub fn send_key(ctx: &egui::Context, key: KeyInput) {
 /// The presses in the order they were queued; the queue is left empty.
 pub fn take_keys(ctx: &egui::Context) -> Vec<KeyInput> {
     ctx.data_mut(|d| d.remove_temp::<Vec<KeyInput>>(keys_id()))
+        .unwrap_or_default()
+}
+
+/// The egui memory slot of the queued slash commands.
+fn slash_id() -> Id {
+    Id::unique("codemason_dialog_slash")
+}
+
+/// Queue a slash command line, run as if typed: the shell runs the queue
+/// after drawing ([`take_slash_commands`]), in order, keeping the draft.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `line` - the command line, e.g. `/plugins remove <id>`.
+pub fn send_slash(ctx: &egui::Context, line: String) {
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<String>>(slash_id())
+            .push(line);
+    });
+    ctx.request_repaint();
+}
+
+/// Take the slash commands the dialogs queued this frame.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+///
+/// # Returns
+///
+/// The lines in the order they were queued; the queue is left empty.
+pub fn take_slash_commands(ctx: &egui::Context) -> Vec<String> {
+    ctx.data_mut(|d| d.remove_temp::<Vec<String>>(slash_id()))
         .unwrap_or_default()
 }
 
@@ -550,6 +584,46 @@ pub(crate) fn material_modal_response<R>(
                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
             shown.inner
         })
+}
+
+/// Draw a Material dialog of a fixed `size` that draws its own header: the
+/// `surface_container_high` surface, the backdrop, and `title` as its
+/// accessible label (`Role::Dialog`), with no headline and no scrolling of
+/// its own (the content lays out, and scrolls, its own panes).
+///
+/// The content area is `size`, kept inside the window less the margin
+/// [`material_modal`] leaves. As with [`modal`], the App's key handling
+/// decides when the dialog closes.
+pub(crate) fn material_modal_sized<R>(
+    ctx: &egui::Context,
+    palette: &crate::palette::Palette,
+    id: &str,
+    title: &str,
+    size: egui::Vec2,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    use crate::material::dialog::dialog_frame;
+    egui::Modal::new(Id::unique(id))
+        .frame(dialog_frame(palette))
+        .show(ctx, |ui| {
+            let window = ctx.content_rect();
+            let size = egui::vec2(
+                size.x.min((window.width() - DIALOG_WINDOW_MARGIN).max(0.0)),
+                size.y
+                    .min((window.height() - DIALOG_WINDOW_MARGIN).max(0.0)),
+            );
+            ui.visuals_mut().panel_fill = crate::palette::rgb(palette.m3.surface_container_high);
+            let shown = ui.scope(|ui| {
+                ui.set_min_size(size);
+                ui.set_max_size(size);
+                add_contents(ui)
+            });
+            shown
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
+            shown.inner
+        })
+        .inner
 }
 
 /// A Material dialog's action row, right-aligned: the first button is the

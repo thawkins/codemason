@@ -82,3 +82,26 @@ fn test_material_text_field_outlined_value_shows_its_value_read_only() {
     let field = harness.get_by_label("API key");
     assert_eq!(field.value().as_deref(), Some("sk-1****cdef"));
 }
+
+#[test]
+fn test_material_text_field_value_caret_follows_text_and_stays_inside() {
+    use codemason_gui::material::text_field::{CARET_WIDTH, value_caret};
+    let input = egui::Rect::from_min_size(egui::pos2(16.0, 20.0), egui::vec2(200.0, 24.0));
+    let empty = value_caret(input, 0.0);
+    assert!(
+        (empty.left() - 17.0).abs() < 0.01,
+        "an empty field's caret starts the text"
+    );
+    assert!((empty.width() - CARET_WIDTH).abs() < 0.01);
+    assert!(input.y_range().contains(empty.center().y));
+    let after = value_caret(input, 80.0);
+    assert!(
+        (after.left() - 97.0).abs() < 0.01,
+        "the caret follows the text"
+    );
+    let overflow = value_caret(input, 900.0);
+    assert!(
+        overflow.right() <= input.right() + 0.01,
+        "the caret stays in the field"
+    );
+}

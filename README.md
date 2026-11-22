@@ -1,22 +1,58 @@
-# codemason
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/CodeMason%20Logo-png/Primary%20lockup%20%E2%80%94%20dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/branding/CodeMason%20Logo-png/Primary%20lockup%20%E2%80%94%20light.png">
+    <img alt="CodeMason - Rust-native AI coding agent" src="assets/branding/CodeMason%20Logo-png/Primary%20lockup%20%E2%80%94%20dark.png" width="720">
+  </picture>
+</p>
 
-An AI coding agent with a desktop GUI and a CLI, built in Rust.
+<p align="center">
+  <b>A desktop AI coding agent, written in Rust, shipped as one binary.</b><br>
+  <a href="GUI-QUICKSTART.md">GUI quick start</a> ·
+  <a href="QUICKSTART.md">Guided tour</a> ·
+  <a href="docs/howtos/">How-tos</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-![codemason mcp start](assets/screens/codemasonmcpstartup.png)
+![codemason desktop GUI](assets/screens/codemason-gui-main.png)
 
-codemason is a Rust coding agent inspired by RooCode, Claude Code, Copilot CLI and
-OpenCode. It provides multi-provider LLM orchestration, a comprehensive built-in
-tool system, a desktop GUI, and a client/server architecture — all compiled into a
-single binary that links only against the system C runtime (libc, libm, libgcc_s).
+codemason is an AI coding agent with a native desktop GUI (egui, Material
+Design 3), a headless CLI, an HTTP/SSE server and an ACP endpoint. It drives
+any of 15 LLM provider integrations — cloud or local — through one agent loop
+with a large, permission-gated tool set, and compiles to a single binary
+(`cdmn`) that links only against the system C runtime (libc, libm, libgcc_s).
 
-It is implemented in Rust as a learning exercise for the author.
+What you get out of the box:
 
-codemason started as a copy of [ragent](https://github.com/thawkins/ragent).
+- **A desktop workspace** — a word-processor style window with a ribbon,
+  a transcript page, dockable side panels (sessions, log, profile, tasks,
+  memory, context, agents, teams) and Material light/dark themes
+- **Any model** — Anthropic, OpenAI, Gemini, Copilot, Bedrock, Azure,
+  OpenRouter, Ollama and more; local providers are preferred when nothing is
+  configured
+- **Real tools, with guard rails** — file, shell, git, GitHub/GitLab, web,
+  code-index, PDF and memory tools behind a per-category permission system and a
+  7-layer bash validator
+- **Extensible** — MCP servers, Claude- and Codex-dialect plugins, connector
+  and plugin marketplaces, skills, custom agents and team blueprints
+- **Multi-agent work** — teams with shared task lists and mailboxes, swarms,
+  `/loop` goal-driven runs, autopilot and a research pipeline
+
 The binary is `cdmn`; environment variables use the `CODEMASON_` prefix and
-local state lives in `.codemason/`.
-
-Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
+per-project state lives in `.codemason/`. Start with
+[GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
 [QUICKSTART.md](QUICKSTART.md) for the guided tour.
+
+## Screenshots
+
+| | |
+| --- | --- |
+| ![Tool calls](assets/screens/codemason-gui-session.png) | ![Context panel](assets/screens/codemason-gui-context.png) |
+| **Tool calls** - edits shown as inline diffs in the transcript | **Context panel** - what the next request will send, by category |
+| ![Provider setup](assets/screens/codemason-gui-provider.png) | ![Model picker](assets/screens/codemason-gui-model.png) |
+| **Provider setup** - cloud and local providers | **Model picker** - filterable, with context size and favourites |
+| ![Agent picker](assets/screens/codemason-gui-agent.png) | ![Theme picker](assets/screens/codemason-gui-theme.png) |
+| **Agent picker** - built-in and custom agent profiles | **Themes** - Material light/dark plus community palettes, previewed live |
 
 ## Features
 
@@ -25,10 +61,6 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   and cloud), Generic OpenAI-compatible endpoints, Azure AI Foundry, Azure Resource
   (File), Amazon Bedrock, OpenRouter, and a Model Router cluster — 15 registry
   entries behind an extensible provider trait
-
-![Provider Selector](assets/screens/codemasonprovider.png)
-
-![LLM Selector](assets/screens/codemasonmodel.png)
 
 - **Local-first defaults** — when no model is explicitly configured, codemason resolves
   to the first available local/self-hosted provider (e.g. Ollama) rather than
@@ -54,8 +86,6 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   only when a drivable headless browser is present — spec `openhands` FR-029).
   `cdmn run --dry-run` prints the live total and per-category counts (see
   [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md)); the groups are:
-
-![codemason tool session](assets/screens/codemasonsession.png)
 
 - **File** (27) — read, Write, create, Edit, multiedit, apply_patch, patch, rm,
   move_file, copy_file, make_directory, append_to_file, file_info, diff_files,
@@ -358,8 +388,6 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   is refused by name, because its definition belongs to its plugin or connector
   and is removed with `/plugins remove <id>` or `/connectors remove <id>`
 
-![MCP Selector](assets/screens/codemasonmcpdiscover.png)
-
 - **ACP integration** — Agent Client Protocol support in both directions: an ACP
   **client** that drives Claude Code, Codex, or Gemini CLI as an external
   subprocess over JSON-RPC on stdio, and a **feature-gated, off-by-default ACP
@@ -534,35 +562,23 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   `hooks.json` file and the group `{matcher, hooks: [...]}` shape are read, a
   plugin hook gets `CLAUDE_PLUGIN_ROOT` and the Claude event JSON on stdin, and
   a blocking Stop hook can feed findings back before the turn ends).
-  `/plugins codex` and `/plugins claude`
-  browse each store's official marketplace (`StoreProvider` normalises the Codex and
-  Claude document shapes); each panel carries a left-hand navigator column split into a
-  category navigator (top) and a marketplace navigator (bottom), each listing
-  `ALL` plus the distinct values the fetched index declares, operated by
-  keyboard (`Tab`/`BackTab` cycle focus, `Up`/`Down` move-and-apply, `Enter` apply,
-  `c` clear the focused navigator) and mouse (click
-  a row, wheel to scroll); the category navigator additionally carries an
-  `Installed` pseudo-category in row 1, directly below `ALL`, which filters the
-  results to the plugins already in the store scan (matching the plugin id, so an
-  installed plugin that declares no category still shows) and composes with the
-  query and marketplace filters; every navigator row appends the number of plugins under that
-  value as `Name (N)` (the `ALL` row counts the whole index, derived from the full
-  fetched index so the count is stable as a query or filter narrows the list); the
-  search query, category, and marketplace filters compose
-  so the list shows only entries matching all three; a launch may pre-select a category
-  with `--category <name>`; each result row shows the plugin id, version, the
-  **marketplace it came
-  from** (the added marketplace's name, or the store label for the base endpoint), and
-  its description, the description taking every column the marketplace leaves so it
-  runs to the panel's edge and is clipped there (the panel widens up to a 140-column
-  ceiling so the marketplace column has room); a row already installed carries a bold
-  green `*` in a one-column lane beside the `>` cursor gutter (every other row paints
-  a blank there, keeping the columns aligned); the result list is sorted
-  alphabetically by plugin id
-  (case-insensitive) and a query or category filter narrows the already-sorted set. A
-  search box sits along the panel's bottom edge with the live filter field on the left
-  and a click-to-clear `[x] clear` button on the right, so the active query can be wiped
-  with one click;
+  `/plugins codex` and `/plugins claude` open the Plugin Store dialog on each
+  store's marketplaces (`StoreProvider` normalises the Codex and Claude document
+  shapes), with a Codex / Claude switcher in its header. It is a wide three-pane
+  dialog: a filter rail with a category list and a marketplace list, each row
+  showing its entry count (the category list carries `ALL`, an `Installed`
+  pseudo-category that lists the plugins already installed, then the index's
+  categories); rich result rows showing each plugin's name, version, the
+  **marketplace it came from** (the added marketplace's name, or the store label
+  for the base endpoint), description and tags, with an Install button; and a
+  details pane for the highlighted plugin (version, marketplace, source and
+  homepage). The search query, category and marketplace filters compose, and the
+  results are sorted alphabetically by plugin id (case-insensitive); a launch may
+  pre-select a category with `--category <name>`. The footer shows `N of M` and a
+  Refresh button (`--refresh` does the same at launch); the plugin and connector
+  indexes are prefetched into an in-memory cache at startup, so the dialogs open
+  populated. Hints are tooltips. Keys: `Tab` changes pane, `Up`/`Down` move,
+  `Enter` installs, typing searches, `Esc` clears the search, then closes;
   `/plugins add` also accepts a
   `git+<https-url>#<ref>[:<subpath>]` git source; a freshly installed plugin is
   recorded enabled and loads at the next session start (no JavaScript runs during
@@ -573,16 +589,11 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   the `cdmn plugins <sub>` CLI (`/plugins marketplace show` and `/plugins marketplace <codex|claude> list` list the marketplaces configured for each store,
   one section per store with a name/url/description table; `/plugins marketplace <codex|claude> add <source>` registers an additional marketplace from an
   `owner/repo` slug, an SSH remote, an `https://` URL, or a local directory, in the
-  user-global `plugins.stores.marketplaces`, and the two browse panels fetch and
-  merge every configured marketplace into the one panel); a loaded index also has each
-  plugin's own version and description resolved from its manifest off the event loop
-  (the vendor listings omit them, Codex especially), with a `loading details...` title
-  hint and a `-` version marker while a value stays unknown; `plugins.enabled: false`
-  makes the subsystem inert
-
-![CodexPlugins](assets/screens/codemasonpluginscodex.png)
-
-![ClaudePlugins](assets/screens/codemasonpluginsclaude.png)
+  user-global `plugins.stores.marketplaces`, and the Plugin Store fetches and
+  merges every configured marketplace into the one dialog); a loaded index also has
+  each plugin's own version and description resolved from its manifest in the
+  background (the vendor listings omit them, Codex especially); `plugins.enabled:
+  false` makes the subsystem inert
 
 - **Connector system** — a Claude-connector-equivalent catalogue of named
   integrations (Google Drive, Slack, GitHub, Git, Postgres, Puppeteer, and the
@@ -595,34 +606,28 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   `remove <id>`, `enable <id>`, `disable <id>`, `connect <id>`,
   `disconnect <id>`, `auth <id>`, `test <id>`, `stores [--check]`,
   `marketplace show|claude list|add|remove`, `help`) in the GUI and the
-  `cdmn connectors <sub>` CLI. `/connectors claude` opens an interactive,
-  off-the-event-loop catalogue browser wearing the same design language as
-  `/plugins claude` (filter by query, category, and marketplace; browse; install with
-  one key): a calm slate accent frame and a structured title line; a left column
-  split into a `Categories` navigator above a `Marketplace` navigator, each under a
-  reversed-video title band with every row labelled `Name (N)`; a fixed
-  dark-on-light column-heading row (`Id`, `Category`, `Marketplace`, `Description`)
-  pinned above the zebra-banded results; each row shows the connector id, its
-  category, the **marketplace it came from** (or `-` for a local install) and its
-  description running to the panel's right edge, with a bold green `*` in a
-  one-column lane on an installed connector; a centred footer of key hints and a
-  bottom `search:` box with a clickable `[x] clear` button. Every connector list
-  (`list`, `claude`, `search`) is sorted alphabetically by connector id
-  (case-insensitive) and the filters narrow the already-sorted rows; the category
-  navigator lists `ALL`, an `Installed` pseudo-category, then the catalogue's
-  distinct categories, operated by keyboard (`Tab`/`BackTab` cycle the results and the
-  two navigators, `Up`/`Down` move the focused pane, `Enter` applies, `c` clears) and
-  mouse (click a row in either navigator, wheel to scroll, click `[x] clear`); the
-  panel merges the base catalogue endpoint and every marketplace added with
-  `/connectors marketplace claude add`, and resolves each entry's blank description
-  from its own repository manifest off-loop with a `loading details...` title hint),
+  `cdmn connectors <sub>` CLI. `/connectors claude` opens the Connectors
+  dialog, the same wide three-pane layout as the Plugin Store without the store
+  switcher: a filter rail with a category list (`ALL`, an `Installed`
+  pseudo-category, then the catalogue's categories) and a marketplace list, each
+  row with its entry count; result rows showing the connector's name, category,
+  description and tags with an Install button; and a details pane showing the
+  connector's sign-in badge, the scopes it requests, its credential name (never
+  the value), its MCP servers and its source. The footer shows `N of M` and a
+  Refresh button; the catalogue is prefetched at startup, so the dialog opens
+  populated. Every connector list (`list`, `claude`, `search`) is sorted
+  alphabetically by connector id (case-insensitive) and the filters narrow the
+  already-sorted rows. The keyboard works as in the Plugin Store (`Tab` changes
+  pane, `Up`/`Down` move, `Enter` installs, typing searches, `Esc` clears, then
+  closes) and hints are tooltips. The dialog merges the base catalogue endpoint
+  and every marketplace added with `/connectors marketplace claude add`, and fills
+  each entry's blank description from its own repository manifest in the
+  background),
   `/connectors test <id>` runs an isolated connect-and-invoke harness
   that never touches the live session, and `/connectors stores [--check]`
   reports each catalogue endpoint and its provenance. Connectors install
   enabled; `enable` connects their servers now in a running session.
   `connectors.enabled: false` makes the subsystem inert
-
-![codemason connectors claude](assets/screens/codemasonconnectorsclaude.png)
 
 - **Automation service** — named, schedulable or webhook-triggered agent runs
   with durable run history and execution-backend confinement (spec `openhands`
@@ -665,10 +670,6 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   one step toward the front and `Del` removes it
 - **Teams & Swarms** — multi-agent coordination with named teammates, shared task lists,
   mailbox messaging, and swarm decomposition for parallel work (`/swarm <prompt>`)
-
-![codemason swarm](assets/screens/codemasonswarm.png)
-
-![codemason team](assets/screens/codemasonteam.png)
 
 - **Autopilot mode** — autonomous operation with configurable iteration limits and
   permission auto-approval (`/autopilot on [--max-tokens N] [--max-time N]`), or a
@@ -1072,7 +1073,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.178** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.179** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered
@@ -1093,6 +1094,14 @@ Related documents:
 - [docs/howtos/tools/INDEX.md](docs/howtos/tools/INDEX.md) — the full tool catalog
 - [docs/reports/testconsolidation-review.md](docs/reports/testconsolidation-review.md)
   — the test-binary consolidation review and rollout record
+
+## Origins
+
+codemason began as a fork of [ragent](https://github.com/thawkins/ragent), a
+terminal (TUI) coding agent by the same author, and has since been rebuilt
+around a desktop GUI, a frontend-neutral application core and its own plugin,
+connector and execution-backend systems. It is also an ongoing exercise in
+writing a large Rust application.
 
 ## License
 

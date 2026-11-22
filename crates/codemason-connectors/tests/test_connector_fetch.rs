@@ -605,3 +605,73 @@ fn parses_recorded_claude_feed_when_present() {
         "at most one feed entry falls back to a UUID id, got {uuid_named}"
     );
 }
+
+/// One page of the Claude directory feed: a single authless remote server named
+/// `slug`, followed by `next_cursor` when there is another page.
+fn directory_page(slug: &str, next_cursor: Option<&str>) -> Vec<u8> {
+    serde_json::json!({
+        "servers": [{
+            "slug": slug,
+            "name": slug,
+            "remote": {"url": format!("https://{slug}.example.test/mcp"),
+                       "transport": "streamable-http", "is_authless": true}
+        }],
+        "next_cursor": next_cursor,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[test]
+fn paged_directory_feed_follows_next_cursor_to_the_last_page() {
+    let first = endpoint("https://api.example.test/api/directory/servers");
+    let mut requested = Vec::new();
+    let parsed = codemason_connectors::fetch_catalogue_pages(CatalogueKind::Claude, &first, |ep| {
+        requested.push(ep.as_str().to_string());
+        let cursor = ep
+            .as_url()
+            .query_pairs()
+            .find(|(key, _)| key == "cursor")
+            .map(|(_, value)| value.into_owned());
+        Ok(match cursor.as_deref() {
+            None => directory_page("alpha", Some("c/2")),
+            Some("c/2") => directory_page("bravo", Some("c3")),
+            Some(_) => directory_page("charlie", None),
+        })
+    })
+    .expect("all pages parse");
+    let ids: Vec<&str> = parsed.connectors.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["alpha", "bravo", "charlie"]);
+    assert_eq!(requested.len(), 3);
+    assert_eq!(
+        requested[1],
+        "https://api.example.test/api/directory/servers?cursor=c%2F2"
+    );
+}
+
+#[test]
+fn paged_directory_feed_stops_on_a_repeated_cursor() {
+    let first = endpoint("https://api.example.test/api/directory/servers");
+    let mut calls = 0;
+    let parsed = codemason_connectors::fetch_catalogue_pages(CatalogueKind::Claude, &first, |_| {
+        calls += 1;
+        Ok(directory_page(&format!("s{calls}"), Some("same")))
+    })
+    .expect("pages parse");
+    assert_eq!(calls, 2, "a cursor seen before ends the walk");
+    assert_eq!(parsed.connectors.len(), 2);
+}
+
+#[test]
+fn directory_entry_with_only_a_uuid_id_is_named_from_its_display_name() {
+    let doc = br#"{"servers":[{
+        "id": "ebacb52d-dedb-424a-981c-3f6a14495676",
+        "name": "Health Data Avatar (HDA)",
+        "remote": {"url": "https://hda-mcp.example.test/mcp",
+                   "transport": "streamable-http", "is_authless": true}
+    }]}"#;
+    let parsed = parse_catalogue(&*provider_for(CatalogueKind::Claude), doc, &claude_origin())
+        .expect("parses");
+    assert_eq!(parsed.skipped, 0);
+    assert_eq!(parsed.connectors[0].id.as_str(), "health-data-avatar-hda");
+}

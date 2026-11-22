@@ -313,3 +313,110 @@ fn remove_never_creates_a_ledger_when_none_existed() {
     // The removal must not have re-created the ledger as a side effect.
     assert!(!store.join(codemason_connectors::STATE_FILE).exists());
 }
+
+// -- tenant-hosted catalogue connectors ------------------------------------
+
+/// A Claude-directory entry with no fixed server address: the user's own
+/// address must match `url_regex` (Glean, Databricks, Metabase, ...).
+fn tenant_descriptor() -> ConnectorDescriptor {
+    let item = serde_json::json!({
+        "slug": "glean",
+        "name": "Glean",
+        "remote": {
+            "url": null,
+            "url_regex": "^https://[^/]+\\.glean\\.com/mcp/[A-Za-z0-9_-]+",
+            "transport": "streamable-http",
+            "is_authless": false,
+            "required_fields": [{"field": "url"}]
+        }
+    });
+    let origin = url::Url::parse("https://api.example.test/servers").unwrap();
+    codemason_connectors::ConnectorEntry::from_value(&item, &origin)
+        .expect("entry parses")
+        .to_catalogue_descriptor()
+        .expect("a tenant-hosted entry is a valid catalogue descriptor")
+}
+
+#[test]
+fn tenant_connector_is_kept_and_reports_its_address_pattern() {
+    let descriptor = tenant_descriptor();
+    assert_eq!(
+        descriptor.server_url_pattern(),
+        Some("^https://[^/]+\\.glean\\.com/mcp/[A-Za-z0-9_-]+")
+    );
+    assert!(
+        descriptor.supported_servers().is_empty(),
+        "no server is connectable until the address is given"
+    );
+}
+
+#[test]
+fn tenant_connector_add_without_url_names_the_flag() {
+    let tree = TempTree::new("tenant-no-url");
+    let err = add(
+        &dirs(&tree),
+        &tree.0,
+        "glean",
+        false,
+        &[tenant_descriptor()],
+    )
+    .expect_err("refused without an address");
+    assert!(matches!(err, AddError::NeedsServerUrl { .. }), "{err:?}");
+    assert!(err.to_string().contains("--url"), "{err}");
+}
+
+#[test]
+fn tenant_connector_add_refuses_an_address_off_the_pattern() {
+    let tree = TempTree::new("tenant-bad-url");
+    for url in [
+        "https://evil.example.com/mcp/x",
+        "http://acme.glean.com/mcp/x",
+    ] {
+        let err = codemason_connectors::add_with_server_url(
+            &dirs(&tree),
+            &tree.0,
+            "glean",
+            false,
+            &[tenant_descriptor()],
+            Some(url),
+        )
+        .expect_err("refused");
+        assert!(matches!(err, AddError::ServerUrl(_)), "{url}: {err:?}");
+    }
+}
+
+#[test]
+fn tenant_connector_add_with_a_matching_url_installs_it_connectable() {
+    let tree = TempTree::new("tenant-ok");
+    let staged = codemason_connectors::add_with_server_url(
+        &dirs(&tree),
+        &tree.0,
+        "glean",
+        false,
+        &[tenant_descriptor()],
+        Some("https://acme-be.glean.com/mcp/default"),
+    )
+    .expect("installs");
+    let server = &staged.descriptor.servers[0];
+    assert_eq!(
+        server.url.as_deref(),
+        Some("https://acme-be.glean.com/mcp/default")
+    );
+    assert_eq!(server.url_pattern, None);
+    assert_eq!(staged.descriptor.supported_servers().len(), 1);
+}
+
+#[test]
+fn url_flag_is_refused_for_a_fixed_address_connector() {
+    let tree = TempTree::new("tenant-fixed");
+    let err = codemason_connectors::add_with_server_url(
+        &dirs(&tree),
+        &tree.0,
+        "echo",
+        false,
+        &[descriptor_for("echo")],
+        Some("https://acme.example.com/mcp"),
+    )
+    .expect_err("refused");
+    assert!(matches!(err, AddError::ServerUrl(_)), "{err:?}");
+}
