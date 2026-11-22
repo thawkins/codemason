@@ -772,3 +772,14 @@ async fn test_permission_checkpoint_overrides_allow_then_denies_on_timeout() {
     .expect("permission check should succeed");
     assert_eq!(action, PermissionAction::Deny);
 }
+
+#[test]
+fn test_session_text_helpers_language_reminder_skips_blank_language() {
+    use codemason_agent::llm::{ChatContent, ChatMessage};
+    let mut msgs = vec![ChatMessage {
+        role: "user".to_string(),
+        content: ChatContent::Text("hi".to_string()),
+    }];
+    prompt_builders::append_language_reminder(&mut msgs, Some(" "));
+    assert!(matches!(&msgs[0].content, ChatContent::Text(t) if t == "hi"));
+}

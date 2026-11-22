@@ -3842,8 +3842,8 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
 
             let mut output = String::from(
                 "From: /alog list\n\n## Activity Log - Runs\n\n\
-                 | Run | Status | Events | Model msgs | Tool calls | Tool results | Permissions | Checkpoints | Terminations | Branch-origin | Mutation-rej | Lifecycle |\n\
-                 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
+                 | Run | Status | Events | Model msgs | Model steps | Tool calls | Tool results | Permissions | Checkpoints | Terminations | Branch-origin | Mutation-rej | Lifecycle |\n\
+                 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
             );
 
             for run_id in &runs {
@@ -3859,9 +3859,11 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 let (mut checkpoints, mut terminations, mut branch_origins, mut mutation_rej) =
                     (0u64, 0u64, 0u64, 0u64);
                 let mut lifecycle = 0u64;
+                let mut model_steps = 0u64;
                 for ev in &events {
                     match &ev.kind {
                         EventKind::ModelMessage { .. } => model_msgs += 1,
+                        EventKind::ModelStep(_) => model_steps += 1,
                         EventKind::ToolCall { .. } => tool_calls += 1,
                         EventKind::ToolResult { .. } => tool_results += 1,
                         EventKind::PermissionDecision { .. } => permissions += 1,
@@ -3875,7 +3877,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
 
                 let short = short_run_id(run_id);
                 output.push_str(&format!(
-                    "| `{short}` | {status:?} | {total} | {model_msgs} | {tool_calls} | \
+                    "| `{short}` | {status:?} | {total} | {model_msgs} | {model_steps} | {tool_calls} | \
                      {tool_results} | {permissions} | {checkpoints} | {terminations} | \
                      {branch_origins} | {mutation_rej} | {lifecycle} |\n",
                 ));

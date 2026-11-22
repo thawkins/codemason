@@ -4,9 +4,10 @@
 //! injected into every [`crate::session::processor::SessionProcessor`] turn:
 //! the codebase-index guidance (active vs. disabled), the compact and detailed
 //! tool-reference listings, the universal tool-calling directive, and the
-//! goal-loop structured-goal section (FR-006).
+//! goal-loop structured-goal section (FR-006), and the per-request
+//! reply-language reminder on the newest user message.
 
-use crate::llm::ToolDefinition;
+use crate::llm::{ChatContent, ChatMessage, ContentPart, ToolDefinition};
 use crate::session::loop_state::LoopSpec;
 use std::fmt::Write as _;
 
@@ -272,4 +273,35 @@ pub fn build_detailed_tool_reference_from_defs(defs: &[ToolDefinition]) -> Strin
     }
 
     section
+}
+
+/// Remind the model of the reply language in the newest user message.
+///
+/// The "Response Language" section closes the system prompt, but in a long
+/// session it sits hundreds of thousands of tokens away from where the model
+/// writes, and a model trained mostly on another language (DeepSeek drifting
+/// into Chinese) stops following it. A one-line reminder on the newest user
+/// message (the user's prompt, or the tool results of the last step) keeps the
+/// rule next to the point of generation. It is added to the outgoing request
+/// only, never to the stored history, so reminders do not pile up.
+///
+/// # Arguments
+///
+/// * `messages` - the request's message list; only the last entry can change.
+/// * `language` - the configured reply language; `None` or blank adds nothing.
+pub fn append_language_reminder(messages: &mut [ChatMessage], language: Option<&str>) {
+    let Some(language) = language.map(str::trim).filter(|l| !l.is_empty()) else {
+        return;
+    };
+    let Some(last) = messages.last_mut().filter(|m| m.role == "user") else {
+        return;
+    };
+    let reminder = format!("[Reply in {language}.]");
+    match &mut last.content {
+        ChatContent::Text(text) => {
+            text.push_str("\n\n");
+            text.push_str(&reminder);
+        }
+        ChatContent::Parts(parts) => parts.push(ContentPart::Text { text: reminder }),
+    }
 }

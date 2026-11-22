@@ -689,6 +689,10 @@ mod test_tool_argument_decode_sites;
 #[path = "test_template_discovery.rs"]
 mod test_template_discovery;
 
+#[path = "test_language_reminder.rs"]
+mod test_language_reminder;
+#[path = "test_stall_guard.rs"]
+mod test_stall_guard;
 #[path = "test_text_toolcalls.rs"]
 mod test_text_toolcalls;
 

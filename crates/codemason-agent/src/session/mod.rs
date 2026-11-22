@@ -35,6 +35,7 @@ mod refusal_outcome;
 /// REST+SSE and mirror its event stream locally (spec `openhands` FR-021,
 /// FR-031, FR-034).
 pub mod remote_dispatch;
+pub mod stall_guard;
 pub mod stream_buffer;
 pub(crate) mod text_toolcalls;
 /// The one construction site for a tool call refused *before* it ran (spec

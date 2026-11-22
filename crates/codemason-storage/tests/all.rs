@@ -20,6 +20,8 @@ mod test_activity_jsonl_export;
 mod test_activity_log;
 #[path = "test_activity_model_message.rs"]
 mod test_activity_model_message;
+#[path = "test_activity_model_step.rs"]
+mod test_activity_model_step;
 #[path = "test_activity_mutation_rejected.rs"]
 mod test_activity_mutation_rejected;
 #[path = "test_activity_permission_decision.rs"]

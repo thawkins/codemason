@@ -291,19 +291,22 @@ async fn test_subagent_narration_nudge_produces_findings() {
     );
 }
 
-/// A primary (non-subagent) agent that produces a short text-only response
-/// after tool work should NOT be nudged - the nudge is subagent-only.
+/// A primary (non-subagent) agent whose short text-only response after tool
+/// work announces its next step ("Now let me check ...") has stalled mid-task.
+/// It must not receive the sub-agent findings nudge, but the stall guard must
+/// feed it the continue nudge so the turn keeps going instead of ending.
 #[tokio::test]
-async fn test_primary_agent_short_response_not_nudged() {
-    let event_bus = Arc::new(EventBus::new(64));
-    let (processor, working_dir, call_count, _captured) = make_processor(event_bus.clone());
+async fn test_primary_agent_announced_step_gets_stall_nudge() {
+    // Large enough that no notice is dropped by broadcast lag.
+    let event_bus = Arc::new(EventBus::new(4096));
+    let mut events = event_bus.subscribe();
+    let (processor, working_dir, call_count, captured) = make_processor(event_bus.clone());
     let session_manager = processor.session_manager.clone();
     let session = session_manager
         .create_session(working_dir)
         .expect("session should be created");
 
     let mut agent = AgentInfo::new("general", "General");
-    // Primary mode - the nudge must NOT fire.
     agent.mode = AgentMode::Primary;
     agent.model = Some(ModelRef {
         provider_id: "ollama".to_string(),
@@ -322,23 +325,53 @@ async fn test_primary_agent_short_response_not_nudged() {
 
     let output = reply.text_content();
 
-    // Primary agent: only 2 calls (tool call -> short text). No nudge, no
-    // third call for findings.
+    // tool call -> stalled narration -> continued work.
     assert_eq!(
         call_count.load(Ordering::Relaxed),
-        2,
-        "primary agent should not be nudged; expected 2 LLM calls, got {}: \
+        3,
+        "stalled primary agent should be continued; expected 3 LLM calls, got {}: \
          output was: {output}",
         call_count.load(Ordering::Relaxed)
     );
 
-    // Output should be just the narration, no findings.
+    // The primary agent's narration stays visible to the user, followed by
+    // the work it continued with.
     assert!(
         output.contains("Now let me check"),
-        "output should contain the narration"
+        "output should keep the narration, got: {output}"
     );
     assert!(
-        !output.contains("## Findings"),
-        "primary agent should not have findings (no nudge fired)"
+        output.contains("## Findings"),
+        "output should contain the continued work, got: {output}"
+    );
+
+    // The continue request carried the stall nudge, not the sub-agent nudge.
+    let requests = captured.lock().expect("captured requests lock");
+    let last = format!("{:?}", requests[2].messages.last());
+    assert!(
+        last.contains("ended without a tool call"),
+        "third request should end with the stall nudge, got: {last}"
+    );
+    drop(requests);
+
+    // The stalled step shows its diagnostic in the transcript; the final
+    // findings reply is a normal finish after tool work and shows none.
+    let mut stall_notices = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let codemason_agent::event::Event::AgentNotice { message, .. } = event
+            && message.starts_with("Stall detected.")
+        {
+            stall_notices.push(message);
+        }
+    }
+    assert_eq!(
+        stall_notices.len(),
+        1,
+        "expected exactly one stall notice, got: {stall_notices:?}"
+    );
+    assert!(
+        stall_notices[0].contains("finish=stop"),
+        "got: {}",
+        stall_notices[0]
     );
 }
