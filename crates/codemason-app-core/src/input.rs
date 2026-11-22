@@ -356,6 +356,21 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // query dismisses the panel), and printable characters type into the panel's
     // own search field. Every other key is swallowed and the input field stays
     // locked.
+    // While the connector catalogue's server-address prompt is open it owns the
+    // keyboard: characters edit the address, Enter installs with it, Esc
+    // cancels; every other key is swallowed.
+    if app.connector_url_prompt_open() {
+        match key.key {
+            Key::Enter => app.connector_url_prompt_submit(),
+            Key::Esc => app.connector_url_prompt_cancel(),
+            Key::Backspace => app.connector_url_prompt_backspace(),
+            Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
+                app.connector_url_prompt_insert(&c.to_string());
+            }
+            _ => {}
+        }
+        return None;
+    }
     if app.connector_store.is_some() {
         match key.key {
             Key::Tab => app.connector_catalogue_focus_next(),

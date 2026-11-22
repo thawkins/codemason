@@ -1534,6 +1534,7 @@ dependencies = [
  "codemason-types",
  "flate2",
  "hex",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

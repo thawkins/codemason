@@ -444,6 +444,23 @@ pub enum CatalogueBrowseStatus {
     Failed(String),
 }
 
+/// The prompt for a tenant-hosted connector's server address (the Claude
+/// directory entries such as Glean or Databricks whose address is the user's
+/// own, matching [`Self::pattern`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerUrlPrompt {
+    /// The connector being installed.
+    pub id: String,
+    /// The connector's display name.
+    pub name: String,
+    /// The pattern the address must match.
+    pub pattern: String,
+    /// The address typed so far.
+    pub value: String,
+    /// Why the last submitted address was refused, if it was.
+    pub error: Option<String>,
+}
+
 /// The catalogue-browser state for the connector catalogue (spec `connectors`).
 ///
 /// The state machine behind the `/connectors claude` browse panel, mirroring
@@ -538,6 +555,10 @@ pub struct CatalogueBrowser {
     /// validated, and refuse an unknown name in the footer instead of leaving the
     /// panel silently empty.
     pending_category: Option<CategoryFilter>,
+    /// The open "your server address" prompt for a tenant-hosted connector,
+    /// opened by Install on an entry whose servers need the user's own address.
+    /// While it is open, typed characters edit its value instead of the search.
+    pub server_url_prompt: Option<ServerUrlPrompt>,
     /// Whether the off-loop manifest-metadata enrichment (FR-044) has finished
     /// for the current catalogue.
     ///
@@ -590,6 +611,7 @@ impl CatalogueBrowser {
             marketplace_scroll: 0,
             marketplace_viewport: 0,
             pending_category: None,
+            server_url_prompt: None,
             enriching: false,
             refreshing: false,
             refresh_error: None,

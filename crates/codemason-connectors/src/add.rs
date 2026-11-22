@@ -99,6 +99,23 @@ pub enum AddError {
     /// The catalogue holds no connector with this id (FR-011).
     #[error("connector add: catalogue holds no connector with id {0}")]
     CatalogueNotFound(String),
+
+    /// A tenant-hosted catalogue connector needs the user's own server address
+    /// and none was given (`/connectors add <id> --url <https-address>`).
+    #[error(
+        "connector add: {id} needs your own server address; run /connectors add {id} --url <https address matching {pattern}>"
+    )]
+    NeedsServerUrl {
+        /// The connector id.
+        id: String,
+        /// The pattern the address must match.
+        pattern: String,
+    },
+
+    /// The given server address was refused (not `https`, not matching the
+    /// catalogue's pattern, or given to a connector with a fixed address).
+    #[error("{0}")]
+    ServerUrl(crate::error::ConnectorError),
 }
 
 /// Install the connector named by `source` (FR-011, FR-027, FR-028, FR-029).
@@ -123,7 +140,36 @@ pub fn add(
     force: bool,
     catalogue: &[ConnectorDescriptor],
 ) -> Result<StagedConnector, AddError> {
+    add_with_server_url(dirs, workdir, source, force, catalogue, None)
+}
+
+/// [`add`], with the user's own server address for a tenant-hosted catalogue
+/// connector (one whose servers declare only an address pattern).
+///
+/// # Arguments
+///
+/// * `server_url` - the address to install a tenant-hosted connector with;
+///   `None` refuses such a connector with [`AddError::NeedsServerUrl`]. A
+///   local source refuses any address.
+///
+/// # Errors
+///
+/// See [`AddError`]. Every refusal leaves the store untouched.
+pub fn add_with_server_url(
+    dirs: &StoreDirs,
+    workdir: &Path,
+    source: &str,
+    force: bool,
+    catalogue: &[ConnectorDescriptor],
+    server_url: Option<&str>,
+) -> Result<StagedConnector, AddError> {
     match classify_source(source, workdir) {
+        InstallSource::Local(_) if server_url.is_some() => Err(AddError::ServerUrl(
+            crate::error::ConnectorError::ServerUrl {
+                id: source.to_string(),
+                detail: "--url applies only to a catalogue connector id".to_string(),
+            },
+        )),
         InstallSource::Local(local) => Ok(stage(dirs, workdir, &local, force)?),
         InstallSource::CatalogueId(id) => {
             let store = dirs
@@ -134,6 +180,18 @@ pub fn add(
                 .find(|d| d.id.as_str() == id)
                 .cloned()
                 .ok_or_else(|| AddError::CatalogueNotFound(id.clone()))?;
+            let descriptor = match (descriptor.server_url_pattern(), server_url) {
+                (_, Some(url)) => descriptor
+                    .with_server_url(url)
+                    .map_err(AddError::ServerUrl)?,
+                (Some(pattern), None) => {
+                    return Err(AddError::NeedsServerUrl {
+                        id,
+                        pattern: pattern.to_string(),
+                    });
+                }
+                (None, None) => descriptor,
+            };
             Ok(install_descriptor(store, descriptor, force)?)
         }
     }

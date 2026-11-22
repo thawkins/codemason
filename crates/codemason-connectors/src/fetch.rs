@@ -195,9 +195,79 @@ impl CatalogueFetcher for NetworkCatalogueFetcher {
         endpoint: &CatalogueEndpoint,
         limits: &CatalogueLimits,
     ) -> Result<ParsedCatalogue, ConnectorError> {
-        let bytes = fetch_bytes(endpoint, limits)?;
-        parse_catalogue(&*provider_for(kind), &bytes, endpoint.as_url())
+        fetch_catalogue_pages(kind, endpoint, |page| fetch_bytes(page, limits))
     }
+}
+
+/// The most pages one catalogue fetch follows, so a feed that never stops
+/// paging cannot hold the fetch forever.
+pub const MAX_CATALOGUE_PAGES: usize = 100;
+
+/// Fetch every page of a catalogue and merge them (FR-031).
+///
+/// The Claude connector directory pages its feed: each page carries a
+/// `next_cursor`, and the next page is the endpoint with `?cursor=<value>`.
+/// `get` downloads one page; the walk stops at a page with no (or an empty)
+/// `next_cursor`, at a cursor already seen, or after [`MAX_CATALOGUE_PAGES`].
+/// A document without `next_cursor` is a single page, as before.
+///
+/// # Arguments
+///
+/// * `kind` - the catalogue whose provider parses each page.
+/// * `endpoint` - the first page.
+/// * `get` - downloads one page's bytes.
+///
+/// # Errors
+///
+/// Returns the first [`ConnectorError`] `get` or a page's parse reports.
+pub fn fetch_catalogue_pages(
+    kind: CatalogueKind,
+    endpoint: &CatalogueEndpoint,
+    mut get: impl FnMut(&CatalogueEndpoint) -> Result<Vec<u8>, ConnectorError>,
+) -> Result<ParsedCatalogue, ConnectorError> {
+    let provider = provider_for(kind);
+    let mut merged = ParsedCatalogue {
+        connectors: Vec::new(),
+        skipped: 0,
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut page = endpoint.clone();
+    for _ in 0..MAX_CATALOGUE_PAGES {
+        let bytes = get(&page)?;
+        let parsed = parse_catalogue(&*provider, &bytes, page.as_url())?;
+        merged.connectors.extend(parsed.connectors);
+        merged.skipped += parsed.skipped;
+        let Some(cursor) = next_cursor(&bytes) else {
+            break;
+        };
+        if !seen.insert(cursor.clone()) {
+            break;
+        }
+        let mut url = endpoint.as_url().clone();
+        let kept: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key != "cursor")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        url.query_pairs_mut()
+            .clear()
+            .extend_pairs(kept)
+            .append_pair("cursor", &cursor);
+        page =
+            CatalogueEndpoint::parse(url.as_str()).map_err(|e| ConnectorError::CatalogueFetch {
+                detail: format!("next page: {e}"),
+            })?;
+    }
+    Ok(merged)
+}
+
+/// The non-empty top-level `next_cursor` string of a catalogue page.
+fn next_cursor(bytes: &[u8]) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    root.get("next_cursor")
+        .and_then(serde_json::Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .map(str::to_string)
 }
 
 /// The production catalogue fetcher (FR-024).

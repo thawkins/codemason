@@ -57,7 +57,7 @@ pub mod store;
 pub mod store_index;
 pub mod store_ops;
 
-pub use add::{AddError, InstallSource, add, classify_source};
+pub use add::{AddError, InstallSource, add, add_with_server_url, classify_source};
 pub use auth::{
     AuthAction, AuthError, AuthRequirement, AuthState, CredentialStore, EnvSource,
     InMemoryCredentialStore, MapEnv, NullCredentialStore, ProcessEnv, clear_secret,
@@ -68,8 +68,8 @@ pub use bridge::{
 };
 pub use browse::{
     ALL_CATEGORY, CatalogueBrowseStatus, CatalogueBrowser, CataloguePane, CategoryFilter,
-    CategoryFilterState, INSTALLED_CATEGORY, browse_install_report, build_categories,
-    entry_matches, is_installed_row_label,
+    CategoryFilterState, INSTALLED_CATEGORY, ServerUrlPrompt, browse_install_report,
+    build_categories, entry_matches, is_installed_row_label,
 };
 pub use commands::{
     AuthOutcome, AuthOutcomeError, CatalogueCacheMode, CatalogueDescriptors, ConnectorArgError,
@@ -93,8 +93,9 @@ pub use entry::{ConnectorEntry, ConnectorEntryError, normalise_transport};
 pub use error::ConnectorError;
 pub use fetch::{
     CACHE_DIR, CatalogueCache, CatalogueFetcher, CatalogueLimits, ConnectorCatalogue,
-    FetchedCatalogue, FixtureCatalogueFetcher, NetworkCatalogueFetcher, default_fetcher,
-    fetch_bytes, fetch_catalogue, now_unix_secs, read_capped,
+    FetchedCatalogue, FixtureCatalogueFetcher, MAX_CATALOGUE_PAGES, NetworkCatalogueFetcher,
+    default_fetcher, fetch_bytes, fetch_catalogue, fetch_catalogue_pages, now_unix_secs,
+    read_capped,
 };
 pub use harness::{
     HarnessError, HarnessReport, HarnessStep, McpProbe, ProbeTool, StepOutcome, render_report,

@@ -19,6 +19,7 @@ fn server() -> ConnectorServer {
         env: BTreeMap::new(),
         url: None,
         headers: BTreeMap::new(),
+        url_pattern: None,
     }
 }
 

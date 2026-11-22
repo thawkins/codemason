@@ -75,6 +75,7 @@ fn connector(id: &str) -> ConnectorDescriptor {
             env: Default::default(),
             url: None,
             headers: Default::default(),
+            url_pattern: None,
         }],
         unsupported: Vec::new(),
     }

@@ -70,6 +70,14 @@ pub const fn auth_sentence(auth: ConnectorAuthShape) -> &'static str {
     }
 }
 
+/// The badge a tenant-hosted connector shows: it installs only with the
+/// user's own server address.
+pub const NEEDS_SERVER_URL: &str = "Needs server URL";
+
+/// The sentence the details pane shows for a tenant-hosted connector.
+pub const NEEDS_SERVER_URL_SENTENCE: &str =
+    "Runs on your organisation's own server. Install asks for its address, which must match:";
+
 /// The server-count chip's label.
 ///
 /// # Arguments
@@ -107,6 +115,9 @@ pub fn row_extras(ui: &mut egui::Ui, palette: &Palette, row: &RowSnapshot) {
         Detail::Plugin(_) => return,
     };
     auth_badge_widget(ui, palette, detail.auth);
+    if detail.server_url_pattern.is_some() {
+        badge(ui, palette, BadgeTone::Secondary, NEEDS_SERVER_URL);
+    }
     chip_dense(
         ui,
         palette,
@@ -130,6 +141,19 @@ pub fn details(ui: &mut egui::Ui, palette: &Palette, row: &RowSnapshot) {
     };
     let text = rgb(palette.m3.on_surface);
     detail_field(ui, palette, "Marketplace", &detail.marketplace);
+    if let Some(pattern) = &detail.server_url_pattern {
+        detail_heading(ui, palette, "Server address");
+        badge(ui, palette, BadgeTone::Secondary, NEEDS_SERVER_URL);
+        ui.add(Label::new(RichText::new(NEEDS_SERVER_URL_SENTENCE).color(text)).wrap());
+        ui.add(
+            Label::new(
+                RichText::new(pattern)
+                    .monospace()
+                    .color(rgb(palette.m3.on_surface_variant)),
+            )
+            .wrap(),
+        );
+    }
     detail_heading(ui, palette, "Sign-in");
     auth_badge_widget(ui, palette, detail.auth);
     ui.add(Label::new(RichText::new(auth_sentence(detail.auth)).color(text)).wrap());

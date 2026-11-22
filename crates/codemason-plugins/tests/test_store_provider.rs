@@ -466,3 +466,65 @@ fn repo_root_source_variants_all_name_the_repository_root() {
         }
     });
 }
+
+/// The `anthropics/claude-plugins-community` marketplace names many
+/// `git-subdir` repositories in GitHub `owner/repo` shorthand rather than as an
+/// `https` URL; those entries resolve to the GitHub repository instead of being
+/// skipped as malformed.
+#[test]
+fn claude_git_subdir_github_shorthand_resolves_to_github() {
+    with_registry(|| {
+        let doc = br#"{"plugins":[
+            {"name":"api-security","description":"d",
+             "source":{"source":"git-subdir","url":"42Crunch-AI/claude-plugins",
+                       "path":"plugins/api-security-testing","ref":"v1.0.1","sha":"30287f5"}},
+            {"name":"not-a-repo","description":"d",
+             "source":{"source":"git-subdir","url":"just-a-name","path":"p"}}
+        ]}"#;
+        let index = provider_for(StoreKind::Claude)
+            .parse_index(doc, &origin(DEFAULT_CLAUDE_STORE_URL))
+            .expect("parses");
+        assert_eq!(index.entries.len(), 1, "the shorthand entry is kept");
+        assert_eq!(index.skipped, 1, "a bare name is still not a repository");
+        assert_eq!(
+            index.entries[0].source,
+            "git+https://github.com/42Crunch-AI/claude-plugins#v1.0.1:plugins/api-security-testing"
+        );
+    });
+}
+
+/// A `url` source that names a `path` installs that subdirectory, and a `ref`
+/// pins the checkout, for both stores (instead of the whole repo at `HEAD`).
+#[test]
+fn url_sources_honour_path_and_ref() {
+    with_registry(|| {
+        let doc = br#"{"plugins":[
+            {"name":"sub","description":"d",
+             "source":{"source":"url","url":"https://github.com/o/r.git",
+                       "path":"claude-plugin/sub","sha":"33d2ec9"}},
+            {"name":"pinned","description":"d",
+             "source":{"source":"url","url":"https://github.com/o/p.git","ref":"v1.4.2"}},
+            {"name":"both","description":"d",
+             "source":{"source":"url","url":"https://github.com/o/b.git",
+                       "path":"./plugins/b","ref":"main"}}
+        ]}"#;
+        for (kind, url) in [
+            (StoreKind::Claude, DEFAULT_CLAUDE_STORE_URL),
+            (StoreKind::Codex, DEFAULT_CODEX_STORE_URL),
+        ] {
+            let index = provider_for(kind)
+                .parse_index(doc, &origin(url))
+                .expect("parses");
+            let sources: Vec<&str> = index.entries.iter().map(|e| e.source.as_str()).collect();
+            assert_eq!(
+                sources,
+                [
+                    "git+https://github.com/o/r#HEAD:claude-plugin/sub",
+                    "git+https://github.com/o/p#v1.4.2",
+                    "git+https://github.com/o/b#main:plugins/b",
+                ],
+                "{kind:?}"
+            );
+        }
+    });
+}

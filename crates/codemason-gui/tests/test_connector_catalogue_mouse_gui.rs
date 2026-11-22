@@ -39,6 +39,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 

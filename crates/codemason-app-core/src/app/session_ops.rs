@@ -211,7 +211,8 @@ fn run_plugin_store_install(
 ///
 /// The catalogue-id install path resolves the descriptor from the live catalogue
 /// (the same fetch `search` uses), so the store is written exactly as
-/// `/connectors add <id>` would write it: the collision guard applies and the
+/// `/connectors add <id> [--url <server_url>]` would write it: the collision
+/// guard applies, a tenant-hosted connector takes `server_url`, and the
 /// connector is recorded **enabled**. The success report names the installed id
 /// and its enabled posture; every refusal becomes the `[err]` report naming the
 /// cause. Never panics.
@@ -220,6 +221,7 @@ fn run_connector_catalogue_install(
     workdir: &std::path::Path,
     config: &codemason_config::ConnectorsConfig,
     id: &str,
+    server_url: Option<&str>,
 ) -> ConnectorCatalogueInstallResult {
     // A catalogue fetch failure is surfaced as a fetch error, not silently
     // folded into "the catalogue holds no connector with this id" (which an
@@ -236,7 +238,9 @@ fn run_connector_catalogue_install(
             };
         }
     };
-    match codemason_connectors::add(dirs, workdir, id, false, &catalogue) {
+    match codemason_connectors::add_with_server_url(
+        dirs, workdir, id, false, &catalogue, server_url,
+    ) {
         Ok(outcome) => ConnectorCatalogueInstallResult {
             id: outcome.descriptor.id.as_str().to_string(),
             notice: format!("installed {id}"),
@@ -2730,8 +2734,94 @@ impl App {
             browser.last_install = Some(format!("connector {id} is already installed"));
             return;
         }
+        // A tenant-hosted connector (Glean, Databricks, ...) has no fixed
+        // server address: ask for the user's own before installing.
+        if let Some(pattern) = entry.server_url_pattern() {
+            browser.server_url_prompt = Some(codemason_connectors::ServerUrlPrompt {
+                id,
+                name: entry.name.clone(),
+                pattern: pattern.to_string(),
+                value: String::new(),
+                error: None,
+            });
+            return;
+        }
         browser.last_install = Some(format!("installing {id}..."));
-        self.spawn_connector_catalogue_install(id);
+        self.spawn_connector_catalogue_install(id, None);
+    }
+
+    /// Whether the connector catalogue's server-address prompt is open.
+    #[must_use]
+    pub fn connector_url_prompt_open(&self) -> bool {
+        self.connector_store
+            .as_ref()
+            .is_some_and(|browser| browser.server_url_prompt.is_some())
+    }
+
+    /// Append `text` (typed or pasted; line breaks dropped) to the open
+    /// server-address prompt and clear its last refusal.
+    pub fn connector_url_prompt_insert(&mut self, text: &str) {
+        if let Some(prompt) = self
+            .connector_store
+            .as_mut()
+            .and_then(|browser| browser.server_url_prompt.as_mut())
+        {
+            prompt
+                .value
+                .extend(text.chars().filter(|c| !c.is_control()));
+            prompt.error = None;
+        }
+    }
+
+    /// Remove the last character of the open server-address prompt.
+    pub fn connector_url_prompt_backspace(&mut self) {
+        if let Some(prompt) = self
+            .connector_store
+            .as_mut()
+            .and_then(|browser| browser.server_url_prompt.as_mut())
+        {
+            prompt.value.pop();
+            prompt.error = None;
+        }
+    }
+
+    /// Close the server-address prompt without installing.
+    pub fn connector_url_prompt_cancel(&mut self) {
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.server_url_prompt = None;
+        }
+    }
+
+    /// Submit the server-address prompt: an address that is not `https` or does
+    /// not match the connector's pattern stays in the prompt with the reason;
+    /// an accepted one closes the prompt and starts the install with it.
+    pub fn connector_url_prompt_submit(&mut self) {
+        let Some(browser) = self.connector_store.as_mut() else {
+            return;
+        };
+        let Some(prompt) = browser.server_url_prompt.as_mut() else {
+            return;
+        };
+        let checked = browser
+            .all
+            .iter()
+            .find(|entry| entry.id.as_str() == prompt.id)
+            .map(|entry| entry.clone().with_server_url(&prompt.value));
+        match checked {
+            Some(Ok(_)) => {
+                let id = prompt.id.clone();
+                let url = prompt.value.trim().to_string();
+                browser.server_url_prompt = None;
+                browser.last_install = Some(format!("installing {id}..."));
+                self.spawn_connector_catalogue_install(id, Some(url));
+            }
+            Some(Err(err)) => prompt.error = Some(err.to_string()),
+            None => {
+                let id = prompt.id.clone();
+                browser.server_url_prompt = None;
+                browser.last_install = Some(format!("connector {id} is no longer listed"));
+            }
+        }
     }
 
     /// Start the install of catalogued connector `id` off the event loop.
@@ -2743,7 +2833,7 @@ impl App {
     /// [`App::poll_connector_catalogue_install_result`]. When no worker thread can
     /// be spawned the install runs inline so the action still completes. No path
     /// panics.
-    fn spawn_connector_catalogue_install(&mut self, id: String) {
+    fn spawn_connector_catalogue_install(&mut self, id: String, server_url: Option<String>) {
         let (dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
         let workdir = self.cwd_path.clone();
         let slot = Arc::clone(&self.connector_catalogue_install_result);
@@ -2752,6 +2842,7 @@ impl App {
         let worker_dirs = dirs.clone();
         let worker_workdir = workdir.clone();
         let worker_config = config.clone();
+        let worker_url = server_url.clone();
         let spawn = std::thread::Builder::new()
             .name("connector-catalogue-install".to_owned())
             .spawn(move || {
@@ -2760,6 +2851,7 @@ impl App {
                     &worker_workdir,
                     &worker_config,
                     &worker_id,
+                    worker_url.as_deref(),
                 );
                 *recover_poisoned(slot.lock(), "connector_catalogue_install_result") = Some(result);
             });
@@ -2772,7 +2864,13 @@ impl App {
             }
             Err(err) => {
                 tracing::warn!(error = %err, "connector-catalogue install worker spawn failed; running inline");
-                let result = run_connector_catalogue_install(&dirs, &workdir, &config, &id);
+                let result = run_connector_catalogue_install(
+                    &dirs,
+                    &workdir,
+                    &config,
+                    &id,
+                    server_url.as_deref(),
+                );
                 if result.succeeded {
                     self.refresh_connector_catalogue_installed();
                 }

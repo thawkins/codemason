@@ -114,8 +114,8 @@ impl ConnectorEntry {
 
         let name = optional_str(map, "name").or_else(|| optional_str(map, "display_name"));
         // The id preference is: the explicit `id` when it is already a readable
-        // key, otherwise the `slug`, otherwise the display name, with the raw
-        // `id` accepted only as the last resort. A catalogue that ships UUID
+        // key, otherwise the `slug`, otherwise the display name (as is, then
+        // slugified), with the raw `id` accepted only as the last resort. A catalogue that ships UUID
         // `id`s (the Claude connector directory) is therefore named by its
         // readable slug or display name; a catalogue whose `id` is already
         // human-readable (`echo`, `google-drive`) keeps that stable id. Each
@@ -128,6 +128,14 @@ impl ConnectorEntry {
             slug
         } else if usable_connector_id(name.as_deref()) {
             name.clone()
+        } else if let Some(slugged) = name
+            .as_deref()
+            .map(slugify)
+            .filter(|s| usable_connector_id(Some(s)))
+        {
+            Some(slugged)
+        } else if usable_connector_id(explicit_id.as_deref()) {
+            explicit_id
         } else {
             None
         };
@@ -284,6 +292,7 @@ fn parse_server(
         env: string_map(map, "env"),
         url: optional_str(map, "url").or_else(|| first_url_option(map)),
         headers: string_map(map, "headers"),
+        url_pattern: optional_str(map, "url_regex"),
     })
 }
 
@@ -367,6 +376,21 @@ fn usable_connector_id(candidate: Option<&str>) -> bool {
 /// component) is still accepted as the last resort.
 fn readable_connector_id(candidate: Option<&str>) -> bool {
     usable_connector_id(candidate) && !candidate.is_some_and(is_uuid)
+}
+
+/// `value` lowercased with every run of characters other than ASCII letters
+/// and digits collapsed to one `-`, trimmed of `-` at both ends
+/// (`"Health Data Avatar (HDA)"` -> `"health-data-avatar-hda"`).
+fn slugify(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 /// Whether `value` is a canonical 8-4-4-4-12 hyphenated hexadecimal UUID.

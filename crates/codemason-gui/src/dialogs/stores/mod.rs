@@ -21,6 +21,9 @@
 //! click on a result, a row's Install or the details' Install moves the
 //! highlight there, focuses the results and sends Enter. Clear search,
 //! Close, Refresh, Retry and the switcher call the App's own actions.
+//! Install on a tenant-hosted connector (tagged "Needs server URL") opens
+//! the App's server-address prompt, drawn over the catalogue; its typed keys
+//! and pastes ([`prepare_connector_store`]) reach the App.
 //!
 //! Dependencies: `codemason-app-core`, `codemason-connectors`,
 //! `codemason-plugins` (`StoreKind`) and `egui`.
@@ -83,6 +86,12 @@ pub const PLUGIN_STORE_TITLE: &str = "Plugin Store";
 
 /// The connector catalogue's title.
 pub const CONNECTORS_TITLE: &str = "Connectors";
+
+/// The server-address prompt's field label (a tenant-hosted connector).
+pub const SERVER_ADDRESS: &str = "Server address";
+
+/// The server-address prompt's cancel button.
+pub const CANCEL: &str = "Cancel";
 
 /// The plugin store's kind switcher, in [`StoreKind`] order.
 pub const KIND_OPTIONS: [&str; 2] = ["Codex", "Claude"];
@@ -234,18 +243,103 @@ pub fn show_connector_store(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     };
     let snap = StoreSnapshot::connector(browser);
+    let prompt = browser.server_url_prompt.clone();
     let palette = crate::palette::palette_for(app, ctx);
-    let Some(click) = frame::draw(
+    let click = frame::draw(
         ctx,
         &palette,
         "codemason_connector_store",
         &snap,
         &connector::LOOK,
-    ) else {
+    );
+    if let Some(prompt) = prompt {
+        // Over the catalogue, the prompt takes every click and key.
+        server_url_prompt(ctx, &palette, &prompt);
         return true;
-    };
-    apply_connector(ctx, app, click);
+    }
+    if let Some(click) = click {
+        apply_connector(ctx, app, click);
+    }
     true
+}
+
+/// Take this frame's pastes into the connector catalogue's open
+/// server-address prompt, before the key router (egui delivers Ctrl+V as a
+/// paste event only, so app-core never sees it as keys).
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context, before the router reads input.
+/// * `app` - the App whose prompt receives the paste.
+pub fn prepare_connector_store(ctx: &egui::Context, app: &mut App) {
+    if !app.connector_url_prompt_open() {
+        return;
+    }
+    let mut pasted = Vec::new();
+    ctx.input_mut(|input| {
+        input.events.retain(|event| match event {
+            egui::Event::Paste(text) => {
+                pasted.push(text.clone());
+                false
+            }
+            _ => true,
+        });
+    });
+    for text in pasted {
+        app.connector_url_prompt_insert(&text);
+    }
+}
+
+/// The server-address prompt of a tenant-hosted connector: what it needs,
+/// the address field (typed keys and pastes reach it through the App), the
+/// refusal if the last address was refused, and Cancel / Install, which
+/// send Esc / Enter.
+fn server_url_prompt(
+    ctx: &egui::Context,
+    palette: &crate::palette::Palette,
+    prompt: &codemason_connectors::ServerUrlPrompt,
+) {
+    use crate::material::button::{ButtonKind, button};
+    use crate::material::dialog::{dialog_actions, dialog_body};
+    use crate::material::text_field::outlined_value;
+    let title = format!("Connect {}", prompt.name);
+    super::material_modal(
+        ctx,
+        palette,
+        "codemason_connector_url",
+        &title,
+        480.0,
+        |ui| {
+            dialog_body(
+                ui,
+                palette,
+                &format!(
+                    "{} runs on your organisation's own server. Enter its https address; \
+                 it must match {}",
+                    prompt.name, prompt.pattern
+                ),
+            );
+            ui.add_space(crate::metrics::space::MD);
+            outlined_value(
+                ui,
+                palette,
+                SERVER_ADDRESS,
+                &prompt.value,
+                true,
+                prompt.error.as_deref(),
+                prompt.error.is_some(),
+            );
+            ui.add_space(crate::metrics::space::MD);
+            dialog_actions(ui, |ui| {
+                if button(ui, palette, ButtonKind::Filled, None, INSTALL).clicked() {
+                    send_key(ctx, plain(Key::Enter));
+                }
+                if button(ui, palette, ButtonKind::Text, None, CANCEL).clicked() {
+                    send_key(ctx, plain(Key::Esc));
+                }
+            });
+        },
+    );
 }
 
 /// Do what `click` asks of the connector catalogue.

@@ -24,6 +24,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 
@@ -185,3 +186,72 @@ fn a_declared_category_named_installed_never_forms_a_second_row() {
 // ---------------------------------------------------------------------------
 // The row template: accent columns, the zebra band, and full-edge description
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Tenant-hosted connectors: the server-address prompt
+// ---------------------------------------------------------------------------
+
+/// A connector whose one http server has no address, only the pattern the
+/// user's own address must match.
+fn tenant(id: &str) -> ConnectorDescriptor {
+    ConnectorDescriptor {
+        servers: vec![ConnectorServer {
+            transport: "http".to_string(),
+            command: None,
+            url_pattern: Some("^https://[^/]+\\.glean\\.com/mcp/".to_string()),
+            ..server()
+        }],
+        ..descriptor(id, "productivity")
+    }
+}
+
+#[tokio::test]
+async fn enter_on_a_tenant_connector_opens_the_address_prompt() {
+    let mut app = open(vec![tenant("glean")], &[], 0);
+    crate::term_events::handle_key(&mut app, key(KeyCode::Enter)).await;
+    let prompt = app
+        .connector_store
+        .as_ref()
+        .and_then(|b| b.server_url_prompt.as_ref())
+        .expect("the prompt opens instead of installing");
+    assert_eq!(prompt.id, "glean");
+    assert_eq!(prompt.pattern, "^https://[^/]+\\.glean\\.com/mcp/");
+    assert_eq!(prompt.value, "");
+}
+
+#[tokio::test]
+async fn the_address_prompt_edits_refuses_a_bad_address_and_cancels() {
+    let mut app = open(vec![tenant("glean")], &[], 0);
+    crate::term_events::handle_key(&mut app, key(KeyCode::Enter)).await;
+    for c in "https://x.example.com/mcp/z".chars() {
+        crate::term_events::handle_key(&mut app, key(KeyCode::Char(c))).await;
+    }
+    crate::term_events::handle_key(&mut app, key(KeyCode::Backspace)).await;
+    crate::term_events::handle_key(&mut app, key(KeyCode::Enter)).await;
+    let prompt = app
+        .connector_store
+        .as_ref()
+        .and_then(|b| b.server_url_prompt.as_ref())
+        .expect("a refused address keeps the prompt open");
+    assert_eq!(prompt.value, "https://x.example.com/mcp/");
+    assert!(
+        prompt
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("does not match")),
+        "{:?}",
+        prompt.error
+    );
+    assert_eq!(
+        app.connector_store.as_ref().unwrap().query,
+        "",
+        "search untouched"
+    );
+
+    crate::term_events::handle_key(&mut app, key(KeyCode::Esc)).await;
+    let browser = app
+        .connector_store
+        .as_ref()
+        .expect("Esc closes only the prompt");
+    assert!(browser.server_url_prompt.is_none());
+}

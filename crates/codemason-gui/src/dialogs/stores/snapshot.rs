@@ -85,6 +85,9 @@ pub struct ConnectorDetail {
     pub servers: Vec<ServerSnapshot>,
     /// Where the descriptor came from.
     pub source: String,
+    /// The pattern the user's own server address must match, when the
+    /// connector is tenant-hosted and has no fixed address.
+    pub server_url_pattern: Option<String>,
 }
 
 /// One MCP server of a connector.
@@ -256,6 +259,7 @@ impl StoreSnapshot {
                 tags: entry.tags.clone(),
                 installed: browser.is_installed(entry.id.as_str()),
                 detail: Detail::Connector(ConnectorDetail {
+                    server_url_pattern: entry.server_url_pattern().map(str::to_string),
                     category: entry.category.clone(),
                     marketplace: entry.marketplace.clone(),
                     auth: entry.auth,

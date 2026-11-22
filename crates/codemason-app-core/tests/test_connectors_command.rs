@@ -277,6 +277,7 @@ async fn list_reports_a_bridged_server_connected_from_the_live_client() {
             env: Default::default(),
             url: Some("https://example.invalid/mcp".to_string()),
             headers: Default::default(),
+            url_pattern: None,
         }],
         unsupported: Vec::new(),
     };

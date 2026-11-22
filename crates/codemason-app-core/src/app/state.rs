@@ -1067,7 +1067,7 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     },
     SlashCommandDef {
         trigger: "connectors",
-        description: "Connector management: /connectors list [--verbose] [--category <name>] | claude [query] [--category <name>] [--refresh] | add <id|source> [--force] | remove <id> | enable <id> | disable <id> | connect <id> | disconnect <id> | auth <id> | test <id> | stores [--check] | marketplace show | help",
+        description: "Connector management: /connectors list [--verbose] [--category <name>] | claude [query] [--category <name>] [--refresh] | add <id|source> [--force] [--url <address>] | remove <id> | enable <id> | disable <id> | connect <id> | disconnect <id> | auth <id> | test <id> | stores [--check] | marketplace show | help",
     },
     SlashCommandDef {
         trigger: "research",

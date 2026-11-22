@@ -382,6 +382,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
         Some(ActiveDialog::LoopSetup) => loop_setup::prepare(ctx, app),
         Some(ActiveDialog::ContextMenu) => context_menu::prepare(ctx, app),
         Some(ActiveDialog::Palette) => palette::prepare(ctx),
+        Some(ActiveDialog::ConnectorStore) => stores::prepare_connector_store(ctx, app),
         Some(
             ActiveDialog::ConfigSavePicker
             | ActiveDialog::ThemeEditor
@@ -389,7 +390,6 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
             | ActiveDialog::HistoryPicker
             | ActiveDialog::RouterSave
             | ActiveDialog::PluginStore
-            | ActiveDialog::ConnectorStore
             | ActiveDialog::BackendPanel
             | ActiveDialog::McpDiscover
             | ActiveDialog::PluginsList

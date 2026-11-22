@@ -68,7 +68,7 @@ reach an external system through one or more MCP servers.
 |---|---|---|
 | `/connectors list [--verbose] [--category <name>]` | optional | List installed connectors with state, auth state, category, and bridged server and tool counts. `--category` filters by category. |
 | `/connectors claude [query] [--category <name>] [--refresh]` | optional | Open the interactive Claude connector-catalogue browser (filter, browse, and install with one key). An optional `query` pre-fills the search field, `--category` pre-filters by category, and `--refresh` bypasses the catalogue cache. |
-| `/connectors add <id|source> [--force]` | required `id|source` | Install a connector. It is recorded enabled; `/connectors enable` connects it now in a running session. |
+| `/connectors add <id|source> [--force] [--url <address>]` | required `id|source` | Install a connector. It is recorded enabled; `/connectors enable` connects it now in a running session. A catalogue connector marked Needs server URL needs `--url` with your own `https` server address. |
 | `/connectors remove <id>` | required `id` | Uninstall a connector. Refused while the connector is enabled. |
 | `/connectors enable <id>` | required `id` | Enable a connector and connect its servers now. |
 | `/connectors disable <id>` | required `id` | Disable a connector and disconnect its servers. |

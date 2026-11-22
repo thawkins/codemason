@@ -46,6 +46,7 @@ fn stdio_server(id: &str) -> ConnectorServer {
         env: BTreeMap::from([("API_KEY".to_string(), ENV_SECRET.to_string())]),
         url: None,
         headers: BTreeMap::new(),
+        url_pattern: None,
     }
 }
 
@@ -60,6 +61,7 @@ fn http_server(id: &str) -> ConnectorServer {
         env: BTreeMap::new(),
         url: Some(format!("https://mcp.example.org/{id}")),
         headers: BTreeMap::from([("Authorization".to_string(), HEADER_SECRET.to_string())]),
+        url_pattern: None,
     }
 }
 
@@ -272,4 +274,92 @@ fn test_connector_dialog_each_auth_shape_has_sentence() {
     }
     assert_eq!(server_count_label(1), "1 server");
     assert_eq!(server_count_label(3), "3 servers");
+}
+
+/// A tenant-hosted connector: its one http server has no address, only the
+/// pattern the user's own address must match.
+fn tenant() -> ConnectorDescriptor {
+    let mut tenant = descriptor("tenant", ConnectorAuthShape::Oauth);
+    tenant.servers = vec![ConnectorServer {
+        url: None,
+        url_pattern: Some("^https://[^/]+\\.tenant\\.test/mcp".to_string()),
+        ..http_server("main")
+    }];
+    tenant
+}
+
+#[test]
+fn test_connector_dialog_tenant_connector_shows_needs_server_url_badge() {
+    use codemason_gui::dialogs::stores::connector::NEEDS_SERVER_URL;
+    let harness = rig(app_with(vec![
+        tenant(),
+        descriptor("plain", ConnectorAuthShape::None),
+    ]));
+    let row_has_badge = |id: &str| {
+        let row = harness.get_by_role_and_label(Role::ListItem, id).rect();
+        harness
+            .query_all_by_label(NEEDS_SERVER_URL)
+            .any(|node| row.contains_rect(node.rect()))
+    };
+    assert!(row_has_badge("tenant"), "the tenant row is tagged");
+    assert!(!row_has_badge("plain"), "a fixed-address row is not");
+
+    let mut app = app_with(vec![tenant()]);
+    app.connector_store.as_mut().expect("open").cursor = 0;
+    let harness = rig(app);
+    assert!(in_details(&harness, NEEDS_SERVER_URL));
+    assert!(in_details(&harness, "^https://[^/]+\\.tenant\\.test/mcp"));
+}
+
+/// A harness drawing the Connectors dialog, routing pastes into its prompt
+/// and collecting the keys it sends.
+fn prompt_rig(app: App) -> Harness<'static, (App, Vec<codemason_app_core::input_event::KeyInput>)> {
+    let mut harness = support_material::builder().with_size(WIDE).build_ui_state(
+        |ui, state: &mut (App, Vec<codemason_app_core::input_event::KeyInput>)| {
+            codemason_gui::dialogs::stores::prepare_connector_store(ui.ctx(), &mut state.0);
+            show_connector_store(ui.ctx(), &mut state.0);
+            state.1.extend(codemason_gui::dialogs::take_keys(ui.ctx()));
+        },
+        (app, Vec::new()),
+    );
+    harness.run();
+    harness
+}
+
+#[test]
+fn test_connector_dialog_server_url_prompt_takes_paste_and_installs_on_click() {
+    use codemason_app_core::input_event::Key;
+    use codemason_gui::dialogs::stores::{INSTALL, SERVER_ADDRESS};
+    let mut app = app_with(vec![tenant()]);
+    app.connector_catalogue_install_selected();
+    let mut harness = prompt_rig(app);
+    harness.get_by_role_and_label(Role::Dialog, "Connect tenant");
+    harness.event(egui::Event::Paste(
+        "https://acme.tenant.test/mcp".to_string(),
+    ));
+    harness.run();
+    let value = harness
+        .state()
+        .0
+        .connector_store
+        .as_ref()
+        .and_then(|b| b.server_url_prompt.as_ref())
+        .map(|p| p.value.clone());
+    assert_eq!(value.as_deref(), Some("https://acme.tenant.test/mcp"));
+    let dialog = harness
+        .get_by_role_and_label(Role::Dialog, "Connect tenant")
+        .rect();
+    // The prompt's address field (an accessibility node without a rect).
+    harness.get_by_role_and_label(Role::TextInput, SERVER_ADDRESS);
+    harness
+        .get_all_by_role_and_label(Role::Button, INSTALL)
+        .find(|node| dialog.contains_rect(node.rect()))
+        .expect("the prompt's Install")
+        .click();
+    harness.run();
+    assert!(
+        harness.state().1.iter().any(|k| k.key == Key::Enter),
+        "Install sends Enter to the prompt: {:?}",
+        harness.state().1
+    );
 }

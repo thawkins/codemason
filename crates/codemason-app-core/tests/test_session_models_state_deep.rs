@@ -579,6 +579,7 @@ async fn connector_catalogue_install_selected_records_in_flight_notice() {
                 env: Default::default(),
                 url: None,
                 headers: Default::default(),
+                url_pattern: None,
             }],
             unsupported: Vec::new(),
         }],
@@ -1737,4 +1738,59 @@ fn refresh_plugin_store_installed_is_a_noop_without_a_panel() {
     app.refresh_plugin_store_installed();
 
     assert!(app.plugin_store.is_none());
+}
+
+#[tokio::test]
+async fn connector_url_prompt_submit_with_a_matching_address_starts_the_install() {
+    // Isolated: the install worker this starts resolves its store and catalogue
+    // from the temporary project, never the real configuration.
+    let (_g, _e, _t, mut app) = isolated_app();
+    let mut browser = CatalogueBrowser::new("", false);
+    browser.set_entries(
+        vec![codemason_connectors::ConnectorDescriptor {
+            id: codemason_connectors::ConnectorId::new("tenant").expect("valid id"),
+            name: "Tenant".to_string(),
+            description: "tenant-hosted connector".to_string(),
+            category: "developer".to_string(),
+            tags: Vec::new(),
+            source: "https://example.org/tenant.json".to_string(),
+            marketplace: String::new(),
+            provenance: Default::default(),
+            auth: codemason_connectors::ConnectorAuthShape::Oauth,
+            auth_scope: Vec::new(),
+            credential: None,
+            servers: vec![codemason_connectors::ConnectorServer {
+                id: "main".to_string(),
+                transport: "http".to_string(),
+                command: None,
+                args: Vec::new(),
+                env: Default::default(),
+                url: None,
+                headers: Default::default(),
+                url_pattern: Some("^https://[^/]+\\.tenant\\.test/mcp".to_string()),
+            }],
+            unsupported: Vec::new(),
+        }],
+        0,
+    );
+    app.connector_store = Some(browser);
+
+    app.connector_catalogue_install_selected();
+    app.connector_url_prompt_insert("https://acme.tenant.test/mcp\n");
+    assert_eq!(
+        app.connector_store
+            .as_ref()
+            .and_then(|b| b.server_url_prompt.as_ref())
+            .map(|p| p.value.clone()),
+        Some("https://acme.tenant.test/mcp".to_string()),
+        "a pasted line break is dropped"
+    );
+    app.connector_url_prompt_submit();
+
+    let browser = app.connector_store.as_ref().expect("panel open");
+    assert!(browser.server_url_prompt.is_none());
+    assert_eq!(
+        browser.last_install.as_deref(),
+        Some("installing tenant...")
+    );
 }
