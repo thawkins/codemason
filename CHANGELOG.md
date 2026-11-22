@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added: `/swarm` subtasks that depend on others now start with their predecessors' results. `team_task_complete` takes an optional `result` (cut at 16 KiB), stored on the task in `tasks.json`; when a blocked swarm teammate is unblocked its prompt is rebuilt with a "Results from dependencies" section (up to 4 KiB per predecessor), and the completion table gains a Result column.
+- Added: a finished `/swarm` combines its task results into one answer. With a model selected, one LLM call (`SYNTHESIS_SYSTEM_PROMPT`) receives the goal and each task's status and result, and its answer is shown as "Swarm Result" ("Synthesis Failed" when the call fails).
+
+### Fixed
+
+- Fixed: a swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate no longer takes another subtask with only its task id (no description, no dependency results).
+- Fixed: `CodemasonCompleter` (used by `/swarm` decomposition, swarm synthesis and `/research`) fails on a provider stream error and stops on `Finish`, so a failed stream is reported ("Swarm Error", "Synthesis Failed") instead of returning a partial answer as success.
+- Fixed: cancelling a swarm aborts its synthesis call, and an answer for a swarm that is gone is dropped.
+- Fixed: the `/swarm` goal is kept in the swarm state instead of being blanked when the decomposition returns.
+- Fixed: SPEC lists `/swarm cancel`, not the non-existent `/swarm kill`, and documents the real decomposition format.
+
 ## [1.0.179] - 2026-11-22
 
 Plugin Store and Connectors browsers, and more of the marketplaces installable.

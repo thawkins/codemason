@@ -74,13 +74,16 @@ pub use store::{
     validate_team_name,
 };
 pub use swarm::{
-    DECOMPOSITION_SYSTEM_PROMPT, SwarmDecomposition, SwarmState, SwarmSubtask,
-    build_decomposition_user_prompt, parse_decomposition, parse_decomposition_with_default,
+    DECOMPOSITION_SYSTEM_PROMPT, MAX_PREDECESSOR_RESULT_BYTES, SYNTHESIS_SYSTEM_PROMPT,
+    SwarmDecomposition, SwarmState, SwarmSubtask, build_decomposition_user_prompt,
+    build_swarm_task_prompt, build_synthesis_user_prompt, parse_decomposition,
+    parse_decomposition_with_default, swarm_prompt_with_results,
 };
 pub use task::{
     CompletionRefusal, CompletionRefusalReason, Task, TaskCancellation, TaskClaim, TaskList,
     TaskStatus, TaskStore, TaskTransition, cancel_task_in_list, claim_task_in_list,
-    complete_task_in_list, fire_task_created_hook, fire_task_hook, transition_task,
+    complete_task_in_list, fire_task_created_hook, fire_task_hook, record_task_result,
+    transition_task,
 };
 
 // -- Prose spellings (FR-032, FR-033) ---------------------------------------------

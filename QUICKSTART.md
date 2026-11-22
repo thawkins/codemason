@@ -844,6 +844,16 @@ Use `team_spawn` with a role-specific prompt:
   `depends_on` id naming no task, or an edge that would close a cycle, is refused
   (`refusing to write invalid <path>: ...`) and the file is left byte-identical.
 
+### Swarms
+
+`/swarm <goal>` splits a goal into subtasks and runs one teammate per subtask
+(`/swarm status`, `/swarm cancel`, `/swarm help`).
+
+- A teammate finishes with `team_task_complete` and an optional `result`; a
+  subtask that depends on it starts with that result in its prompt.
+- When every subtask is done, the selected model combines the results into one
+  answer, shown as "Swarm Result".
+
 ### Communicate and close out
 
 - Lead message teammate: `/team message <name> <text>` or `team_message`

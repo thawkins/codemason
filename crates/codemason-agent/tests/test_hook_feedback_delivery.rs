@@ -408,7 +408,7 @@ async fn the_trait_default_refuses_rather_than_completing() {
     }
 
     let err = NoCompletion
-        .complete_task_in(Path::new("/nonexistent"), "task-001", "tm-001")
+        .complete_task_in(Path::new("/nonexistent"), "task-001", "tm-001", None)
         .await
         .expect_err("the default arm must refuse");
     assert!(

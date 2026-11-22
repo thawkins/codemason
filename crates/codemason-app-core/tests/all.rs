@@ -171,6 +171,8 @@ mod test_codeindex_toggle_safety;
 mod test_command_catalog;
 #[path = "test_compaction_result.rs"]
 mod test_compaction_result;
+#[path = "test_completer_stream_error.rs"]
+mod test_completer_stream_error;
 #[path = "test_compression_indicator.rs"]
 mod test_compression_indicator;
 #[path = "test_config_write.rs"]
@@ -597,6 +599,10 @@ mod test_svg_attachments;
 mod test_swarm_more;
 #[path = "test_swarm_offload.rs"]
 mod test_swarm_offload;
+#[path = "test_swarm_result_handoff.rs"]
+mod test_swarm_result_handoff;
+#[path = "test_swarm_synthesis.rs"]
+mod test_swarm_synthesis;
 #[path = "test_syntax_highlight.rs"]
 mod test_syntax_highlight;
 #[path = "test_tasks_panel.rs"]

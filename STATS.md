@@ -19,6 +19,18 @@
 > root package). The full workspace suite was not re-run for this release; the
 > four touched crates ran 5,074 tests, all passing.
 
+> **Swarm result passing and synthesis (unreleased).** No crate is added or
+> removed. Team tasks carry an optional `result` (`team/task.rs`,
+> `tool/team_task_complete.rs`), dependent swarm subtasks receive their
+> predecessors' results (`team/swarm.rs` `build_swarm_task_prompt`,
+> `app/swarm.rs` `poll_swarm_unblock`), and a finished swarm runs one synthesis
+> call (`SYNTHESIS_SYSTEM_PROMPT`, `swarm_synthesis_result`). Three test files
+> are new (`test_team_task_result` and, in `codemason-app-core`,
+> `test_swarm_result_handoff` and `test_swarm_synthesis`), with additions to
+> `test_team_swarm`: 17 Rust files changed, +936 / -53 lines. The tables below
+> were not re-measured for this change; 329 tests across 11 swarm-related
+> modules pass, and the full workspace suite was not run.
+
 > **Theme editor review (1.0.178).** No crate is added or removed. The
 > 1.0.177 theme editor is reviewed and de-duplicated. The review closes four
 > defects in `theme_tokens.rs` (atomic uniquely named write temp file, the

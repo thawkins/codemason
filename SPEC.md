@@ -2758,7 +2758,7 @@ repository and does not use ETags.
 | `/team message ...` | Send team message |
 | `/swarm <prompt>` | Decompose prompt into parallel subtasks |
 | `/swarm status` | Show active swarm tasks |
-| `/swarm kill` | Cancel active swarm |
+| `/swarm cancel` | Cancel active swarm and clean up its team |
 | `/spawn <agent> <prompt...>` | Launch a detached fire-and-forget background sub-agent from the input line (spec `spawnagent`); not listed by `list_agents`, not awaitable via `wait_agents`, its result never injected back into the chat |
 | `/autopilot on\|off` | Toggle autonomous mode |
 | `/spec create\|specify\|plan\|tasks\|update\|add\|feedback\|jtbd\|list\|search\|show\|validate\|status\|task\|impl\|coverage\|activate\|deactivate\|delete` | Spec lifecycle and SDD commands |
@@ -4399,8 +4399,14 @@ the only override, and `/team cleanup` and `/team delete` share the guard).
 ### 15.1 How Swarm Works
 
 The `/swarm <prompt>` slash command decomposes a user request into parallel
-subtasks and spawns multiple agents to work on them concurrently. A synthesis
-agent combines the outputs into a final answer.
+subtasks and spawns multiple agents to work on them concurrently. When every
+subtask has finished and at least one completed, a synthesis step (one LLM call
+on the session's selected model, `SYNTHESIS_SYSTEM_PROMPT`) combines the goal
+and each task's status and stored result into a final answer, shown in the chat
+as "Swarm Result". With no model selected the swarm ends with the status table
+only; a failed synthesis call (including a provider stream error) is reported
+as "Synthesis Failed". Cancelling the swarm aborts a synthesis call still in
+flight, and an answer for a swarm that is no longer current is dropped.
 
 ### 15.2 Swarm Slash Commands
 
@@ -4408,20 +4414,34 @@ agent combines the outputs into a final answer.
 |---------|---------|
 | `/swarm <prompt>` | Decompose and run parallel swarm |
 | `/swarm status` | Show active swarm tasks |
-| `/swarm kill` | Cancel active swarm |
+| `/swarm cancel` | Cancel active swarm and clean up its team |
 
 ### 15.3 Decomposition Format
 
-Swarm decomposition returns a JSON or Markdown list of subtasks:
+Swarm decomposition returns a JSON list of subtasks (`SwarmDecomposition`);
+`agent_type` and `model` are optional:
 
 ```json
 {
   "tasks": [
-    { "id": "1", "agent": "explore", "prompt": "Find all auth-related files" },
-    { "id": "2", "agent": "code-review", "prompt": "Review auth logic for issues" }
+    { "id": "s1", "title": "Find auth files", "description": "Find all auth-related files",
+      "depends_on": [], "agent_type": "explore" },
+    { "id": "s2", "title": "Review auth", "description": "Review auth logic for issues",
+      "depends_on": ["s1"] }
   ]
 }
 ```
+
+A teammate completes its task with `team_task_complete`, passing an optional
+`result` (a short account of what it found or changed, cut at 16 KiB). The
+result is stored on the task in `tasks.json`. A swarm team runs with
+`auto_claim_tasks` off: each task is pre-assigned to its own teammate (a ready
+task at spawn, a dependent one at unblock), so an idle teammate never takes
+another subtask without its description and dependency results. When a blocked subtask is
+unblocked, its prompt is rebuilt with a "Results from dependencies" section
+holding each predecessor's result (up to 4 KiB each); a predecessor with no
+result is marked so the teammate inspects its changes directly. The
+completion report shows the first line of each task's result.
 
 ### 15.4 Swarm State
 
