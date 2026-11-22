@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed: `/swarm` decomposition and `/research` now fail with `LLM stream error: <message>` when the provider stream errors mid-response, instead of treating the partial (or empty) text as a successful answer; the one-shot completer also stops reading at the stream's `Finish` event.
+
 ## [1.0.179] - 2026-11-22
 
 Plugin Store and Connectors browsers, and more of the marketplaces installable.
