@@ -654,6 +654,22 @@ impl ActivityLog {
         )
     }
 
+    /// Records a model-step event: how one model response ended (finish
+    /// reason, token counts, text and reasoning sizes, tool-call count).
+    ///
+    /// On success returns the persisted event.
+    ///
+    /// # Errors
+    ///
+    /// See [`ActivityLog::append_new`] and [`AppendError`].
+    pub fn record_model_step(
+        &self,
+        run_id: &RunId,
+        step: codemason_types::activity::ModelStep,
+    ) -> std::result::Result<ActivityEvent, AppendError> {
+        self.append_new(run_id, EventKind::ModelStep(step))
+    }
+
     /// Records a tool-call event (FR-004) - the invocation of a tool -
     /// appending it to the run's event log before the tool executes.
     ///

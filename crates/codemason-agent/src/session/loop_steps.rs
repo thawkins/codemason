@@ -986,6 +986,19 @@ impl SessionProcessor {
             // `ContentPart`s) on every retry attempt.
             let attempt_messages =
                 build_attempt_messages(loop_state, &text_buffer, is_truncation_continuation);
+            // Keep the reply-language rule next to the point of generation; the
+            // copy is made only when a reminder is configured.
+            let attempt_messages = match turn.session_config.response_language.as_deref() {
+                Some(language) if !language.trim().is_empty() => {
+                    let mut msgs = (*attempt_messages).clone();
+                    crate::session::prompt_builders::append_language_reminder(
+                        &mut msgs,
+                        Some(language),
+                    );
+                    Arc::new(msgs)
+                }
+                _ => attempt_messages,
+            };
             let attempt_request = ChatRequest {
                 model: turn.model_ref.model_id.clone(),
                 messages: attempt_messages,

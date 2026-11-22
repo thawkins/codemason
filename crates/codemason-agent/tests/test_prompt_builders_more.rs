@@ -235,3 +235,14 @@ fn registry_arc_is_shareable() {
     let registry: Arc<ToolRegistry> = Arc::new(create_default_registry());
     assert!(!registry.definitions().is_empty());
 }
+
+#[test]
+fn language_reminder_is_appended_through_the_shim() {
+    use codemason_agent::llm::{ChatContent, ChatMessage};
+    let mut msgs = vec![ChatMessage {
+        role: "user".to_string(),
+        content: ChatContent::Text("continue".to_string()),
+    }];
+    prompt_builders::append_language_reminder(&mut msgs, Some("English"));
+    assert!(matches!(&msgs[0].content, ChatContent::Text(t) if t.ends_with("[Reply in English.]")));
+}

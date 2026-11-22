@@ -34,7 +34,7 @@ use crate::id::{EventId, RunId};
 /// Bump this when the wire format of any [`EventKind`] payload changes in a
 /// way that is not backwards-compatible. The version travels with each event
 /// (NFR-003) so older logs remain replayable.
-pub const ACTIVITY_EVENT_SCHEMA_VERSION: u32 = 1;
+pub const ACTIVITY_EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// The lifecycle state of a run, derived from the event log.
 ///
@@ -139,6 +139,12 @@ pub enum EventKind {
         /// The provider-assigned message identifier, if any.
         message_id: Option<String>,
     },
+    /// One model response finished: how it ended and how large it was.
+    ///
+    /// Recorded after every model call so a step that ended a turn can be
+    /// compared with normal tool-calling steps when a loop stalls. Added in
+    /// schema version 2.
+    ModelStep(ModelStep),
     /// A tool was invoked (FR-004). Paired with a later
     /// [`EventKind::ToolResult`] event sharing the same `tool_call_id`.
     ToolCall {
@@ -208,6 +214,31 @@ pub enum EventKind {
         /// What lifecycle event occurred.
         event: String,
     },
+}
+
+/// Payload of [`EventKind::ModelStep`]: the outcome of one model response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelStep {
+    /// The agent-loop step number within the turn (1-based).
+    pub step: u64,
+    /// The model that answered, as `provider/model`.
+    pub model: String,
+    /// The finish reason label (`stop`, `tool_use`, `length`,
+    /// `content_filter`, `cancelled`, `truncation`, or `none` when the
+    /// provider sent no finish signal).
+    pub finish_reason: String,
+    /// Provider-reported input tokens for this call (0 when not reported).
+    pub input_tokens: u64,
+    /// Provider-reported output tokens for this call (0 when not reported).
+    pub output_tokens: u64,
+    /// Bytes of visible text delivered to the loop.
+    pub text_bytes: u64,
+    /// Bytes of reasoning text delivered to the loop.
+    pub reasoning_bytes: u64,
+    /// Number of tool calls the response carried.
+    pub tool_calls: u64,
+    /// Wall-clock time of the model call, in milliseconds.
+    pub elapsed_ms: u64,
 }
 
 /// Lifecycle marker appended when a run is resumed (FR-013).
@@ -497,7 +528,8 @@ impl Projection {
                 self.status = RunStatus::Active;
             }
             // Audit/meta events have no direct projection effect.
-            EventKind::BranchOrigin { .. }
+            EventKind::ModelStep(_)
+            | EventKind::BranchOrigin { .. }
             | EventKind::MutationRejected { .. }
             | EventKind::Lifecycle { .. } => {}
         }

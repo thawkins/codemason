@@ -2502,6 +2502,9 @@ impl SessionProcessor {
         // Set to true after injecting the sub-agent summary nudge so we only
         // nudge once per run. See [`SUBAGENT_SUMMARY_NUDGE`].
         let mut subagent_summary_nudged = false;
+        // Count of stall nudges fed to a primary agent this turn. See
+        // [`crate::session::stall_guard`].
+        let mut stall_nudges: u32 = 0;
         // M-008 (amended): count of assistant parts at the last interim save.
         // Parts are only ever pushed or popped (stream deltas, per-call
         // tool-call appends, the sub-agent narration nudge) - never mutated in
@@ -2928,6 +2931,31 @@ impl SessionProcessor {
                 }
             }
 
+            // Activity log: how this model response ended, so a step that
+            // ended a turn can be compared with normal tool-calling steps.
+            {
+                let model_step = codemason_types::activity::ModelStep {
+                    step: step as u64,
+                    model: format!("{}/{}", turn.model_ref.provider_id, turn.model_ref.model_id),
+                    finish_reason: last_finish_reason
+                        .as_ref()
+                        .map_or("none", crate::session::finish_reason_label)
+                        .to_string(),
+                    input_tokens: llm_result.last_input_tokens,
+                    output_tokens: llm_result.last_output_tokens,
+                    text_bytes: llm_result.text_buffer.len() as u64,
+                    reasoning_bytes: llm_result.reasoning_buffer.len() as u64,
+                    tool_calls: llm_result.tool_calls.len() as u64,
+                    elapsed_ms: llm_request_start.elapsed().as_millis() as u64,
+                };
+                let run_id_for_step = run_id.clone();
+                self.record_activity_event(move |log| {
+                    log.record_model_step(&run_id_for_step, model_step)
+                        .map(Some)
+                })
+                .await;
+            }
+
             // No tool calls - the loop ends here. The agent's text response
             // is the final answer for this turn.
             if llm_result.tool_calls.is_empty() {
@@ -2971,6 +2999,56 @@ impl SessionProcessor {
                         step,
                         narration,
                         &mut assistant_parts,
+                        &mut chat_messages,
+                    );
+                    continue;
+                }
+                // Primary-agent stall guard: a turn that ran tools and then
+                // ended on a progress note announcing its next step ("Now the
+                // full test suite."), or on a provider-truncated reply, did
+                // not finish.
+                let stalled = agent.mode != crate::agent::AgentMode::Subagent
+                    && crate::session::stall_guard::is_stalled_turn(
+                        last_finish_reason.as_ref(),
+                        step > 1,
+                        &llm_result.text_buffer,
+                    );
+                // Diagnostic for turns that end without a tool call after tool
+                // work. Every such end is logged; only a detected stall is
+                // also shown in the transcript, so a normal finish does not
+                // read as a stall. The values sit in the message text because
+                // the GUI log window drops structured fields. A large
+                // output-token count against little visible text means tokens
+                // the provider never delivered (a lost tool call); a matching
+                // count with `finish=stop` means the model chose to end the
+                // turn. The `/alog` `model_step` event records every step.
+                if step > 1 {
+                    let diagnostic = format!(
+                        "Turn ended without a tool call after tool work: step={step} \
+                         finish={} output_tokens={} text_bytes={} reasoning_bytes={}",
+                        last_finish_reason
+                            .as_ref()
+                            .map_or("none", crate::session::finish_reason_label),
+                        llm_result.last_output_tokens,
+                        llm_result.text_buffer.len(),
+                        llm_result.reasoning_buffer.len(),
+                    );
+                    tracing::warn!(session_id = %session_id, "{diagnostic}");
+                    if stalled {
+                        self.event_bus.publish(Event::AgentNotice {
+                            session_id: session_id.to_string(),
+                            message: format!("Stall detected. {diagnostic}"),
+                        });
+                    }
+                }
+                // Feed back the "continue" the user would otherwise have to
+                // type, a bounded number of times.
+                if stalled && stall_nudges < crate::session::stall_guard::MAX_STALL_NUDGES {
+                    stall_nudges += 1;
+                    self.inject_stall_nudge(
+                        session_id,
+                        step,
+                        &llm_result.text_buffer,
                         &mut chat_messages,
                     );
                     continue;
@@ -4536,6 +4614,52 @@ impl SessionProcessor {
         Arc::make_mut(chat_messages).push(ChatMessage {
             role: "user".to_string(),
             content: ChatContent::Text(SUBAGENT_SUMMARY_NUDGE.to_string()),
+        });
+    }
+
+    /// Feed a stalled primary-agent turn the [`STALL_NUDGE`] so it continues.
+    ///
+    /// The model's progress note stays in the saved message (the user sees
+    /// it) and is appended to the chat history so the model reads its own
+    /// last words before the nudge.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - the session whose turn stalled.
+    /// * `step` - the loop step that ended without a tool call.
+    /// * `text` - the visible text of that step.
+    /// * `chat_messages` - the history sent on the next step.
+    ///
+    /// [`STALL_NUDGE`]: crate::session::stall_guard::STALL_NUDGE
+    fn inject_stall_nudge(
+        &self,
+        session_id: &str,
+        step: usize,
+        text: &str,
+        chat_messages: &mut std::sync::Arc<Vec<ChatMessage>>,
+    ) {
+        self.event_bus.publish(Event::AgentNotice {
+            session_id: session_id.to_string(),
+            message: "The model stopped without acting on its next step - \
+                      asking it to continue."
+                .to_string(),
+        });
+        tracing::info!(
+            session_id = %session_id,
+            step,
+            text_len = text.len(),
+            "primary agent stalled mid-task; injecting continue nudge"
+        );
+        let messages = Arc::make_mut(chat_messages);
+        if !text.is_empty() {
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::Text(text.to_string()),
+            });
+        }
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(crate::session::stall_guard::STALL_NUDGE.to_string()),
         });
     }
 
