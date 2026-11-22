@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added: `/swarm` subtasks that depend on others now start with their predecessors' results. `team_task_complete` takes an optional `result` (cut at 16 KiB), stored on the task in `tasks.json`; when a blocked swarm teammate is unblocked its prompt is rebuilt with a "Results from dependencies" section (up to 4 KiB per predecessor), and the completion table gains a Result column.
+- Added: a finished `/swarm` combines its task results into one answer. With a model selected, one LLM call (`SYNTHESIS_SYSTEM_PROMPT`) receives the goal and each task's status and result, and its answer is shown as "Swarm Result" ("Synthesis Failed" when the call fails).
+
 ### Fixed
 
-- Fixed: `/swarm` decomposition and `/research` now fail with `LLM stream error: <message>` when the provider stream errors mid-response, instead of treating the partial (or empty) text as a successful answer; the one-shot completer also stops reading at the stream's `Finish` event.
+- Fixed: a swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate no longer takes another subtask with only its task id (no description, no dependency results).
+- Fixed: `CodemasonCompleter` (used by `/swarm` decomposition, swarm synthesis and `/research`) fails on a provider stream error and stops on `Finish`, so a failed stream is reported ("Swarm Error", "Synthesis Failed") instead of returning a partial answer as success.
+- Fixed: cancelling a swarm aborts its synthesis call, and an answer for a swarm that is gone is dropped.
+- Fixed: the `/swarm` goal is kept in the swarm state instead of being blanked when the decomposition returns.
+- Fixed: SPEC lists `/swarm cancel`, not the non-existent `/swarm kill`, and documents the real decomposition format.
 
 ## [1.0.179] - 2026-11-22
 
@@ -24,8 +33,6 @@ connectors behind a "Needs server URL" badge and an address prompt.
 - Added: material `badge`, `drawer_item_with_count` and `avatar_list_item` components in `codemason_gui::material`.
 - Added: an installed plugin or connector shows an Uninstall button (on its row and in the details pane) that runs `disable` then `remove` for it.
 - Added: tenant-hosted connectors (about 58 Claude directory entries such as Glean, Databricks and Metabase, whose server address is the organisation's own) are listed with a "Needs server URL" badge instead of being skipped; Install asks for the address in a prompt and checks it against the catalogue's pattern, and `/connectors add <id> --url <address>` does the same from the command line.
-- Added: `/swarm` subtasks that depend on others now start with their predecessors' results. `team_task_complete` takes an optional `result` (cut at 16 KiB), stored on the task in `tasks.json`; when a blocked swarm teammate is unblocked its prompt is rebuilt with a "Results from dependencies" section (up to 4 KiB per predecessor), and the completion table gains a Result column.
-- Added: a finished `/swarm` combines its task results into one answer. With a model selected, one LLM call (`SYNTHESIS_SYSTEM_PROMPT`) receives the goal and each task's status and result, and its answer is shown as "Swarm Result" ("Synthesis Failed" when the call fails).
 - Added: an Addons group on the ribbon's Agent tab with Plugins (`/plugins claude`) and Connectors (`/connectors claude`) buttons, and their `extension` and `hub` icons in the bundled Material Symbols subset.
 
 ### Changed
@@ -36,11 +43,6 @@ connectors behind a "Needs server URL" badge and an address prompt.
 - Fixed: plugin `url` sources that carry a `path` now install that subdirectory, and a `ref` pins the checkout, in both the Claude and Codex stores (previously the whole repository at `HEAD`).
 - Fixed: the Claude connector catalogue follows the directory feed's `next_cursor` pages (all ~1200 connectors instead of the first 100), and a connector with only a UUID id and a display name that is not a valid id (`Health Data Avatar (HDA)`) is named by its slugified display name instead of being skipped.
 - Fixed: Claude marketplace `git-subdir` entries that name their repository in GitHub `owner/repo` shorthand (188 entries in `anthropics/claude-plugins-community`) are now installable instead of being skipped as malformed.
-- Fixed: a swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate no longer takes another subtask with only its task id (no description, no dependency results).
-- Fixed: `CodemasonCompleter` (used by `/swarm` decomposition, swarm synthesis and `/research`) fails on a provider stream error and stops on `Finish`, so a failed stream is reported ("Swarm Error", "Synthesis Failed") instead of returning a partial answer as success.
-- Fixed: cancelling a swarm aborts its synthesis call, and an answer for a swarm that is gone is dropped.
-- Fixed: the `/swarm` goal is kept in the swarm state instead of being blanked when the decomposition returns.
-- Fixed: SPEC lists `/swarm cancel`, not the non-existent `/swarm kill`, and documents the real decomposition format.
 - Changed: README.md opens with a CodeMason hero header (the `assets/branding` primary lockup, dark or light to match the reader's theme) and a GUI-first project description; the `ragent-tui` screenshots in `assets/screens/` are replaced by seven desktop GUI screenshots, and the ragent lineage moves to a short Origins section.
 - Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.
 
