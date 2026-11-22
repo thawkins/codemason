@@ -14,6 +14,7 @@
 
 - Changed: the GUI plugin browser is a wide three-pane Plugin Store dialog with a Codex | Claude switcher, and connectors open in a separate Connectors dialog with sign-in badges, requested scopes, credential name and MCP servers.
 - Changed: the store dialogs draw only the result rows in view, so large indexes no longer lag; the Codex | Claude switcher marks the selected store by highlight instead of a check mark.
+- Fixed: the store dialogs' search field (and every other key-driven Material field, such as the connector server-address prompt and the provider key fields) draws a text cursor after its text while it takes typing, so it reads as focused.
 - Fixed: plugin `url` sources that carry a `path` now install that subdirectory, and a `ref` pins the checkout, in both the Claude and Codex stores (previously the whole repository at `HEAD`).
 - Fixed: the Claude connector catalogue follows the directory feed's `next_cursor` pages (all ~1200 connectors instead of the first 100), and a connector with only a UUID id and a display name that is not a valid id (`Health Data Avatar (HDA)`) is named by its slugified display name instead of being skipped.
 - Fixed: Claude marketplace `git-subdir` entries that name their repository in GitHub `owner/repo` shorthand (188 entries in `anthropics/claude-plugins-community`) are now installable instead of being skipped as malformed.
