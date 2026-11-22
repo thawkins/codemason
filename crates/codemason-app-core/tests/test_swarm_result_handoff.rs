@@ -117,5 +117,75 @@ async fn test_swarm_unblock_rewrites_prompt_with_predecessor_result() {
         .expect("local s2");
     assert_eq!(local.spawn_prompt.as_deref(), Some(prompt));
 
+    // The dependent task is given to its own teammate, so no idle teammate
+    // can take it with a bare continuation.
+    let s2 = TaskStore::open(&team_dir)
+        .expect("task store")
+        .read()
+        .expect("read tasks")
+        .tasks
+        .into_iter()
+        .find(|t| t.id == "s2")
+        .expect("s2 task");
+    assert_eq!(s2.status, TaskStatus::InProgress);
+    assert_eq!(s2.assigned_to.as_deref(), Some("tm-002"));
+
+    std::fs::remove_dir_all(&dir).expect("clean scratch dir");
+}
+
+/// A decomposition landing creates a swarm team with auto-claim off, gives
+/// each ready task to its own teammate, leaves a dependent task unassigned
+/// until unblock, and keeps the goal for the synthesis step.
+#[tokio::test]
+async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
+    let dir = scratch("decompose");
+    let mut app = support::make_app();
+    app.session.session_id = Some("lead-session".to_string());
+    app.cwd_path = dir.clone();
+    app.session.directory = dir.clone();
+    app.session.swarm_state = Some(SwarmState {
+        team_name: String::new(),
+        prompt: "Harden auth".to_string(),
+        decomposition: SwarmDecomposition { tasks: Vec::new() },
+        spawned: false,
+        completed: false,
+        default_agent_type: None,
+    });
+    *app.session.swarm_result.lock().expect("slot") = Some(Ok(r#"{"tasks":[
+        {"id":"s1","title":"Find","description":"Find auth","depends_on":[]},
+        {"id":"s2","title":"Fix","description":"Fix auth","depends_on":["s1"]}
+    ]}"#
+    .to_string()));
+
+    app.poll_pending_swarm().await;
+
+    let state = app.session.swarm_state.clone().expect("swarm state");
+    assert_eq!(
+        state.prompt, "Harden auth",
+        "the goal must survive decomposition"
+    );
+    let team_dir =
+        codemason_agent::team::find_team_dir(&dir, &state.team_name).expect("swarm team dir");
+    let config = TeamStore::load(&team_dir).expect("load team").config;
+    assert!(!config.settings.auto_claim_tasks);
+    let s1_agent = config
+        .member_by_name("swarm-s1")
+        .expect("s1 member")
+        .agent_id
+        .clone();
+
+    let tasks = TaskStore::open(&team_dir)
+        .expect("task store")
+        .read()
+        .expect("read tasks")
+        .tasks;
+    let s1 = tasks.iter().find(|t| t.id == "s1").expect("s1");
+    assert_eq!(s1.status, TaskStatus::InProgress);
+    assert_eq!(s1.assigned_to.as_deref(), Some(s1_agent.as_str()));
+    let s2 = tasks.iter().find(|t| t.id == "s2").expect("s2");
+    assert_eq!(s2.status, TaskStatus::Pending);
+    assert_eq!(s2.assigned_to, None);
+
+    app.stop_swarm_autocomplete(&state.team_name).await;
     std::fs::remove_dir_all(&dir).expect("clean scratch dir");
 }

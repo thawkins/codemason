@@ -4404,7 +4404,9 @@ subtask has finished and at least one completed, a synthesis step (one LLM call
 on the session's selected model, `SYNTHESIS_SYSTEM_PROMPT`) combines the goal
 and each task's status and stored result into a final answer, shown in the chat
 as "Swarm Result". With no model selected the swarm ends with the status table
-only; a failed synthesis call is reported as "Synthesis Failed".
+only; a failed synthesis call (including a provider stream error) is reported
+as "Synthesis Failed". Cancelling the swarm aborts a synthesis call still in
+flight, and an answer for a swarm that is no longer current is dropped.
 
 ### 15.2 Swarm Slash Commands
 
@@ -4432,7 +4434,10 @@ Swarm decomposition returns a JSON list of subtasks (`SwarmDecomposition`);
 
 A teammate completes its task with `team_task_complete`, passing an optional
 `result` (a short account of what it found or changed, cut at 16 KiB). The
-result is stored on the task in `tasks.json`. When a blocked subtask is
+result is stored on the task in `tasks.json`. A swarm team runs with
+`auto_claim_tasks` off: each task is pre-assigned to its own teammate (a ready
+task at spawn, a dependent one at unblock), so an idle teammate never takes
+another subtask without its description and dependency results. When a blocked subtask is
 unblocked, its prompt is rebuilt with a "Results from dependencies" section
 holding each predecessor's result (up to 4 KiB each); a predecessor with no
 result is marked so the teammate inspects its changes directly. The

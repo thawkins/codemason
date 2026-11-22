@@ -96,7 +96,21 @@ impl App {
             );
             guard.take()
         };
-        let Some(outcome) = outcome else { return };
+        let Some((team_name, outcome)) = outcome else {
+            return;
+        };
+        self.session.swarm_synthesis = None;
+        // An answer for a swarm that was cancelled, closed or replaced since
+        // the call started is dropped rather than shown against another swarm.
+        let current = self
+            .session
+            .swarm_state
+            .as_ref()
+            .is_some_and(|s| s.team_name == team_name);
+        if !current {
+            tracing::debug!(team = %team_name, "dropping synthesis result for a swarm that is gone");
+            return;
+        }
         match outcome {
             Ok(answer) => {
                 self.append_assistant_text(&format!("From: /swarm\n## Swarm Result\n\n{answer}\n"));

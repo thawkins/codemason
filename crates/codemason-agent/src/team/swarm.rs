@@ -241,6 +241,8 @@ pub fn build_swarm_task_prompt(
          Do NOT respond with text first - call the tool immediately.\n\n\
          After reading messages, do the work described above using tool calls \
          (glob, read, bash, etc.). \
+         Task \"{id}\" is assigned to you; if `team_task_complete` reports it unclaimed, \
+         call `team_task_claim` for it first. \
          When done, call `team_task_complete` to mark task \"{id}\" as completed, and pass \
          `result`: a short account of what you found or changed (files, findings, decisions). \
          Tasks that depend on yours receive it. \

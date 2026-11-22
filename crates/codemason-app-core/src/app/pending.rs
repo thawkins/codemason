@@ -79,6 +79,7 @@ fn session_outstanding(view: &SessionView) -> bool {
             .as_ref()
             .is_some_and(|swarm| !swarm.completed)
         || view.swarm_autocomplete.is_some()
+        || view.swarm_synthesis.is_some()
         || view.autopilot_pending_continue.is_some()
 }
 

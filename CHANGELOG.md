@@ -20,6 +20,8 @@
 - Fixed: plugin `url` sources that carry a `path` now install that subdirectory, and a `ref` pins the checkout, in both the Claude and Codex stores (previously the whole repository at `HEAD`).
 - Fixed: the Claude connector catalogue follows the directory feed's `next_cursor` pages (all ~1200 connectors instead of the first 100), and a connector with only a UUID id and a display name that is not a valid id (`Health Data Avatar (HDA)`) is named by its slugified display name instead of being skipped.
 - Fixed: Claude marketplace `git-subdir` entries that name their repository in GitHub `owner/repo` shorthand (188 entries in `anthropics/claude-plugins-community`) are now installable instead of being skipped as malformed.
+- Fixed: a swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate no longer takes another subtask with only its task id (no description, no dependency results).
+- Fixed: the swarm synthesis call goes through `send_one_shot`, so a provider stream error is reported as "Synthesis Failed" instead of a partial "Swarm Result"; cancelling the swarm aborts the call, and an answer for a swarm that is gone is dropped.
 - Fixed: the `/swarm` goal is kept in the swarm state instead of being blanked when the decomposition returns.
 - Fixed: SPEC lists `/swarm cancel`, not the non-existent `/swarm kill`, and documents the real decomposition format.
 - Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.

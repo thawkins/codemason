@@ -334,8 +334,9 @@ pub struct SessionView {
     /// Pending result from an async `/swarm` LLM decomposition call.
     pub swarm_result: Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     /// Pending answer from the async `/swarm` synthesis call that combines a
-    /// finished swarm's task results (`App::poll_pending_swarm` adopts it).
-    pub swarm_synthesis_result: Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    /// finished swarm's task results, tagged with the swarm's team name so
+    /// `App::poll_pending_swarm` drops an answer whose swarm is gone.
+    pub swarm_synthesis_result: Arc<std::sync::Mutex<Option<(String, Result<String, String>)>>>,
     /// When swarm unblock was last polled (debounces filesystem I/O).
     pub swarm_unblock_last_poll: std::time::Instant,
     /// When swarm completion was last polled (debounces filesystem I/O).
@@ -344,6 +345,9 @@ pub struct SessionView {
     /// frontend's thread (`App::poll_swarm_completion`); `Some` is the
     /// in-flight flag.
     pub(super) swarm_autocomplete: Option<crate::app::swarm::SwarmAutoComplete>,
+    /// The finished swarm's synthesis call while it runs; dropping or
+    /// stopping it (swarm cancel, team close) aborts the call.
+    pub(super) swarm_synthesis: Option<crate::app::swarm::SwarmAutoComplete>,
     /// Session ID of the currently selected agent in the agents panel.
     /// When set, messages and logs are filtered to show only from this session.
     /// When `None`, shows primary session messages/logs.
@@ -494,6 +498,7 @@ impl SessionView {
             swarm_unblock_last_poll: std::time::Instant::now(),
             swarm_completion_last_poll: std::time::Instant::now(),
             swarm_autocomplete: None,
+            swarm_synthesis: None,
             selected_agent_session_id: None,
             pending_forcecleanup: None,
             unread: false,

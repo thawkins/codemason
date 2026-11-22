@@ -55,7 +55,22 @@ impl App {
 
         // Create the team
         match TeamStore::create(&team_name, &lead_sid, &working_dir, true) {
-            Ok(store) => {
+            Ok(mut store) => {
+                // Each swarm task belongs to its own teammate (pre-assigned at
+                // spawn or unblock). With auto-claim on, a teammate that went
+                // idle would take the next ready task with a bare "task X is
+                // yours" turn - no description, no dependency results - and
+                // strand that task's own teammate.
+                match TeamStore::update(&store.dir, |config| {
+                    config.settings.auto_claim_tasks = false;
+                    Ok(config.clone())
+                }) {
+                    Ok(config) => store.config = config,
+                    Err(e) => self.push_log_no_agent(
+                        LogLevel::Warn,
+                        format!("Swarm: failed to turn off auto-claim for {team_name}: {e}"),
+                    ),
+                }
                 // Seed tasks into tasks.json
                 if let Ok(task_store) = TaskStore::open(&store.dir) {
                     for st in &decomposition.tasks {
@@ -190,8 +205,14 @@ impl App {
                         Ok(Some(member))
                     });
                     match recorded {
-                        // Add to local state
-                        Ok(Some(member)) => self.session.team_members.push(member),
+                        // Add to local state; a task with no dependencies is
+                        // given to its teammate now (dependent ones on unblock).
+                        Ok(Some(member)) => {
+                            if !has_deps {
+                                assign_swarm_task(&team_dir, &subtask.id, &member.agent_id);
+                            }
+                            self.session.team_members.push(member);
+                        }
                         Ok(None) => {}
                         // FUNC-027: surface a failed team-state save rather than
                         // silently dropping it while the swarm reports success.
@@ -503,6 +524,7 @@ impl App {
                 // A failed save leaves the persisted member stuck at Blocked
                 // while the in-memory copy moved on - surface it so the swarm
                 // is not left silently inconsistent.
+                assign_swarm_task(&team_dir, task_id, agent_id);
                 if let Err(e) = team::TeamStore::update(&team_dir, |config| {
                     if let Some(m) = config.member_by_id_mut(agent_id) {
                         m.status = MemberStatus::Spawning;
@@ -685,6 +707,9 @@ impl App {
     /// any more, and no further hook starts. Tasks it did not reach stay
     /// open, as they were before the swarm finalised.
     ///
+    /// The swarm's synthesis call, if one is still running, is aborted too,
+    /// so its answer never appears after the swarm is gone.
+    ///
     /// # Arguments
     ///
     /// * `team_name` - the swarm team being cancelled or removed.
@@ -698,6 +723,14 @@ impl App {
         {
             jobs.extend(self.session.swarm_autocomplete.take());
         }
+        if self
+            .session
+            .swarm_synthesis
+            .as_ref()
+            .is_some_and(|job| job.team_name == team_name)
+        {
+            jobs.extend(self.session.swarm_synthesis.take());
+        }
         for index in 0..self.background.len() {
             if let Some(view) = self.background.view_mut(index)
                 && view
@@ -706,6 +739,14 @@ impl App {
                     .is_some_and(|job| job.team_name == team_name)
             {
                 jobs.extend(view.swarm_autocomplete.take());
+            }
+            if let Some(view) = self.background.view_mut(index)
+                && view
+                    .swarm_synthesis
+                    .as_ref()
+                    .is_some_and(|job| job.team_name == team_name)
+            {
+                jobs.extend(view.swarm_synthesis.take());
             }
         }
         for job in jobs {
@@ -802,17 +843,24 @@ impl App {
 impl App {
     /// Start the synthesis call that combines `team_name`'s task results into
     /// one answer to the swarm's goal, on the runtime. The answer lands in
-    /// `swarm_synthesis_result` for [`App::poll_pending_swarm`] to show.
+    /// `swarm_synthesis_result`, tagged with `team_name`, for
+    /// [`App::poll_pending_swarm`] to show. The call goes through
+    /// [`codemason_agent::send_one_shot`], so a provider stream error is a
+    /// failure rather than an empty or partial answer. The job is kept in
+    /// `swarm_synthesis`, so cancelling the swarm aborts it.
     ///
     /// Returns `false` (and starts nothing) when no model is selected, the
     /// task list cannot be read, or there is no runtime to run the call on.
     fn spawn_swarm_synthesis(&mut self, team_name: &str) -> bool {
-        let Some((provider_id, model_id)) = self
+        let Some(model_ref) = self
             .session
             .selected_model
             .as_deref()
             .and_then(|s| s.split_once('/'))
-            .map(|(p, m)| (p.to_string(), m.to_string()))
+            .map(|(p, m)| codemason_agent::agent::ModelRef {
+                provider_id: p.to_string(),
+                model_id: m.to_string(),
+            })
         else {
             return false;
         };
@@ -829,31 +877,53 @@ impl App {
             .map(|s| s.prompt.clone())
             .unwrap_or_default();
         let user = team::build_synthesis_user_prompt(&goal, &tasks.tasks);
-        let completer = crate::research_adapter::CodemasonCompleter {
-            registry: std::sync::Arc::clone(&self.provider_registry),
-            storage: std::sync::Arc::clone(&self.storage),
-            provider_id,
-            model_id,
-        };
+        let registry = std::sync::Arc::clone(&self.provider_registry);
+        let storage = std::sync::Arc::clone(&self.storage);
         let slot = std::sync::Arc::clone(&self.session.swarm_synthesis_result);
-        runtime.spawn(async move {
-            let outcome = completer
-                .complete(team::SYNTHESIS_SYSTEM_PROMPT, &user)
-                .await
-                .map_err(|e| e.to_string());
+        let tag = team_name.to_string();
+        let handle = runtime.spawn(async move {
+            let outcome = codemason_agent::send_one_shot(
+                registry,
+                Some(storage),
+                model_ref,
+                Some(team::SYNTHESIS_SYSTEM_PROMPT.to_string()),
+                user,
+                None,
+            )
+            .await
+            .map_err(|e| e.to_string());
             if let Ok(mut guard) = slot.lock() {
-                *guard = Some(outcome);
+                *guard = Some((tag, outcome));
             }
+        });
+        self.session.swarm_synthesis = Some(SwarmAutoComplete {
+            team_name: team_name.to_string(),
+            handle,
         });
         self.status = format!("[wait] swarm: combining results for {team_name}");
         true
     }
 }
 
-/// A finalising swarm's task auto-completion, running on the runtime (see
-/// [`App::poll_swarm_completion`]). The handle doubles as the in-flight
-/// flag and the result slot: the job's only results are the store writes
-/// and their warnings, so its end is what the next pass waits for.
+/// Give swarm task `task_id` to its teammate `agent_id` (`pre_assign_task`:
+/// `in_progress`, assigned). A failure is logged, not fatal: the teammate's
+/// prompt tells it to claim the task itself if completion reports it
+/// unclaimed.
+fn assign_swarm_task(team_dir: &std::path::Path, task_id: &str, agent_id: &str) {
+    let assigned =
+        team::TaskStore::open(team_dir).and_then(|store| store.pre_assign_task(task_id, agent_id));
+    if let Err(e) = assigned {
+        tracing::warn!(task = %task_id, agent = %agent_id, error = %e,
+            "failed to pre-assign swarm task to its teammate");
+    }
+}
+
+/// A finalising swarm's background job, running on the runtime: the task
+/// auto-completion (see [`App::poll_swarm_completion`]) or the synthesis
+/// call (see `App::spawn_swarm_synthesis`). For the auto-completion the
+/// handle doubles as the in-flight flag and the result slot: the job's only
+/// results are the store writes and their warnings, so its end is what the
+/// next pass waits for.
 ///
 /// Dropping it aborts the job without waiting: a session that is closed or
 /// deleted, or the App going away at exit, ends its job (and kills a hook
