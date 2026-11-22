@@ -84,6 +84,8 @@ mod test_projects_migration;
 mod test_provider_auth_store;
 #[path = "test_reader_concurrency.rs"]
 mod test_reader_concurrency;
+#[path = "test_replace_messages.rs"]
+mod test_replace_messages;
 #[path = "test_run_cost_summaries.rs"]
 mod test_run_cost_summaries;
 #[path = "test_schema_version_fast_path.rs"]

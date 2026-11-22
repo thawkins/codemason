@@ -154,7 +154,8 @@ async fn tc003_tool_catalog_and_metadata_rows() {
     let text = draw_effects(&mut app, 100, 40);
     let snapshot = app.context_effective_snapshot();
 
-    assert!(text.contains("Tool catalog"), "catalog row present");
+    assert!(text.contains("Built-in tools"), "catalog row present");
+    assert!(text.contains("MCP tools"), "MCP catalog row present");
     assert!(text.contains("Tool metadata"), "metadata row present");
     assert!(
         snapshot.tool_catalog_tokens > 0,

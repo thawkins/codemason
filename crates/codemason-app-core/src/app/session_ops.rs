@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LockResult, MutexGuard};
 
+use crate::context_items::{self, bytes_to_tokens};
 use crate::geometry::Area;
 use crate::palette::PaletteScope;
 
@@ -26,9 +27,9 @@ use codemason_tools_core::{Tool, ToolContext};
 
 // State types from app/state.rs
 use crate::app::state::{
-    App, ConnectorCatalogueInstallResult, ContextAction, ContextMenuState,
-    ContextPartitionSnapshot, FileMenuEntry, FileMenuState, LlmRequestStat, LlmStatsSummary,
-    LogEntry, LogLevel, OutputViewState, OutputViewTarget, PluginStoreBrowser,
+    App, ConnectorCatalogueInstallResult, ContextAction, ContextItem, ContextItems,
+    ContextMenuState, ContextPartitionSnapshot, FileMenuEntry, FileMenuState, LlmRequestStat,
+    LlmStatsSummary, LogEntry, LogLevel, OutputViewState, OutputViewTarget, PluginStoreBrowser,
     PluginStoreInstallResult, ProviderSetupStep, QueuedInput, ScrollbarDragPane, SelectionPane,
     StorePane, TextSelection, atomic_config_update, is_image_path, percent_decode_path,
     save_clipboard_image_to_temp,
@@ -290,7 +291,7 @@ fn compute_disk_context_partitions(
         None,
         Some(config),
     );
-    let (agents_md, _) =
+    let (agents_md, discovery) =
         codemason_agent::agent::collect_agents_md_content_with_discovery(working_dir);
     let memory = codemason_agent::agent::build_memory_prompt_section(
         working_dir,
@@ -301,11 +302,28 @@ fn compute_disk_context_partitions(
         .as_ref()
         .map(|registry| codemason_agent::agent::skills_prompt_section(registry, agent))
         .unwrap_or_default();
+    let agents_md_tokens = bytes_to_tokens(agents_md.len());
+    let instruction_files = discovery
+        .loaded_file
+        .filter(|_| agents_md_tokens > 0)
+        .map(|path| ContextItem {
+            name: path
+                .strip_prefix(working_dir)
+                .unwrap_or(&path)
+                .display()
+                .to_string(),
+            tokens: agents_md_tokens,
+        })
+        .into_iter()
+        .collect();
     DiskContextPartitions {
         system_prompt: bytes_to_tokens(prompt.len()),
         skills: bytes_to_tokens(skills_section.len()),
         memory: bytes_to_tokens(memory.len()),
-        agents_md: bytes_to_tokens(agents_md.len()),
+        agents_md: agents_md_tokens,
+        skill_items: context_items::skill_items(&skills_section),
+        memory_items: context_items::memory_items(&memory),
+        instruction_files,
     }
 }
 
@@ -316,46 +334,85 @@ struct DiskContextPartitions {
     skills: u64,
     memory: u64,
     agents_md: u64,
+    skill_items: Vec<ContextItem>,
+    memory_items: Vec<ContextItem>,
+    instruction_files: Vec<ContextItem>,
 }
 
-impl DiskContextPartitions {
-    fn into_snapshot(
-        self,
-        tool_catalog_tokens: u64,
-        tool_metadata_tokens: u64,
-        history_tokens: u64,
-        history_message_count: usize,
-        context_window_tokens: Option<usize>,
-        last_input_tokens: u64,
-    ) -> ContextPartitionSnapshot {
-        ContextPartitionSnapshot {
-            system_prompt_tokens: self.system_prompt,
-            tool_catalog_tokens,
-            tool_metadata_tokens,
-            history_tokens,
-            history_message_count,
-            skills_tokens: self.skills,
-            memory_tokens: self.memory,
-            agents_md_tokens: self.agents_md,
-            context_window_tokens,
-            last_input_tokens,
+/// The UI-thread-safe partitions (registry caches and the in-memory
+/// history only), captured before the disk-bound work runs.
+struct LiveContextPartitions {
+    tool_catalog_tokens: u64,
+    tool_metadata_tokens: u64,
+    history_tokens: u64,
+    history_message_count: usize,
+    context_window_tokens: Option<usize>,
+    last_input_tokens: u64,
+    built_in_tools: Vec<ContextItem>,
+    mcp_tools: Vec<ContextItem>,
+    history: Vec<ContextItem>,
+    /// Messages in the frontend's in-memory history, for the stale-snapshot
+    /// guard (the history fields may come from storage instead).
+    memory_message_count: usize,
+    /// The session whose stored history the agent loads, if any.
+    session_id: Option<String>,
+    /// Whether the active provider's wire format sends reasoning back.
+    echo_reasoning: bool,
+}
+
+impl LiveContextPartitions {
+    /// Replace the history partition with the session's stored history: the
+    /// history the agent loads for its next request. The in-memory history
+    /// keeps everything the frontend has shown, including what a compaction
+    /// has since replaced in storage, so it overstates what is sent. Reads
+    /// SQLite, so it runs with the other disk-bound partitions; without a
+    /// session, or when the read fails, the in-memory history stays.
+    fn with_stored_history(mut self, storage: &codemason_agent::storage::Storage) -> Self {
+        let Some(session_id) = self.session_id.as_deref() else {
+            return self;
+        };
+        match storage.get_messages(session_id) {
+            Ok(messages) if !messages.is_empty() => {
+                self.history_tokens = bytes_to_tokens(
+                    messages
+                        .iter()
+                        .map(|m| context_items::message_bytes(m, self.echo_reasoning))
+                        .sum::<usize>(),
+                );
+                self.history_message_count = messages.len();
+                self.history = context_items::history_items(&messages, self.echo_reasoning);
+            }
+            Ok(_) => {}
+            Err(err) => tracing::debug!(%err, "context panel: stored history not read"),
         }
+        self
     }
 }
 
-/// Approximate token count from a UTF-8 byte length (contextpanel FR-005..FR-012).
-///
-/// The context panel's partition estimates are byte-based (serialised JSON
-/// lengths of the system prompt, tool catalog, wire envelope and history).
-/// They are converted to token estimates with the standard ~4-bytes-per-token
-/// heuristic for mixed English/code/JSON content so the panel percentages are
-/// directly comparable with the provider-reported prompt tokens the status
-/// bar's `ctx:` indicator shows from the last `TokenUsage` event.
-const BYTES_PER_TOKEN: u64 = 4;
-
-#[inline]
-fn bytes_to_tokens(bytes: usize) -> u64 {
-    bytes as u64 / BYTES_PER_TOKEN
+impl DiskContextPartitions {
+    fn into_snapshot(self, live: LiveContextPartitions) -> ContextPartitionSnapshot {
+        ContextPartitionSnapshot {
+            system_prompt_tokens: self.system_prompt,
+            tool_catalog_tokens: live.tool_catalog_tokens,
+            tool_metadata_tokens: live.tool_metadata_tokens,
+            history_tokens: live.history_tokens,
+            history_message_count: live.history_message_count,
+            memory_message_count: live.memory_message_count,
+            skills_tokens: self.skills,
+            memory_tokens: self.memory,
+            agents_md_tokens: self.agents_md,
+            context_window_tokens: live.context_window_tokens,
+            last_input_tokens: live.last_input_tokens,
+            items: ContextItems {
+                built_in_tools: live.built_in_tools,
+                mcp_tools: live.mcp_tools,
+                skills: self.skill_items,
+                memories: self.memory_items,
+                instruction_files: self.instruction_files,
+                history: live.history,
+            },
+        }
+    }
 }
 
 /// Validate a discovered MCP server executable before it is persisted into a
@@ -442,7 +499,7 @@ impl App {
     /// to the model (name + description + parameter schema), using the same
     /// shared estimator as the agent request-size path so the panel stays in
     /// sync with what the LLM actually receives. The estimator yields a byte
-    /// count which is converted to tokens via [`BYTES_PER_TOKEN`] because
+    /// count which is converted to tokens via [`bytes_to_tokens`] because
     /// exact tokenisation depends on the active provider.
     pub fn tool_catalog_token_count(&self) -> u64 {
         let defs = self.session_processor.tool_registry.definitions();
@@ -499,7 +556,7 @@ impl App {
     /// so it always reflects what is actually sent on the wire for the active
     /// provider's format. Computed as the serialised wire byte length minus
     /// the raw definition bytes from [`App::tool_catalog_token_count`],
-    /// saturating at zero; converted to tokens via [`BYTES_PER_TOKEN`] like
+    /// saturating at zero; converted to tokens via [`bytes_to_tokens`] like
     /// the rest of the context panel.
     pub fn tool_metadata_token_count(&self) -> u64 {
         let defs = self.session_processor.tool_registry.definitions();
@@ -521,33 +578,54 @@ impl App {
     /// role label length + a fixed ~40-byte per-message JSON overhead plus
     /// each content part - text, reasoning, tool-call identifier/input and
     /// tool-result output. The byte total is converted with the
-    /// [`BYTES_PER_TOKEN`] heuristic so the estimate is comparable with
+    /// [`bytes_to_tokens`] heuristic so the estimate is comparable with
     /// provider-reported prompt tokens.
     pub fn conversation_history_token_count(&self) -> u64 {
+        let echo_reasoning = self.reasoning_is_sent();
         bytes_to_tokens(
             self.session
                 .messages
                 .iter()
-                .map(|msg| {
-                    let content_len: usize = msg
-                        .parts
-                        .iter()
-                        .map(|part| match part {
-                            MessagePart::Text { text } => text.len(),
-                            MessagePart::Reasoning { text, .. } => text.len(),
-                            MessagePart::ToolCall { call_id, state, .. } => {
-                                call_id.len()
-                                    + state.input.to_string().len()
-                                    + state.output.as_ref().map_or(0, |v| v.to_string().len())
-                                    + state.error.as_ref().map_or(0, String::len)
-                            }
-                            MessagePart::Image(_) => 0,
-                        })
-                        .sum();
-                    msg.role.to_string().len() + content_len + 40
-                })
+                .map(|m| context_items::message_bytes(m, echo_reasoning))
                 .sum::<usize>(),
         )
+    }
+
+    /// Whether the active provider's wire format sends reasoning back to the
+    /// model (`echo_reasoning`); a provider with no registered wire profile
+    /// is assumed to, so its history is not undercounted.
+    fn reasoning_is_sent(&self) -> bool {
+        self.active_provider_id()
+            .and_then(|id| codemason_llm::provider::wire::profile_table::profile_for(&id))
+            .is_none_or(|profile| profile.echo_reasoning)
+    }
+
+    /// Capture the context partitions that are safe to compute on the UI
+    /// thread (registry caches and the in-memory history), with their
+    /// per-item breakdown.
+    fn live_context_partitions(&self) -> LiveContextPartitions {
+        let echo_reasoning = self.reasoning_is_sent();
+        let registry = &self.session_processor.tool_registry;
+        let defs = registry.definitions();
+        let (built_in_tools, mcp_tools) = context_items::tool_items(&defs, |name| {
+            let tool = registry.get(name)?;
+            let (server, tool_name) = tool.mcp_wrapper_info()?;
+            Some(format!("{server}: {tool_name}"))
+        });
+        LiveContextPartitions {
+            tool_catalog_tokens: self.tool_catalog_token_count(),
+            tool_metadata_tokens: self.tool_metadata_token_count(),
+            history_tokens: self.conversation_history_token_count(),
+            history_message_count: self.conversation_message_count(),
+            context_window_tokens: self.active_context_window_tokens(),
+            last_input_tokens: self.session.last_input_tokens,
+            built_in_tools,
+            mcp_tools,
+            history: context_items::history_items(&self.session.messages, echo_reasoning),
+            memory_message_count: self.conversation_message_count(),
+            session_id: self.session.session_id.clone(),
+            echo_reasoning,
+        }
     }
 
     /// Return the number of messages currently held in the active session's
@@ -565,7 +643,7 @@ impl App {
     /// omitted (empty) because it is rendered from the TUI's own cached
     /// snapshot and the builder only appends a non-empty tree; the estimate
     /// therefore tracks the stable prompt core. The assembled prompt's byte
-    /// length is converted to tokens via [`BYTES_PER_TOKEN`].
+    /// length is converted to tokens via [`bytes_to_tokens`].
     pub fn system_prompt_token_count(&self) -> u64 {
         let working_dir = self.cwd_path.clone();
         let config = self.current_config();
@@ -697,12 +775,7 @@ impl App {
         let config = self.current_config();
         // Pre-compute the UI-thread-safe partitions (registry caches only)
         // before handing the disk/SQLite-bound work to the shared helper.
-        let history_tokens = self.conversation_history_token_count();
-        let history_message_count = self.conversation_message_count();
-        let tool_catalog_tokens = self.tool_catalog_token_count();
-        let tool_metadata_tokens = self.tool_metadata_token_count();
-        let context_window_tokens = self.active_context_window_tokens();
-        let last_input_tokens = self.session.last_input_tokens;
+        let live = self.live_context_partitions();
 
         let disk = compute_disk_context_partitions(
             &working_dir,
@@ -711,14 +784,7 @@ impl App {
             &config,
             &self.session_processor,
         );
-        disk.into_snapshot(
-            tool_catalog_tokens,
-            tool_metadata_tokens,
-            history_tokens,
-            history_message_count,
-            context_window_tokens,
-            last_input_tokens,
-        )
+        disk.into_snapshot(live.with_stored_history(&self.storage))
     }
 
     /// Schedule a background refresh of the Context panel snapshot.
@@ -745,12 +811,7 @@ impl App {
         let storage = Arc::clone(&self.storage);
         let session_processor = Arc::clone(&self.session_processor);
         // Cheap, cache-backed partitions captured on the UI thread.
-        let history_tokens = self.conversation_history_token_count();
-        let history_message_count = self.conversation_message_count();
-        let tool_catalog_tokens = self.tool_catalog_token_count();
-        let tool_metadata_tokens = self.tool_metadata_token_count();
-        let context_window_tokens = self.active_context_window_tokens();
-        let last_input_tokens = self.session.last_input_tokens;
+        let live = self.live_context_partitions();
         let result_slot = Arc::clone(&self.session.context_snapshot_result);
         let config_dir = self.cwd_path.clone();
 
@@ -766,20 +827,45 @@ impl App {
                 &config,
                 &session_processor,
             );
-            let snapshot = disk.into_snapshot(
-                tool_catalog_tokens,
-                tool_metadata_tokens,
-                history_tokens,
-                history_message_count,
-                context_window_tokens,
-                last_input_tokens,
-            );
+            let snapshot = disk.into_snapshot(live.with_stored_history(&storage));
             if let Ok(mut guard) = result_slot.lock() {
                 *guard = Some(snapshot);
             } else {
                 tracing::warn!("context_snapshot_result mutex poisoned, snapshot dropped");
             }
         });
+    }
+
+    /// Show or hide the Context panel.
+    ///
+    /// Showing it refreshes its snapshot off the UI thread (T-013/FR-015);
+    /// hiding it drops a text selection or context menu in it. A frontend
+    /// calls this when the user brings the Context tab to the front or
+    /// covers it; `Alt+C` calls it with the flag flipped.
+    ///
+    /// # Arguments
+    ///
+    /// * `shown` - whether the Context panel is shown.
+    pub fn set_context_panel_shown(&mut self, shown: bool) {
+        self.show_context_panel = shown;
+        if shown {
+            self.schedule_context_snapshot_refresh();
+            return;
+        }
+        if self
+            .text_selection
+            .as_ref()
+            .is_some_and(|s| s.pane == SelectionPane::ContextPanel)
+        {
+            self.text_selection = None;
+        }
+        if self
+            .context_menu
+            .as_ref()
+            .is_some_and(|m| m.pane == SelectionPane::ContextPanel)
+        {
+            self.context_menu = None;
+        }
     }
 
     /// Adopt a completed background context snapshot, if one has landed.
@@ -806,9 +892,9 @@ impl App {
         let Some(snapshot) = deposited else {
             return;
         };
-        if snapshot.history_message_count != self.conversation_message_count() {
+        if snapshot.memory_message_count != self.conversation_message_count() {
             tracing::debug!(
-                scheduled = snapshot.history_message_count,
+                scheduled = snapshot.memory_message_count,
                 current = self.conversation_message_count(),
                 "dropping stale context snapshot - history changed mid-refresh"
             );
@@ -825,7 +911,7 @@ impl App {
     /// fallback (the async refresh then replaces it with identical values).
     pub fn context_effective_snapshot(&self) -> ContextPartitionSnapshot {
         if let Some(snapshot) = &self.session.context_snapshot_cache {
-            return *snapshot;
+            return snapshot.clone();
         }
         self.context_partition_snapshot()
     }

@@ -50,7 +50,7 @@ fn test_poll_adopts_refresh_result_and_clears_inflight() {
             .context_snapshot_result
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(snapshot);
+        *guard = Some(snapshot.clone());
     }
 
     app.poll_context_snapshot_refresh();
@@ -76,7 +76,7 @@ fn test_cache_refreshes_after_history_change() {
 
     // Seed the cache with a stale snapshot (empty history).
     let stale = app.context_partition_snapshot();
-    app.session.context_snapshot_cache = Some(stale);
+    app.session.context_snapshot_cache = Some(stale.clone());
 
     app.session.messages.push(Message::new(
         "session-1",
@@ -95,7 +95,7 @@ fn test_cache_refreshes_after_history_change() {
             .context_snapshot_result
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(fresh);
+        *guard = Some(fresh.clone());
     }
     app.session.context_refresh_inflight = true;
     app.poll_context_snapshot_refresh();
@@ -114,9 +114,9 @@ fn test_effective_snapshot_prefers_cache() {
     let direct = app.context_partition_snapshot();
     assert_eq!(fallback, direct, "first-frame fallback must be accurate");
 
-    let mut cached_value = direct;
+    let mut cached_value = direct.clone();
     cached_value.system_prompt_tokens += 1;
-    app.session.context_snapshot_cache = Some(cached_value);
+    app.session.context_snapshot_cache = Some(cached_value.clone());
     assert_eq!(
         app.context_effective_snapshot(),
         cached_value,

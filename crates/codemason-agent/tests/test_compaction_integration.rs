@@ -238,47 +238,111 @@ async fn test_pre_send_compaction_fires_and_persists_compaction_message() {
     // The real conversation reply is the mock's canned text.
     assert!(reply.text_content().contains("proceed"));
 
+    {
+        let captured = captured_requests.lock().expect("captured requests lock");
+        // Two requests, in order:
+        //   (1) the summarisation call (no tools),
+        //   (2) the real conversation call (has tools).
+        // No post-compaction nudge - the loop breaks immediately on a no-tool
+        // response.
+        assert_eq!(
+            captured.len(),
+            2,
+            "expected summarisation + real request, got {}",
+            captured.len()
+        );
+
+        // The first request is the summarisation prompt.
+        let summary_request = &captured[0];
+        assert!(
+            summary_request.tools.is_empty(),
+            "summarisation request must carry no tools"
+        );
+        let summary_prompt = summary_request
+            .messages
+            .first()
+            .map(|m| match &m.content {
+                codemason_agent::llm::ChatContent::Text(t) => t.clone(),
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+        assert!(
+            summary_prompt.contains("Create a new anchored summary")
+                || summary_prompt.contains("anchored summary"),
+            "first request should be the summarisation prompt"
+        );
+
+        // The conversation request after compaction carries no empty message:
+        // the turn's still-empty assistant placeholder stays out of it (an
+        // empty content array is an invalid Anthropic request).
+        for message in captured[1].messages.iter() {
+            let empty = match &message.content {
+                codemason_agent::llm::ChatContent::Text(t) => t.is_empty(),
+                codemason_agent::llm::ChatContent::Parts(parts) => parts.is_empty(),
+            };
+            assert!(!empty, "empty {} message sent", message.role);
+        }
+
+        // A synthetic compaction message was persisted to storage.
+        let stored = storage
+            .get_messages(&session.id)
+            .expect("get_messages should succeed");
+        let has_compaction = stored.iter().any(|m| m.role == Role::Compaction);
+        assert!(
+            has_compaction,
+            "expected a Role::Compaction message in storage after compaction"
+        );
+
+        // The stored history is replaced by `[summary, ...recent]`, like
+        // `/compact`: the summary comes first and the summarised head is gone,
+        // so the next turn does not load (and compact) the whole history again.
+        assert_eq!(
+            stored.first().map(|m| m.role.clone()),
+            Some(Role::Compaction),
+            "the summary leads the stored history"
+        );
+        assert!(
+            !stored
+                .iter()
+                .any(|m| m.text_content().starts_with("message 0 ")),
+            "the summarised head is removed from storage"
+        );
+        assert!(
+            stored.len() < 12,
+            "the stored history shrank: {} messages",
+            stored.len()
+        );
+    }
+
+    // A second turn loads the compacted history: none of its requests (the
+    // conversation call, and a summarisation if the kept tail - 80% of the
+    // window here, above the 70% trigger - compacts again) carries the
+    // summarised head, and storage still holds one summary.
+    processor
+        .process_message(
+            &session.id,
+            "and then?",
+            &agent,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .expect("second process_message should succeed");
     let captured = captured_requests.lock().expect("captured requests lock");
-    // Two requests, in order:
-    //   (1) the summarisation call (no tools),
-    //   (2) the real conversation call (has tools).
-    // No post-compaction nudge - the loop breaks immediately on a no-tool
-    // response.
-    assert_eq!(
-        captured.len(),
-        2,
-        "expected summarisation + real request, got {}",
-        captured.len()
-    );
-
-    // The first request is the summarisation prompt.
-    let summary_request = &captured[0];
-    assert!(
-        summary_request.tools.is_empty(),
-        "summarisation request must carry no tools"
-    );
-    let summary_prompt = summary_request
-        .messages
-        .first()
-        .map(|m| match &m.content {
-            codemason_agent::llm::ChatContent::Text(t) => t.clone(),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
-    assert!(
-        summary_prompt.contains("Create a new anchored summary")
-            || summary_prompt.contains("anchored summary"),
-        "first request should be the summarisation prompt"
-    );
-
-    // A synthetic compaction message was persisted to storage.
+    assert!(captured.len() > 2, "the second turn reached the model");
+    for request in &captured[2..] {
+        let body = format!("{:?}", request.messages);
+        assert!(
+            !body.contains("message 0 "),
+            "the summarised head was sent again"
+        );
+    }
     let stored = storage
         .get_messages(&session.id)
         .expect("get_messages should succeed");
-    let has_compaction = stored.iter().any(|m| m.role == Role::Compaction);
-    assert!(
-        has_compaction,
-        "expected a Role::Compaction message in storage after compaction"
+    assert_eq!(
+        stored.iter().filter(|m| m.role == Role::Compaction).count(),
+        1,
+        "one summary in storage"
     );
 }
 

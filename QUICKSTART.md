@@ -2301,7 +2301,7 @@ Notes:
 | `Alt+P` (macOS `Cmd+Shift+P`) | Toggle the Profile pane |
 | `Alt+I` (macOS `Cmd+Shift+I`) | Toggle the TASKS pane |
 | `Alt+M` (macOS `Cmd+Shift+M`) | Toggle the Memory pane |
-| `Alt+C` | Toggle the Context pane (what the next request sends to the model) |
+| `Alt+C` | Bring the pinned Context tab (what the next request sends to the model) to the front, or give the front back to Sessions |
 | `Alt+A` / `Alt+T` | Toggle the Agents / Teams window |
 | `Alt+Q` (macOS `Cmd+Alt+Q`) | Open the queue-control menu (`Next` / `Stop`/`Resume` / `Clear` / `Show`) |
 | `Alt+S` | Show/focus/hide the session sidebar |

@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use craft_ui::docking::PanelState;
 
 use codemason_gui::dock::{
-    HiddenPanes, PaneId, default_layout, fit_prompt, load_layout, save_layout, sync_visibility,
-    toggle_pane,
+    HiddenPanes, PaneId, default_layout, fit_prompt, load_layout, pin_context_tab, save_layout,
+    sync_visibility, toggle_pane,
 };
 use craft_ui::docking::Node;
 use craft_ui::layout::SplitSize;
@@ -125,4 +125,81 @@ fn test_dock_sync_visibility_hides_and_restores_in_place() {
         PanelState::Front,
         "a pane shown again is its group's active tab"
     );
+}
+
+/// The panels of the tab group that holds `pane`, in tab order.
+fn group_of(node: &Node<PaneId>, pane: PaneId) -> Option<Vec<PaneId>> {
+    match node {
+        Node::Tabs { panels, .. } if panels.contains(&pane) => Some(panels.clone()),
+        Node::Split { first, second, .. } => {
+            group_of(first, pane).or_else(|| group_of(second, pane))
+        }
+        _ => None,
+    }
+}
+
+/// The default layout with the Context tab moved to the right column, as
+/// layouts were saved before it was pinned.
+fn old_layout() -> craft_ui::docking::Layout<PaneId> {
+    let mut layout = default_layout();
+    layout
+        .apply(craft_ui::docking::Action::Move {
+            panel: PaneId::Context,
+            anchor: PaneId::Tasks,
+            placement: craft_ui::docking::Placement::Tab { before: None },
+        })
+        .expect("move Context to the right column");
+    layout
+        .apply(craft_ui::docking::Action::Activate {
+            panel: PaneId::ActiveAgents,
+        })
+        .expect("front the right column's first tab");
+    layout
+}
+
+#[test]
+fn test_dock_context_tab_is_pinned_beside_sessions_by_default() {
+    let layout = default_layout();
+    let root = layout.root.as_ref().expect("root");
+    assert_eq!(
+        group_of(root, PaneId::Context),
+        Some(vec![
+            PaneId::Sessions,
+            PaneId::Context,
+            PaneId::Profile,
+            PaneId::Memory
+        ])
+    );
+    let permissions = PaneId::Context.permissions();
+    assert!(!permissions.closable && !permissions.movable && !permissions.floatable);
+}
+
+#[test]
+fn test_dock_pin_context_tab_moves_an_old_layouts_tab_beside_sessions() {
+    let mut layout = old_layout();
+    let mut hidden = HiddenPanes::new();
+    pin_context_tab(&mut layout, &mut hidden).expect("pin");
+    assert_eq!(layout, default_layout());
+    assert_eq!(
+        layout.panel_state(&PaneId::Sessions),
+        PanelState::Front,
+        "pinning does not cover the sidebar"
+    );
+    // Pinning a pinned tab changes nothing.
+    assert!(!pin_context_tab(&mut layout, &mut hidden).expect("pin again"));
+    assert_eq!(layout, default_layout());
+}
+
+#[test]
+fn test_dock_pin_context_tab_opens_a_hidden_tab_beside_sessions() {
+    let mut layout = old_layout();
+    let mut hidden = HiddenPanes::new();
+    toggle_pane(&mut layout, &mut hidden, PaneId::Context).expect("hide Context");
+    assert!(hidden.contains_key(&PaneId::Context));
+    pin_context_tab(&mut layout, &mut hidden).expect("pin");
+    assert!(
+        !hidden.contains_key(&PaneId::Context),
+        "old place forgotten"
+    );
+    assert_eq!(layout, default_layout());
 }

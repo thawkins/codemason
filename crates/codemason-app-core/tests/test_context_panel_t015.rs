@@ -27,11 +27,13 @@ fn snapshot(
         tool_metadata_tokens: metadata,
         history_tokens: history,
         history_message_count: 0,
+        memory_message_count: 0,
         skills_tokens: skills,
         memory_tokens: memory,
         agents_md_tokens: agents_md,
         context_window_tokens: window,
         last_input_tokens: 0,
+        items: Default::default(),
     }
 }
 

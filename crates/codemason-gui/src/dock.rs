@@ -33,8 +33,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use codemason_app_core::app::App;
-use codemason_app_core::input_event::{Key, KeyInput, Modifiers};
-use craft_ui::docking::{Action, DockError, Layout, Location, Node, PanelState, Permissions};
+use codemason_app_core::input_event::KeyInput;
+use craft_ui::docking::{
+    Action, DockError, Layout, Location, Node, PanelState, Permissions, Placement,
+};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +60,8 @@ pub enum PaneId {
     Tasks,
     /// The memory browser.
     Memory,
-    /// The context-window breakdown (`Alt+C`).
+    /// The context-window breakdown: a pinned tab beside the sessions
+    /// sidebar (`Alt+C` brings it to the front).
     Context,
     /// The running agents.
     ActiveAgents,
@@ -114,7 +117,9 @@ impl PaneId {
     ///
     /// The transcript and the prompt are the window's canvas: they can
     /// neither move, close nor take tabs, so craft-ui draws them without a
-    /// tab strip. Every other pane takes craft-ui's defaults.
+    /// tab strip. The Context pane is a pinned tab beside the sessions
+    /// sidebar: it stays in its group and cannot be closed or floated, but
+    /// takes tabs and splits. Every other pane takes craft-ui's defaults.
     ///
     /// # Returns
     ///
@@ -126,12 +131,18 @@ impl PaneId {
                 accepts_splits: true,
                 ..Permissions::PROTECTED
             },
+            Self::Context => Permissions {
+                movable: false,
+                floatable: false,
+                closable: false,
+                accepts_tabs: true,
+                accepts_splits: true,
+            },
             Self::Sessions
             | Self::Log
             | Self::Profile
             | Self::Tasks
             | Self::Memory
-            | Self::Context
             | Self::ActiveAgents
             | Self::Teams
             | Self::Queue
@@ -142,8 +153,11 @@ impl PaneId {
 
 /// Whether the App wants `pane` shown, read from the App's own flags.
 ///
-/// The transcript and the prompt are always shown. The input queue is drawn
-/// above the prompt (as in the TUI), so its pane stays closed.
+/// The transcript and the prompt are always shown. The pinned Context tab
+/// (see [`pin_context_tab`]) goes with the sessions sidebar, so hiding the
+/// sidebar still collapses the left column, and is shown on its own while
+/// `App::show_context_panel` says it is in front (`Alt+C`). The input queue
+/// is drawn above the prompt (as in the TUI), so its pane stays closed.
 ///
 /// # Arguments
 ///
@@ -157,12 +171,12 @@ impl PaneId {
 pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
     match pane {
         PaneId::Messages | PaneId::Prompt => true,
+        PaneId::Context => app.sidebar.visible || app.show_context_panel,
         PaneId::Sessions => app.sidebar.visible,
         PaneId::Log => app.show_log,
         PaneId::Profile => app.show_profile,
         PaneId::Tasks => app.show_tasks_panel,
         PaneId::Memory => app.show_memory,
-        PaneId::Context => app.show_context_panel,
         PaneId::ActiveAgents => app.show_agents_window,
         PaneId::Teams => app.show_teams_window,
         PaneId::Queue => false,
@@ -183,9 +197,8 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
 /// caller sends through `App::handle_key` exactly as the keyboard shortcut
 /// does: this function returns it. The Diff pane has no toggle chord (the
 /// pane's own `Close diff` button hides it as well), so it is hidden by its
-/// flag here. The Context panel has no keymap command
-/// (its `Alt+C` reaches app-core as a plain key), so its chord is returned
-/// as that key press.
+/// flag here. The pinned Context tab cannot be closed, so it is left
+/// alone.
 ///
 /// # Arguments
 ///
@@ -202,7 +215,7 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
         return None;
     }
     let command = match pane {
-        PaneId::Messages | PaneId::Prompt | PaneId::Queue => return None,
+        PaneId::Messages | PaneId::Prompt | PaneId::Queue | PaneId::Context => return None,
         PaneId::Sessions => {
             codemason_app_core::sessions_sidebar_state::hide(app);
             return None;
@@ -220,12 +233,6 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
             return None;
         }
         PaneId::Log | PaneId::Profile | PaneId::Tasks | PaneId::Memory => panel_command(pane)?,
-        PaneId::Context => {
-            return Some(KeyInput {
-                key: Key::Char('c'),
-                mods: Modifiers::ALT,
-            });
-        }
     };
     crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
 }
@@ -369,9 +376,9 @@ fn split(
 
 /// Build the layout a first launch (or an unreadable layout file) uses.
 ///
-/// Sessions, profile and memory sit in a left column; the transcript sits
-/// above the prompt in the centre; agents, teams, tasks, the queue, the
-/// context breakdown and the diff sit above the log in a right column. Every
+/// Sessions, the pinned Context tab, profile and memory sit in a left
+/// column; the transcript sits above the prompt in the centre; agents,
+/// teams, tasks, the queue and the diff sit above the log in a right column. Every
 /// [`PaneId`] is placed; [`sync_visibility`] then hides the ones the App does
 /// not want, keeping their place.
 ///
@@ -379,7 +386,12 @@ fn split(
 ///
 /// A layout that passes [`Layout::validate`].
 pub fn default_layout() -> Layout<PaneId> {
-    let left = tabs(vec![PaneId::Sessions, PaneId::Profile, PaneId::Memory]);
+    let left = tabs(vec![
+        PaneId::Sessions,
+        PaneId::Context,
+        PaneId::Profile,
+        PaneId::Memory,
+    ]);
     let centre = split(
         SplitAxis::Vertical,
         SplitSize::FixedSecond(120.0),
@@ -394,7 +406,6 @@ pub fn default_layout() -> Layout<PaneId> {
             PaneId::Teams,
             PaneId::Tasks,
             PaneId::Queue,
-            PaneId::Context,
             PaneId::Diff,
         ]),
         tabs(vec![PaneId::Log]),
@@ -409,6 +420,66 @@ pub fn default_layout() -> Layout<PaneId> {
         )),
         floating: Vec::new(),
     }
+}
+
+/// Pin the Context tab into the sessions sidebar's tab group.
+///
+/// A layout saved before the Context pane became a pinned tab may have it
+/// elsewhere, or hidden; this moves it (or opens it) into the group that
+/// holds the sessions sidebar, right after the sidebar's tab, and forgets
+/// where it was hidden. A layout without the sessions sidebar (hidden) is left
+/// alone, so the Context pane keeps its hidden place; the shell calls this
+/// again each frame, so it is pinned as soon as the sidebar is shown.
+///
+/// # Arguments
+///
+/// * `layout` - the layout to change.
+/// * `hidden` - the remembered locations of hidden panes.
+///
+/// # Returns
+///
+/// Whether the layout changed.
+///
+/// # Errors
+///
+/// Returns the [`DockError`] craft-ui reports for the move.
+pub fn pin_context_tab(
+    layout: &mut Layout<PaneId>,
+    hidden: &mut HiddenPanes,
+) -> Result<bool, DockError> {
+    if !layout.contains(&PaneId::Sessions) {
+        return Ok(false);
+    }
+    hidden.remove(&PaneId::Context);
+    // The tab after the sidebar's, which the Context tab goes before.
+    let next = match layout.location(&PaneId::Sessions).map(|at| at.placement) {
+        Ok(Placement::Tab { before }) => before,
+        Ok(_) | Err(_) => None,
+    };
+    let action = if !layout.contains(&PaneId::Context) {
+        Action::OpenAt {
+            panel: PaneId::Context,
+            anchor: PaneId::Sessions,
+            placement: Placement::Tab { before: next },
+        }
+    } else if next == Some(PaneId::Context) {
+        return Ok(false);
+    } else {
+        Action::Move {
+            panel: PaneId::Context,
+            anchor: PaneId::Sessions,
+            placement: Placement::Tab { before: next },
+        }
+    };
+    let front = layout.panel_state(&PaneId::Sessions) == PanelState::Front;
+    layout.apply(action)?;
+    // Joining the group must not cover the sidebar.
+    if front {
+        layout.apply(Action::Activate {
+            panel: PaneId::Sessions,
+        })?;
+    }
+    Ok(true)
 }
 
 /// Size the split holding the prompt pane so the pane is `height` points
@@ -605,8 +676,12 @@ pub fn load_dock(path: &Path) -> (Layout<PaneId>, HiddenPanes) {
                 .map_err(|err| err.to_string())
         });
     match parsed {
-        Ok((layout, mut hidden)) => {
+        Ok((mut layout, mut hidden)) => {
             hidden.retain(|pane, _| !layout.contains(pane));
+            if let Err(err) = pin_context_tab(&mut layout, &mut hidden) {
+                tracing::warn!(%err, "cannot pin the Context tab; using default");
+                return (default_layout(), HiddenPanes::new());
+            }
             (layout, hidden)
         }
         Err(err) => {

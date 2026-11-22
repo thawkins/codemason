@@ -123,6 +123,8 @@ mod test_builtin_agents;
 #[path = "test_cancel_agent_status.rs"]
 mod test_cancel_agent_status;
 
+#[path = "test_compacted_stored_history.rs"]
+mod test_compacted_stored_history;
 #[path = "test_compaction_flow.rs"]
 mod test_compaction_flow;
 

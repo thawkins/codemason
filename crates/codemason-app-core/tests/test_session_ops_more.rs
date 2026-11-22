@@ -35,11 +35,13 @@ fn snapshot(history_count: usize) -> ContextPartitionSnapshot {
         tool_metadata_tokens: 30,
         history_tokens: 400,
         history_message_count: history_count,
+        memory_message_count: history_count,
         skills_tokens: 10,
         memory_tokens: 20,
         agents_md_tokens: 5,
         context_window_tokens: Some(200_000),
         last_input_tokens: 50_000,
+        items: Default::default(),
     }
 }
 

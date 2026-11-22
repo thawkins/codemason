@@ -1039,27 +1039,34 @@ Remember that we prefer tracing over println in this project
 
 ## 13a. Context panel — `Alt+C`
 
-Press **`Alt+C`** to toggle the **Context pane**, docked on the right by
-default. Opening it hides the Log, Profile, TASKS and Memory panes.
+The **Context** pane is a pinned tab beside the **Sessions** tab in the left
+column. Click its tab, or press **`Alt+C`**, to bring it to the front; press
+**`Alt+C`** again to give the front back to Sessions. The tab cannot be
+closed, floated or moved, and showing it leaves the other panes alone. Hiding
+the sessions sidebar (`Alt+S`) takes the tab with it, so the left column still
+collapses; `Alt+C` then shows the Context pane on its own.
 
-The Context panel shows what the next request sends to the model:
+The Context pane shows what the next request sends to the model:
 
-- the selected model's **context window** and the tokens **sent to the model**
-  on the last turn;
-- each partition with its token estimate and share of the window: the
-  **system prompt** (with its skills, memory and `agents.md` breakdown), the
-  **tool catalog**, the **tool metadata** and the **history**, with the
-  history's message count;
-- the **total**, the **free** headroom, and the bytes streamed to and from
-  the model (`Streamed  1.2 KB up  3.4 KB down`).
+- a header with the share of the **context window** used and
+  `used / window` (e.g. `31% used  311.5k / 1.0M`);
+- one **stacked bar** with a coloured segment per partition;
+- the tokens **sent to the model** on the last turn;
+- one row per partition, each with its colour swatch, token estimate and
+  share of the window: **History** (with its message count), the
+  **system prompt**, **Skills**, **Memory**, **Instruction files**,
+  **Built-in tools**, **MCP tools** and **Tool metadata**. The rows do not
+  overlap: together they make up the bar;
+- the **free space**, and the bytes streamed to and from the model
+  (`Streamed  1.2 KB up  3.4 KB down`).
 
-Token counts carry no unit: the first row states it once
-(`Context window  200.0k tokens`).
+A row with a triangle opens on a click to list what is inside it, largest
+first: each tool (MCP tools as `server: tool`), each skill, each memory entry,
+the instruction file, and the history by role (user, assistant, tool calls and
+results). Which rows are open is remembered.
 
 Percentages read `unknown` when the provider advertises no context window. The
 panel is display-only: nothing in it is sent to the model.
-
-- Press **`Alt+C`** again to hide the pane.
 
 ## Multiple sessions and the session sidebar
 

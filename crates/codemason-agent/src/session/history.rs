@@ -19,7 +19,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::llm::{ChatContent, ChatMessage, ChatRequest, ContentPart, ToolDefinition};
-use crate::message::{Message, MessagePart, Role};
+use crate::message::{Message, MessagePart, Role, ToolCallState};
 
 const MAX_TOOL_RESULT_CHARS_FOR_LLM: usize = 12_000;
 const TOOL_RESULT_HEAD_CHARS_FOR_LLM: usize = 10_000;
@@ -221,22 +221,7 @@ fn assistant_tool_results(msg: &Message) -> Vec<ContentPart> {
                 call_id,
                 state,
             } => {
-                let result_text = state
-                    .output
-                    .as_ref()
-                    .and_then(|v| {
-                        v.as_str()
-                            .map(std::string::ToString::to_string)
-                            .or_else(|| {
-                                v.get("content")
-                                    .and_then(Value::as_str)
-                                    .map(std::string::ToString::to_string)
-                            })
-                    })
-                    .or_else(|| state.error.clone())
-                    // FUNC-036: emit an explicit "(no output)" marker so a
-                    // missing tool result is not silently rendered as "".
-                    .unwrap_or_else(|| "(no output)".to_string());
+                let result_text = tool_result_text(state);
                 Some(ContentPart::ToolResult {
                     tool_use_id: call_id.clone(),
                     content: tool_result_content_for_llm(tool, &result_text, state.output.as_ref()),
@@ -248,6 +233,69 @@ fn assistant_tool_results(msg: &Message) -> Vec<ContentPart> {
             _ => None,
         })
         .collect()
+}
+
+/// The text of a tool call's result as the request carries it, before
+/// [`tool_result_content_for_llm`] cuts it: the output when it is a string,
+/// else its `content` string, else the error, else `(no output)`. The rest
+/// of a JSON output (its metadata) is never sent.
+fn tool_result_text(state: &ToolCallState) -> String {
+    state
+        .output
+        .as_ref()
+        .and_then(|v| {
+            v.as_str()
+                .map(std::string::ToString::to_string)
+                .or_else(|| {
+                    v.get("content")
+                        .and_then(Value::as_str)
+                        .map(std::string::ToString::to_string)
+                })
+        })
+        .or_else(|| state.error.clone())
+        // FUNC-036: emit an explicit "(no output)" marker so a
+        // missing tool result is not silently rendered as "".
+        .unwrap_or_else(|| "(no output)".to_string())
+}
+
+/// Bytes of the note [`tool_result_content_for_llm`] puts in front of a cut
+/// result, rounded up.
+const TRUNCATION_NOTE_BYTES: usize = 600;
+
+/// Estimate the bytes a tool call's result takes in the request to the
+/// model, without building it.
+///
+/// Follows [`tool_result_content_for_llm`]: only the result text is sent
+/// (never the output's metadata), a result over the budget is cut to its
+/// head and tail plus a note, and a `wait_agents` / `list_agents` result
+/// over its inline limit is replaced by an index, estimated at that limit.
+/// Unlike that function it has no side effects: it never writes the
+/// over-limit report to disk. GCF encoding is ignored, so a GCF-encoded
+/// result is estimated at its raw size (an upper bound).
+///
+/// # Arguments
+///
+/// * `tool` - the tool's name.
+/// * `state` - the call's recorded state.
+///
+/// # Returns
+///
+/// The estimated byte length of the result as sent.
+#[must_use]
+pub fn tool_result_bytes_for_llm(tool: &str, state: &ToolCallState) -> usize {
+    let text = tool_result_text(state);
+    let len = text.len();
+    if TOOL_RESULT_EXEMPT_TOOLS.contains(&tool) {
+        return len.min(EXEMPT_TOOL_INLINE_LIMIT);
+    }
+    if len <= MAX_TOOL_RESULT_BYTES_FOR_LLM {
+        return len;
+    }
+    // The same character-boundary slices the request keeps, measured in
+    // bytes: a multi-byte script keeps far more bytes than characters.
+    truncate_at_char_boundary(&text, TOOL_RESULT_HEAD_CHARS_FOR_LLM).len()
+        + trailing_at_char_boundary(&text, TOOL_RESULT_TAIL_CHARS_FOR_LLM).len()
+        + TRUNCATION_NOTE_BYTES
 }
 
 fn truncate_at_char_boundary(text: &str, max_chars: usize) -> &str {

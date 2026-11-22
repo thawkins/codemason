@@ -16,8 +16,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{Result, bail};
-use tracing::{info, warn};
+use anyhow::{Context as _, Result, bail};
+use tracing::info;
 
 use std::sync::Arc;
 
@@ -198,21 +198,14 @@ impl SessionProcessor {
             .first()
             .cloned()
             .unwrap_or_else(|| outcome.compaction_message.clone());
-        let persist_messages = new_messages.clone();
-        let persist_sid = session_id.to_string();
-        let persist_err = self
-            .storage_op(move |s| -> Result<()> {
-                s.delete_messages(&persist_sid)?;
-                for msg in &persist_messages {
-                    s.create_message(msg)?;
-                }
-                Ok(())
-            })
+        self.persist_compacted_history(session_id, new_messages.clone())
             .await
-            .err();
-        if let Some(e) = persist_err {
-            warn!(session_id, error = %e, "failed to persist compacted history");
-        }
+            .context("failed to persist compacted history")?;
+        let outcome = CompactionOutcome {
+            new_messages,
+            compaction_message,
+            ..outcome
+        };
 
         info!(
             session_id,
@@ -222,10 +215,31 @@ impl SessionProcessor {
             kept_messages = outcome.kept_message_count,
             "session compaction complete"
         );
-        Ok(CompactionOutcome {
-            new_messages,
-            compaction_message,
-            ..outcome
-        })
+        Ok(outcome)
+    }
+
+    /// Replace a session's stored history with `messages`, a compaction's
+    /// result, in one transaction (`Storage::replace_messages`): the old
+    /// history and its search-index rows go and the new rows are written, or
+    /// nothing changes. The next turn then loads history from the compaction
+    /// point forward (FR-005 / FR-007).
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - the compacted session.
+    /// * `messages` - the history to store, oldest first, the compaction
+    ///   message dated so it loads first.
+    ///
+    /// # Errors
+    ///
+    /// Returns the storage error; the stored history is then unchanged.
+    pub(crate) async fn persist_compacted_history(
+        &self,
+        session_id: &str,
+        messages: Vec<crate::message::Message>,
+    ) -> Result<()> {
+        let sid = session_id.to_string();
+        self.storage_op(move |s| s.replace_messages(&sid, &messages))
+            .await
     }
 }

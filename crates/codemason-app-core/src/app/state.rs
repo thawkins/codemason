@@ -335,6 +335,40 @@ pub struct LlmStatsSummary {
     pub avg_output_tps: f64,
 }
 
+/// One named contributor inside a context partition (a tool, a skill, a
+/// memory entry, an instruction file or a message role), with its token
+/// estimate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextItem {
+    /// What the item is called in the Context panel, e.g. `bash` or
+    /// `github: create_issue`.
+    pub name: String,
+    /// Token estimate of the item's share of its partition.
+    pub tokens: u64,
+}
+
+/// The per-item breakdown of the context partitions, each list sorted
+/// largest first. Built-in plus MCP tool tokens equal
+/// [`ContextPartitionSnapshot::tool_catalog_tokens`]; the other lists are
+/// breakdowns of their partition and may sum to less (section headers are
+/// not items).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextItems {
+    /// Tools built into codemason (and plugin tools).
+    pub built_in_tools: Vec<ContextItem>,
+    /// Tools bridged from MCP servers, named `server: tool`.
+    pub mcp_tools: Vec<ContextItem>,
+    /// Skills listed in the system prompt.
+    pub skills: Vec<ContextItem>,
+    /// Memory entries injected into the system prompt.
+    pub memories: Vec<ContextItem>,
+    /// The instruction file (AGENTS.md, CLAUDE.md, ...) loaded into the
+    /// system prompt.
+    pub instruction_files: Vec<ContextItem>,
+    /// The conversation history, by message role.
+    pub history: Vec<ContextItem>,
+}
+
 /// Snapshot of every context-window partition for the Context side panel.
 ///
 /// FR-012: `total_tokens` is the sum of the four top-level partitions the
@@ -343,7 +377,7 @@ pub struct LlmStatsSummary {
 /// [`Self::agents_md_tokens`] sub-breakdowns - plus tool catalog, tool
 /// metadata/wrapper overhead and the conversation history), so the sub-
 /// partitions are displayed as a breakdown and never added twice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContextPartitionSnapshot {
     /// Byte/token estimate of the assembled system prompt (FR-005),
     /// inclusive of the skills, memory and AGENTS.md sub-partitions below.
@@ -355,8 +389,14 @@ pub struct ContextPartitionSnapshot {
     pub tool_metadata_tokens: u64,
     /// Byte/token estimate of the conversation history (FR-008).
     pub history_tokens: u64,
-    /// Number of messages in the conversation history (FR-008).
+    /// Number of messages in the conversation history (FR-008): the stored
+    /// history the agent loads, when the session has one.
     pub history_message_count: usize,
+    /// Number of messages in the frontend's in-memory history when the
+    /// snapshot was taken; `App::poll_context_snapshot_refresh` drops a
+    /// snapshot whose count no longer matches (the history changed while it
+    /// was computed).
+    pub memory_message_count: usize,
     /// Skills context injected into the system prompt (FR-009 sub-partition).
     pub skills_tokens: u64,
     /// Memory injections inside the system prompt (FR-009 sub-partition).
@@ -372,6 +412,8 @@ pub struct ContextPartitionSnapshot {
     /// (mirrors the status bar's `ctx:` indicator). Zero until the first
     /// `TokenUsage` event of the session arrives.
     pub last_input_tokens: u64,
+    /// The per-item breakdown of the partitions above.
+    pub items: ContextItems,
 }
 
 impl ContextPartitionSnapshot {

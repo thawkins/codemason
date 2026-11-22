@@ -2751,14 +2751,18 @@ impl SessionProcessor {
                     );
                 }
                 if decision.should_compact {
-                    // Convert the provider-facing chat messages into the
-                    // internal `Message` form the compaction runner expects,
-                    // run summarisation, persist the synthetic compaction
-                    // message, and replace the in-memory history with the
-                    // compaction message plus the verbatim recent tail.
+                    // Summarise the stored history, replace it in storage
+                    // with the compaction message plus the verbatim recent
+                    // tail, and send that from this step on.
                     compaction_attempted_this_turn = true;
                     if let Some(outcome) = self
-                        .run_pre_send_compaction(session_id, &turn, &chat_messages, context_window)
+                        .run_pre_send_compaction(
+                            session_id,
+                            &turn,
+                            &chat_messages,
+                            context_window,
+                            &assistant_msg_id,
+                        )
                         .await
                     {
                         let new_chat = crate::compaction::convert::messages_to_chat_messages(
@@ -4335,17 +4339,36 @@ impl SessionProcessor {
         }
     }
 
-    /// Run the pre-send compaction of `chat_messages` and persist the
-    /// synthetic compaction message. Returns `None` when summarisation
-    /// failed; the turn then continues with the uncompressed history.
+    /// Run the pre-send compaction of the turn's request and store its
+    /// summary in place of the history it covers.
+    ///
+    /// The request is compacted from `chat_messages`, the in-memory request
+    /// of this turn: it holds request-only messages (background reports,
+    /// hook and verification observations) that are never stored, and not
+    /// the turn's empty assistant placeholder. The caller sends the outcome's
+    /// `new_messages` from this step on.
+    ///
+    /// The stored history is then replaced, in one transaction, by
+    /// [`crate::compaction::runner::compacted_stored_history`]: the summary, a verbatim tail of the
+    /// stored history from before this turn picked with the same keep
+    /// budget, and every row from the turn's assistant placeholder
+    /// (`assistant_msg_id`) on, so later turns load the compacted history
+    /// instead of compacting the whole history again, and this turn's
+    /// in-place updates of its assistant row still find it. A storage
+    /// failure leaves the stored history unchanged and is reported as a
+    /// notice; the turn still sends the compacted request.
+    ///
+    /// Returns `None` when summarisation failed; the turn then continues
+    /// with the uncompressed history.
     async fn run_pre_send_compaction(
         &self,
         session_id: &str,
         turn: &crate::session::loop_steps::TurnClient,
         chat_messages: &[ChatMessage],
         context_window: usize,
+        assistant_msg_id: &str,
     ) -> Option<crate::compaction::CompactionOutcome> {
-        let messages = crate::compaction::convert::chat_messages_to_messages(&chat_messages);
+        let messages = crate::compaction::convert::chat_messages_to_messages(chat_messages);
         let previous_summary = messages
             .iter()
             .rev()
@@ -4379,17 +4402,14 @@ impl SessionProcessor {
         .await;
         match compact_result {
             Ok(outcome) => {
-                // Persist the synthetic compaction message so
-                // future turns load history from the compaction
-                // point forward (FR-005 / FR-007).
-                let compaction_msg = outcome.compaction_message.clone();
-                let persist_err = self
-                    .storage_op(move |s| s.create_message(&compaction_msg))
-                    .await
-                    .err();
-                if let Some(e) = persist_err {
-                    warn!(error = %e, "failed to persist compaction message");
-                }
+                self.store_pre_send_compaction(
+                    session_id,
+                    &outcome.compaction_message,
+                    &turn.session_config.compaction,
+                    context_window,
+                    assistant_msg_id,
+                )
+                .await;
                 Some(outcome)
             }
             Err(e) => {
@@ -4399,6 +4419,45 @@ impl SessionProcessor {
                 );
                 None
             }
+        }
+    }
+
+    /// Replace the stored history of `session_id` with the compacted form a
+    /// pre-send compaction produced ([`crate::compaction::runner::compacted_stored_history`]). A read or
+    /// write failure leaves the stored history unchanged; it is logged and
+    /// published as an [`Event::AgentNotice`], since the turn goes on.
+    async fn store_pre_send_compaction(
+        &self,
+        session_id: &str,
+        summary: &Message,
+        config: &codemason_config::compaction::CompactionConfig,
+        context_window: usize,
+        assistant_msg_id: &str,
+    ) {
+        let sid = session_id.to_string();
+        let result = match self.storage_op(move |s| s.get_messages(&sid)).await {
+            Ok(stored) => {
+                let replacement = crate::compaction::runner::compacted_stored_history(
+                    stored,
+                    summary,
+                    config,
+                    context_window,
+                    assistant_msg_id,
+                );
+                self.persist_compacted_history(session_id, replacement)
+                    .await
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            warn!(session_id, error = %e, "pre-send compaction not stored");
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: format!(
+                    "Context was compacted for this request, but the compacted history \
+                     could not be saved ({e}); the next turn compacts again."
+                ),
+            });
         }
     }
 

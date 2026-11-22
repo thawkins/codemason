@@ -2250,7 +2250,6 @@ impl App {
             self.show_tasks_panel = false;
             self.show_memory = false;
             self.show_telemetry = false;
-            self.show_context_panel = false;
         }
         self.status = if enabled {
             "profile panel visible".to_string()
