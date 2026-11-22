@@ -2758,7 +2758,7 @@ repository and does not use ETags.
 | `/team message ...` | Send team message |
 | `/swarm <prompt>` | Decompose prompt into parallel subtasks |
 | `/swarm status` | Show active swarm tasks |
-| `/swarm kill` | Cancel active swarm |
+| `/swarm cancel` | Cancel active swarm and clean up its team |
 | `/spawn <agent> <prompt...>` | Launch a detached fire-and-forget background sub-agent from the input line (spec `spawnagent`); not listed by `list_agents`, not awaitable via `wait_agents`, its result never injected back into the chat |
 | `/autopilot on\|off` | Toggle autonomous mode |
 | `/spec create\|specify\|plan\|tasks\|update\|add\|feedback\|jtbd\|list\|search\|show\|validate\|status\|task\|impl\|coverage\|activate\|deactivate\|delete` | Spec lifecycle and SDD commands |
@@ -4412,7 +4412,7 @@ only; a failed synthesis call is reported as "Synthesis Failed".
 |---------|---------|
 | `/swarm <prompt>` | Decompose and run parallel swarm |
 | `/swarm status` | Show active swarm tasks |
-| `/swarm kill` | Cancel active swarm |
+| `/swarm cancel` | Cancel active swarm and clean up its team |
 
 ### 15.3 Decomposition Format
 
