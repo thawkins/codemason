@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use codemason_app_core::app::App;
 use codemason_connectors::{
-    CategoryFilter, ConnectorAuthShape, ConnectorDescriptor, ConnectorId, ConnectorServer,
+    CatalogueBrowser, ConnectorAuthShape, ConnectorDescriptor, ConnectorId, ConnectorServer,
 };
 use codemason_gui::dialogs::stores::connector::{auth_badge, auth_sentence, server_count_label};
 use codemason_gui::dialogs::stores::{CONNECTORS_TITLE, DETAILS_LABEL, show_connector_store};
@@ -94,10 +94,11 @@ fn oauth_two_servers() -> ConnectorDescriptor {
 /// An App with the catalogue open over `entries`.
 fn app_with(entries: Vec<ConnectorDescriptor>) -> App {
     let mut app = support::make_app();
-    app.open_connector_catalogue("", CategoryFilter::all(), false);
-    if let Some(browser) = app.connector_store.as_mut() {
-        browser.set_entries(entries, 0);
-    }
+    // Fill the browser directly: opening the real catalogue would start a live
+    // fetch thread on an empty cache.
+    let mut browser = CatalogueBrowser::new("", false);
+    browser.set_entries(entries, 0);
+    app.connector_store = Some(browser);
     app
 }
 

@@ -1627,7 +1627,10 @@ impl App {
             self.start_store_fetch(StoreCacheKey::Plugins(kind));
         }
         if self.connector_store.is_some() {
-            self.start_store_fetch(StoreCacheKey::Connectors);
+            self.start_store_fetch_with(
+                StoreCacheKey::Connectors,
+                codemason_connectors::CatalogueCacheMode::Refresh,
+            );
         }
         self.poll_store_cache();
     }
@@ -1873,23 +1876,38 @@ impl App {
     ///
     /// * `key` - which marketplace index to fetch.
     pub fn start_store_fetch(&mut self, key: StoreCacheKey) {
+        self.start_store_fetch_with(key, codemason_connectors::CatalogueCacheMode::UseCache);
+    }
+
+    /// [`Self::start_store_fetch`] with the connector catalogue's on-disk cache
+    /// policy: an explicit refresh passes
+    /// [`codemason_connectors::CatalogueCacheMode::Refresh`] so it never serves
+    /// an unexpired disk entry. Plugin stores have no disk cache and ignore it.
+    fn start_store_fetch_with(
+        &mut self,
+        key: StoreCacheKey,
+        mode: codemason_connectors::CatalogueCacheMode,
+    ) {
         match key {
             StoreCacheKey::Plugins(kind) => {
                 let (_dirs, plugins) = store_and_config(&self.cwd_path);
                 let stores = plugins.stores_or_default();
                 self.start_plugin_cache_fetch(kind, &stores);
             }
-            StoreCacheKey::Connectors => self.start_connector_cache_fetch(),
+            StoreCacheKey::Connectors => self.start_connector_cache_fetch(mode),
         }
     }
 
     /// Prefetch every marketplace index into [`App::store_cache`] at startup:
-    /// the Codex and Claude plugin stores and, when the connector subsystem is
-    /// enabled, the connector catalogue. A disabled catalogue is skipped without
-    /// recording or showing a failure.
+    /// the Codex and Claude plugin stores when the plugin subsystem is enabled
+    /// and the connector catalogue when the connector subsystem is enabled. A
+    /// disabled subsystem is skipped without recording or showing a failure.
     pub fn prefetch_store_indexes(&mut self) {
-        self.start_store_fetch(StoreCacheKey::Plugins(StoreKind::Codex));
-        self.start_store_fetch(StoreCacheKey::Plugins(StoreKind::Claude));
+        let (_dirs, plugins) = store_and_config(&self.cwd_path);
+        if plugins.is_enabled() {
+            self.start_store_fetch(StoreCacheKey::Plugins(StoreKind::Codex));
+            self.start_store_fetch(StoreCacheKey::Plugins(StoreKind::Claude));
+        }
         let (_dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
         if config.is_enabled() {
             self.start_store_fetch(StoreCacheKey::Connectors);
@@ -2002,12 +2020,12 @@ impl App {
     /// The fetch is blocking (`reqwest::blocking` builds and drops its own tokio
     /// runtime), so it cannot run on the async blocking pool. A refused
     /// marketplace URL is kept as a warning on the cached index.
-    fn start_connector_cache_fetch(&mut self) {
+    fn start_connector_cache_fetch(&mut self, mode: codemason_connectors::CatalogueCacheMode) {
         let key = StoreCacheKey::Connectors;
         let Some(generation) = self.begin_store_cache_fetch(key) else {
             return;
         };
-        let (dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
+        let (_dirs, config) = codemason_connectors::store_and_config(&self.cwd_path);
         if !config.is_enabled() {
             // A disabled subsystem is inert: no catalogue fetch is attempted.
             recover_poisoned(self.store_cache.lock(), "store_cache").fail(
@@ -2022,15 +2040,18 @@ impl App {
         let spawned = std::thread::Builder::new()
             .name("connector-catalogue-fetch".to_string())
             .spawn(move || {
-                let full =
-                    match codemason_connectors::search_installable_catalogue_full(&config, &dirs) {
-                        Ok(full) => full,
-                        Err(cause) => {
-                            recover_poisoned(cache.lock(), "store_cache")
-                                .fail(key, generation, cause);
-                            return;
-                        }
-                    };
+                // The full catalogue is cached, installed entries included: the
+                // installed set is derived from disk on every open, so an entry
+                // installed or removed later is still shown correctly.
+                let full = match codemason_connectors::fetch_catalogue_descriptors_with_mode(
+                    &config, mode,
+                ) {
+                    Ok(full) => full,
+                    Err(cause) => {
+                        recover_poisoned(cache.lock(), "store_cache").fail(key, generation, cause);
+                        return;
+                    }
+                };
                 let warnings: Vec<String> = full
                     .refused_marketplace
                     .map(|refused| {
@@ -2545,7 +2566,12 @@ impl App {
             cache.needs_fetch(key, refresh)
         };
         if needs_fetch {
-            self.start_store_fetch(key);
+            let mode = if refresh {
+                codemason_connectors::CatalogueCacheMode::Refresh
+            } else {
+                codemason_connectors::CatalogueCacheMode::UseCache
+            };
+            self.start_store_fetch_with(key, mode);
         }
         self.poll_store_cache();
     }

@@ -1047,6 +1047,18 @@ pub struct CatalogueDescriptors {
     pub refused_marketplace: Option<String>,
 }
 
+/// Whether a catalogue fetch may serve a fresh entry from the on-disk
+/// catalogue cache (FR-031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CatalogueCacheMode {
+    /// Serve an unexpired on-disk entry instead of contacting the network.
+    #[default]
+    UseCache,
+    /// Skip on-disk reads and fetch from the network (an explicit refresh); the
+    /// fresh result is still written back to the cache.
+    Refresh,
+}
+
 /// [`fetch_catalogue_descriptors_with_skipped`] with the refused-marketplace
 /// detail carried too (FR-043).
 ///
@@ -1056,7 +1068,30 @@ pub struct CatalogueDescriptors {
 pub fn fetch_catalogue_descriptors_full(
     config: &ConnectorsConfig,
 ) -> Result<CatalogueDescriptors, String> {
-    let limits = CatalogueLimits::from(&config.stores_or_default());
+    fetch_catalogue_descriptors_with_mode(config, CatalogueCacheMode::UseCache)
+}
+
+/// [`fetch_catalogue_descriptors_full`] with the on-disk cache policy chosen by
+/// the caller: [`CatalogueCacheMode::Refresh`] never serves a cached entry.
+///
+/// # Arguments
+///
+/// * `config` - the connector subsystem configuration (endpoints and limits).
+/// * `mode` - whether an unexpired on-disk entry may be served.
+///
+/// # Errors
+///
+/// Returns a short ASCII cause when no catalogue could be fetched.
+pub fn fetch_catalogue_descriptors_with_mode(
+    config: &ConnectorsConfig,
+    mode: CatalogueCacheMode,
+) -> Result<CatalogueDescriptors, String> {
+    let mut limits = CatalogueLimits::from(&config.stores_or_default());
+    match mode {
+        CatalogueCacheMode::UseCache => {}
+        // A zero TTL makes every cache load a miss while writes still happen.
+        CatalogueCacheMode::Refresh => limits.cache_ttl = std::time::Duration::ZERO,
+    }
     let cache = CatalogueCache::default_cache();
     let now = now_unix_secs();
     let mut descriptors = Vec::new();

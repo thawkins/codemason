@@ -149,6 +149,26 @@ async fn prefetch_fills_codex_slot() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // the lock pins the config env for the whole test
+async fn prefetch_skips_plugin_stores_when_plugins_disabled() {
+    let _lock = crate::global_env_lock();
+    let _config =
+        ConfigContentGuard::set(r#"{"plugins":{"enabled":false},"connectors":{"enabled":false}}"#);
+    let mut app = app_with(FixtureStoreFetcher::new().with_default_endpoints());
+
+    app.prefetch_store_indexes();
+
+    let cache = app.store_cache.lock().expect("store cache");
+    for kind in [StoreKind::Codex, StoreKind::Claude] {
+        let slot = cache.plugin(kind);
+        assert!(
+            matches!(slot.data, SlotData::Empty) && slot.in_flight.is_none(),
+            "a disabled plugin subsystem starts no {kind:?} fetch: {slot:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn enrichment_updates_land_in_slot() {
     let fetcher = FixtureStoreFetcher::new()
         .with_index(StoreKind::Codex.default_url(), git_index(&["a", "b", "c"]));

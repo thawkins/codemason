@@ -72,15 +72,15 @@ pub use browse::{
     entry_matches, is_installed_row_label,
 };
 pub use commands::{
-    AuthOutcome, AuthOutcomeError, CatalogueDescriptors, ConnectorArgError, ConnectorCommand,
-    ConnectorCommandEnv, MarketplaceArgError, MarketplaceCommand, auth_report, canonical_id,
-    connect_report, disable_report, disconnect_report, enable_report,
+    AuthOutcome, AuthOutcomeError, CatalogueCacheMode, CatalogueDescriptors, ConnectorArgError,
+    ConnectorCommand, ConnectorCommandEnv, MarketplaceArgError, MarketplaceCommand, auth_report,
+    canonical_id, connect_report, disable_report, disconnect_report, enable_report,
     fetch_catalogue_descriptors_full, fetch_catalogue_descriptors_network,
-    fetch_catalogue_descriptors_with_skipped, is_known_subcommand, lifecycle_error_report,
-    marketplace_bare, marketplace_command_requested, marketplace_show_requested,
-    parse_connector_command, parse_marketplace_command, render_marketplace_list_report,
-    render_marketplace_show_report, resolve_connector_reference, run_connector_subcommand,
-    run_connector_subcommand_async, run_connector_subcommand_env,
+    fetch_catalogue_descriptors_with_mode, fetch_catalogue_descriptors_with_skipped,
+    is_known_subcommand, lifecycle_error_report, marketplace_bare, marketplace_command_requested,
+    marketplace_show_requested, parse_connector_command, parse_marketplace_command,
+    render_marketplace_list_report, render_marketplace_show_report, resolve_connector_reference,
+    run_connector_subcommand, run_connector_subcommand_async, run_connector_subcommand_env,
     run_connector_subcommand_stores_check, run_marketplace_command, search_installable_catalogue,
     search_installable_catalogue_full, search_installable_catalogue_with_skipped, store_and_config,
 };
