@@ -89,6 +89,9 @@ pub fn db_prune_title(days: u32) -> String {
     format!("Delete messages older than {days} day(s)?")
 }
 
+/// Title of the `/compact prune --all` confirmation.
+pub const COMPACT_PRUNE_TITLE: &str = "Delete every compaction summary?";
+
 /// Enter and Esc as the TUI names them in these dialogs.
 const ENTER: KeyInput = plain(Key::Enter);
 /// See [`ENTER`].
@@ -315,6 +318,49 @@ pub fn show_db_prune(ctx: &egui::Context, app: &mut App) -> bool {
 
 /// Title of the `/memory clear` confirmation (the TUI's title).
 pub const MEMORY_CLEAR_TITLE: &str = "Clear this project's memory?";
+
+/// Draw the `/compact prune --all` confirmation
+/// (`App::compact_prune_confirm_open`).
+///
+/// Same two-option shape as [`show_db_prune`]: Yes and No first move the App's
+/// choice to themselves (Right toggles it), then send Enter, which acts on the
+/// choice.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose prune confirmation is read.
+///
+/// # Returns
+///
+/// `true` while the confirmation is open.
+pub fn show_compact_prune(ctx: &egui::Context, app: &mut App) -> bool {
+    if !app.compact_prune_confirm_open {
+        return false;
+    }
+    let yes = app.compact_prune_confirm_is_yes();
+    let toggle = plain(Key::Right);
+    modal(
+        ctx,
+        "codemason_compact_prune_dialog",
+        COMPACT_PRUNE_TITLE,
+        |ui| {
+            ui.weak(format!("Selected: {}", if yes { YES } else { NO }));
+            ui.horizontal(|ui| {
+                for (label, is_yes) in [(YES, true), (NO, false)] {
+                    if ui.button(label).clicked() {
+                        if is_yes != yes {
+                            super::send_key(ui.ctx(), toggle);
+                        }
+                        super::send_key(ui.ctx(), ENTER);
+                    }
+                }
+            });
+            ui.weak("Left/Right move * Enter on Yes deletes * Enter on No cancels * Esc cancels");
+        },
+    );
+    true
+}
 
 /// Title of the Memory panel's delete confirmation (the TUI's heading).
 pub const MEMORY_DELETE_TITLE: &str = "Delete Memory?";

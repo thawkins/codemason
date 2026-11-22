@@ -960,6 +960,10 @@ impl App {
                 // Mirrors the subcommands the `/db` arm actually handles.
                 vec!["prune".to_string(), "help".to_string()]
             }
+            "compact" => {
+                // Mirrors the subcommands the `/compact` arm actually handles.
+                vec!["prune".to_string(), "help".to_string()]
+            }
             "stats" => vec!["help".to_string()],
             "agent" | "agents" => {
                 // Suggest agent-related subcommands
@@ -2455,6 +2459,94 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
         let report = codemason_agent::tool::os_info::render_text(&info);
         self.append_assistant_text(&format!("From: /osinfo show\n\n{report}"));
         self.status = "osinfo: show".to_string();
+    }
+
+    /// Route `/compact [prune [--all] [--dry-run]]`.
+    ///
+    /// A bare `/compact` and `/compact help` start a manual compaction of the
+    /// active session (the pre-existing behaviour). `prune` and an unknown
+    /// subcommand are handled here so they never reach the summarisation path
+    /// by accident.
+    ///
+    /// `prune` deletes every compaction summary except the newest one, because
+    /// each compaction anchors on its predecessor and only the newest is
+    /// meaningful. `--all` deletes every summary and arms the
+    /// `Delete every compaction summary?` confirmation dialog, so nothing is
+    /// deleted until the user picks `Yes`. `--dry-run` reports the count and
+    /// deletes nothing. `--bogus` and any other subcommand are refused with the
+    /// usage line, deleting nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - the text after `/compact`.
+    ///
+    /// # Returns
+    ///
+    /// `Continue` when the caller should run the ordinary manual compaction
+    /// (a bare `/compact` or `/compact help`), `Break` when the argument was
+    /// handled here.
+    fn handle_compact_command(&mut self, args: &str) -> std::ops::ControlFlow<()> {
+        let mut tokens = args.split_whitespace();
+        let sub = tokens.next().unwrap_or("").to_lowercase();
+        match sub.as_str() {
+            "" | "help" | "--help" | "-h" => return std::ops::ControlFlow::Continue(()),
+            "prune" => self.handle_compact_prune(tokens),
+            _ => {
+                self.append_assistant_text(&format!(
+                    "From: /compact\n\nUnrecognised subcommand `{sub}`. \
+                     Usage: `/compact` to compact now, \
+                     `/compact prune [--all] [--dry-run]`, or `/compact help`."
+                ));
+                self.status = "compact: usage".to_string();
+            }
+        }
+        std::ops::ControlFlow::Break(())
+    }
+
+    /// Parse and execute `/compact prune [--all] [--dry-run]`.
+    ///
+    /// Reached from [`Self::handle_compact_command`]. `--all` widens the delete
+    /// from "the superseded summaries" to "every summary" and therefore arms a
+    /// confirmation; `--dry-run` reports the count and deletes nothing, and
+    /// never arms the dialog.
+    fn handle_compact_prune<'a, I>(&mut self, tokens: I)
+    where
+        I: Iterator<Item = &'a str>,
+    {
+        let mut all = false;
+        let mut dry_run = false;
+        let mut bad: Option<String> = None;
+        for token in tokens {
+            let lowered = token.to_lowercase();
+            if lowered == "--all" {
+                all = true;
+            } else if lowered == "--dry-run" {
+                dry_run = true;
+            } else {
+                bad = Some(token.to_string());
+                break;
+            }
+        }
+
+        if let Some(token) = bad {
+            self.append_assistant_text(&format!(
+                "From: /compact prune\n\nUnrecognised argument `{token}`. \
+                 Usage: `/compact prune [--all] [--dry-run]`."
+            ));
+            self.status = "compact: prune usage".to_string();
+            return;
+        }
+
+        // `keep = 0` with `--all` (every summary goes); otherwise the newest
+        // summary is retained because it already merges in all the earlier ones.
+        let keep = usize::from(!all);
+        if dry_run {
+            self.count_compaction_prunable(keep, all);
+        } else if all {
+            self.open_compact_prune_confirm();
+        } else {
+            self.run_compaction_prune(keep, false);
+        }
     }
 
     /// Route `/db <args>` to the session-database subcommands.
@@ -4302,6 +4394,9 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 }
             }
             "compact" => {
+                if self.handle_compact_command(args).is_break() {
+                    return;
+                }
                 self.start_compaction_or_warn();
             }
             // `/compress` is a deprecated alias for `/compact` (FR-009).

@@ -1,12 +1,21 @@
 # cargo-deny configuration for codemason.
 # See https://embarkstudios.github.io/cargo-deny/ for full documentation.
-# Schema updated for cargo-deny >=0.19 (older keys like vulnerability/unmaintained removed).
+# Schema updated for cargo-deny >=0.19 (the older `vulnerability` key is gone;
+# `unmaintained` still exists but was narrowed - see below).
 
 [advisories]
 # Report `informational = "unsound"` advisories as failures too (default is
 # "none", which silently skips them), so a re-introduced unsound dependency is
 # never silently masked.
 unsound = "all"
+# Same posture for `informational = "unmaintained"` advisories. The default is
+# `"workspace"`, which only collects unmaintained advisories against a *direct*
+# dependency - every unmaintained advisory in this tree (ttf-parser, zvariant,
+# zbus_names, zvariant_derive, rustybuzz) is transitive, so the default made
+# those ignores dead configuration ("advisory-not-detected") and silently
+# audited nothing. `"all"` collects them, so each one must be enumerated below
+# with a reason and a newly introduced unmaintained dependency fails the gate.
+unmaintained = "all"
 # Ignore advisories for vulnerabilities in transitive deps we cannot directly control.
 ignore = [
     # Kept identical to `.cargo/audit.toml` so both gates agree on the ignore
@@ -49,6 +58,11 @@ ignore = [
     # `zvariant_derive` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
     # No safe upgrade is available; revisit when egui is bumped.
     "RUSTSEC-2026-0372",
+    # `rustybuzz` is unmaintained (not a vulnerability); transitive via
+    # usvg/resvg (SVG text shaping for the GUI and PDF figure rendering) and
+    # egui_extras. No fixed upgrade exists - the advisory names no patched
+    # version - so ignoring it is the only option short of dropping SVG text.
+    "RUSTSEC-2026-0206",
     # `chrono` is unmaintained (not a vulnerability; RUSTSEC-2026-0543 covers all
     # versions). It is a direct workspace dependency (14 crates); replacing it
     # with the recommended `jiff` is a separate migration ticket.

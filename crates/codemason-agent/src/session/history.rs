@@ -60,6 +60,16 @@ const GCF_MIN_SAVINGS_PERCENT: u64 = 10;
 const GCF_BLOCK_BEGIN: &str = "[BEGIN GCF generic]";
 const GCF_BLOCK_END: &str = "[END GCF]";
 
+/// Fixed JSON overhead of one message in a request estimate, in bytes: the
+/// braces, the `"role"`/`"content"` keys and their punctuation. Shared with
+/// the Context panel's per-message breakdown so both estimates agree.
+pub const MESSAGE_OVERHEAD_BYTES: usize = 40;
+
+/// Fixed JSON overhead of one tool definition in a request estimate, in
+/// bytes: `"type"`, `"function"`, the schema wrapper and their punctuation.
+/// Shared with the Context panel's per-tool breakdown so both estimates agree.
+pub const TOOL_DEFINITION_OVERHEAD_BYTES: usize = 60;
+
 /// A pending tool call extracted from the LLM stream, awaiting execution.
 #[derive(Clone)]
 pub(crate) struct PendingToolCall {
@@ -126,6 +136,39 @@ pub(crate) fn history_version_of(messages: &[Message]) -> u64 {
         last.updated_at.timestamp_millis().hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// Drop every superseded compaction summary from `history` in place,
+/// returning how many were removed.
+///
+/// Each compaction is summarised with the previous summary as its anchor, so a
+/// later summary already merges in everything still true from the earlier ones
+/// and only the newest is meaningful. The pre-send compaction path nevertheless
+/// only appends, so a long-lived session accumulates one [`Role::Compaction`]
+/// message per compaction, and the transcript builder replays each as its own
+/// assistant turn. Every summary but the last is dead weight in the request.
+///
+/// The newest summary keeps its position; everything else stays in order.
+///
+/// # Arguments
+///
+/// * `history` - the session history, modified in place.
+///
+/// # Returns
+///
+/// The number of summaries removed (zero when there is at most one).
+pub fn drop_superseded_summaries(history: &mut Vec<Message>) -> usize {
+    let Some(newest) = history.iter().rposition(|m| m.role == Role::Compaction) else {
+        return 0;
+    };
+    let before = history.len();
+    let mut index = 0;
+    history.retain(|m| {
+        let keep = m.role != Role::Compaction || index == newest;
+        index += 1;
+        keep
+    });
+    before - history.len()
 }
 
 /// Converts message history to chat messages, handling images asynchronously.
@@ -638,7 +681,7 @@ pub fn estimate_request_bytes_with_tool_bytes(
                     })
                     .sum(),
             };
-            content_len + m.role.len() + 40
+            content_len + m.role.len() + MESSAGE_OVERHEAD_BYTES
         })
         .sum::<usize>() as u64;
     // PERF-014 / C-002: when the caller pre-computed the total
@@ -651,7 +694,12 @@ pub fn estimate_request_bytes_with_tool_bytes(
         None => request
             .tools
             .iter()
-            .map(|t| t.name.len() + t.description.len() + t.parameters.to_string().len() + 60)
+            .map(|t| {
+                t.name.len()
+                    + t.description.len()
+                    + t.parameters.to_string().len()
+                    + TOOL_DEFINITION_OVERHEAD_BYTES
+            })
             .sum::<usize>() as u64,
     };
     if let Some(sys) = &request.system {
@@ -671,7 +719,12 @@ pub fn estimate_request_bytes_with_tool_bytes(
 pub fn estimate_tool_definition_bytes(tools: &[ToolDefinition]) -> u64 {
     tools
         .iter()
-        .map(|t| t.name.len() + t.description.len() + t.parameters.to_string().len() + 60)
+        .map(|t| {
+            t.name.len()
+                + t.description.len()
+                + t.parameters.to_string().len()
+                + TOOL_DEFINITION_OVERHEAD_BYTES
+        })
         .sum::<usize>() as u64
 }
 

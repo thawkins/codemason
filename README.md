@@ -348,7 +348,13 @@ per-project state lives in `.codemason/`. Start with
   `storage.retention.message_days` (14 days), and setting
   `storage.retention.enabled: true` runs the same prune automatically at
   startup. Deleting rows returns their pages to SQLite's freelist, so the file
-  does not shrink until a `VACUUM`, which needs exclusive access
+  does not shrink until a `VACUUM`, which needs exclusive access.
+  Conversation *summaries* have their own clean-up: `/compact` replaces the
+  history with a summary plus the retained tail, and each later compaction
+  anchors on the previous summary, so only the newest one is meaningful.
+  `/compact prune` deletes the superseded copies (`--all` for every
+  summary behind a confirmation, `--dry-run` to only count) — see
+  `docs/howtos/slashcommands/compact.md`
 - **Permission system** — multi-layered defense-in-depth with hardwired rules
   (codeindex tools always allowed), configurable allow/deny/ask rules, 7-layer bash
   security, file-path guards, and YOLO mode for trusted environments. An
@@ -1075,7 +1081,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.179** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.180** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered

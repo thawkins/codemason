@@ -19,6 +19,11 @@ ignore = [
     # `zvariant_derive` is unmaintained (not a vulnerability); transitive via egui/eframe (accesskit_unix/atspi/zbus a11y).
     # No safe upgrade is available; revisit when egui is bumped.
     "RUSTSEC-2026-0372",
+    # `rustybuzz` is unmaintained (not a vulnerability); transitive via
+    # usvg/resvg (SVG text shaping for the GUI and PDF figure rendering) and
+    # egui_extras. No fixed upgrade exists - the advisory names no patched
+    # version - so ignoring it is the only option short of dropping SVG text.
+    "RUSTSEC-2026-0206",
     # `chrono` is unmaintained (not a vulnerability; RUSTSEC-2026-0543 covers all
     # versions). It is a direct workspace dependency (14 crates); replacing it
     # with the recommended `jiff` is a separate migration ticket.

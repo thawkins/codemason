@@ -121,6 +121,12 @@ pub enum InputAction {
     /// Dismiss the `Prune messages older than N days?` dialog: the `No` option
     /// or `Esc`. Leaves the database unchanged.
     CancelDbPrune,
+    /// Confirm the `Delete every compaction summary?` dialog's `Yes` option
+    /// (opened by `/compact prune --all`).
+    ConfirmCompactPrune,
+    /// Dismiss the `Delete every compaction summary?` dialog: the `No` option
+    /// or `Esc`. Leaves the stored summaries unchanged.
+    CancelCompactPrune,
     /// Confirm the plan approval dialog (Enter when cursor_approve = true).
     ApprovePlan,
     /// Reject the plan approval dialog (Enter when cursor_approve = false, or `r`/Esc).
@@ -739,6 +745,27 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                 });
             }
             Key::Esc => return Some(InputAction::CancelDbPrune),
+            _ => return None,
+        }
+    }
+
+    // If the `Delete every compaction summary?` confirmation dialog (opened by
+    // `/compact prune --all`) is active, intercept keys before any other
+    // dialog. Same two-option shape as the dialogs above.
+    if app.compact_prune_confirm_open {
+        match key.key {
+            Key::Left | Key::Right | Key::Tab | Key::BackTab => {
+                app.compact_prune_confirm_toggle();
+                return None;
+            }
+            Key::Enter => {
+                return Some(if app.compact_prune_confirm_is_yes() {
+                    InputAction::ConfirmCompactPrune
+                } else {
+                    InputAction::CancelCompactPrune
+                });
+            }
+            Key::Esc => return Some(InputAction::CancelCompactPrune),
             _ => return None,
         }
     }

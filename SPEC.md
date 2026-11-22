@@ -1,7 +1,7 @@
 <div style="page-break-after: always; text-align: center; padding-top: 15em;">
 
 <h1 style="font-size: 3em; margin-bottom: 0.2em;">codemason</h1>
-<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.179</p>
+<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.180</p>
         <p style="font-size: 1.1em;">
           <strong>Date:</strong> 2026-11-13
       </p>
@@ -1865,6 +1865,22 @@ has no `compression` field, so the key is silently ignored. Use `compaction`.
 
 Trigger the one-shot compaction manually with the `/compact` slash command
 (`/compress` is a deprecated alias — FR-009).
+
+#### Compaction-summary pruning
+
+Every compaction anchors on the previous summary, so only the newest is
+meaningful, but the pre-send path only ever *appends* one. A session that has
+compacted many times therefore carries a stack of `Role::Compaction` messages
+that the transcript builder would replay as consecutive assistant turns. Two
+independent mechanisms fix this: the request-side filter drops superseded
+summaries before the request is built, and `/compact prune` deletes the stored
+rows. Each is covered by a regression suite wired into its crate's `tests/all.rs`:
+
+| Suite | Pins |
+|-------|------|
+| `crates/codemason-agent/tests/test_compaction_history_filter.rs` | `session::history::drop_superseded_summaries` — the request-side filter that collapses consecutive `Role::Compaction` summaries so only the newest reaches the transcript builder |
+| `crates/codemason-storage/tests/test_compaction_prune.rs` | `Storage::delete_compaction_messages(session, keep)` — deletes all but the newest *N* summaries and returns the count, which also backs `--dry-run`; `Storage::count_compaction_messages` shares the candidate query so a dry run and the delete cannot disagree |
+| `crates/codemason-app-core/tests/test_slash_compact_prune.rs` | `/compact prune [--all] [--dry-run]` — `prune` deletes the superseded summaries, `--all` deletes every summary behind a confirmation dialog that opens on `No`, `--dry-run` reports the count and deletes nothing |
 
 ### 5.5 Thinking Configuration
 

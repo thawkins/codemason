@@ -305,6 +305,8 @@ impl App {
             db_prune_confirm_open: false,
             db_prune_confirm_selected: crate::app::DB_PRUNE_CONFIRM_NO,
             db_prune_confirm_days: None,
+            compact_prune_confirm_open: false,
+            compact_prune_confirm_selected: crate::app::COMPACT_PRUNE_CONFIRM_NO,
             db_retention_days: app_config.storage.retention.message_days,
             plugin_store: None,
             plugin_store_view: None,

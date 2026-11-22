@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.0.180] - 2026-11-22
+
+A redesigned Context pane, compaction-summary pruning, and swarm result handling.
+
+The Context pane becomes a pinned tab with a stacked usage bar and one row per
+partition that opens to list its items, and it now costs the history as the
+request actually carries it, so it can no longer report more tokens than the
+window. Compaction is fixed on both sides: a superseded summary is no longer
+replayed or re-summarised forever, and `/compact prune` deletes the summaries a
+long-lived session accumulates. Swarm subtasks start with their predecessors'
+results, a finished swarm synthesises one answer, and a failed stream is
+reported instead of passing as a partial success.
+
 ### Added
 
 - Added: the Context pane shows a header with the share of the context window used and `used / window`, one stacked bar with a coloured segment per partition, and one colour-keyed row per partition with its tokens and share of the window. The rows no longer overlap (system prompt, skills, memory, instruction files, built-in tools, MCP tools, tool metadata, history), so they add up to the bar.
@@ -9,9 +22,11 @@
 - Added: `material::feedback::stacked_progress` and `swatch`, and `material::list::dense_item`, a compact legend row with an optional disclosure triangle and right-aligned value columns.
 - Added: `/swarm` subtasks that depend on others now start with their predecessors' results. `team_task_complete` takes an optional `result` (cut at 16 KiB), stored on the task in `tasks.json`; when a blocked swarm teammate is unblocked its prompt is rebuilt with a "Results from dependencies" section (up to 4 KiB per predecessor), and the completion table gains a Result column.
 - Added: a finished `/swarm` combines its task results into one answer. With a model selected, one LLM call (`SYNTHESIS_SYSTEM_PROMPT`) receives the goal and each task's status and result, and its answer is shown as "Swarm Result" ("Synthesis Failed" when the call fails).
+- Added: `/compact prune [--all] [--dry-run]` deletes the compaction summaries a long-lived session has accumulated. Each compaction anchors on the previous summary, so only the newest is meaningful; `prune` drops the rest, `--all` drops every summary behind a `Delete every compaction summary?` dialog that opens on `No`, and `--dry-run` reports the count and deletes nothing. Backed by the new `Storage::delete_compaction_messages(session, keep)` and `Storage::count_compaction_messages(session, keep)`, which share one candidate query so a dry run and the delete cannot disagree, and reload the transcript afterwards so the visible list matches storage.
 
 ### Fixed
 
+- Fixed: the transcript builder replayed every compaction summary as its own assistant turn. `session::history::drop_superseded_summaries` now collapses them to the newest before the request is built, so a session that has compacted many times is not billed for summaries that a later one already merged in. The stored rows are left alone; `/compact prune` is the delete.
 - Fixed: pre-send auto-compaction only appended its summary to the stored history and never removed the messages it summarised, so every later turn loaded the whole history again and compacted again (one session held 26 summaries in 80 messages, each a paid summarisation call). It now stores `[summary, ...kept tail, ...this turn]` in place of the history, in one transaction (the new `Storage::replace_messages`, shared with `/compact` through `SessionProcessor::persist_compacted_history`). The turn's assistant row and inbox messages are always kept (`compaction::runner::compacted_stored_history`), and the request is still compacted from the in-memory request, so request-only observations are kept and the empty assistant placeholder is never sent. A failed save leaves the history unchanged and is reported (`/compact` returns it as an error).
 - Fixed: the Context pane could show more tokens than the context window (`2.5M / 1.0M`). The history partition counted every tool output in full with its JSON metadata, counted reasoning that most providers never receive, and read the frontend's in-memory transcript rather than the stored history the agent sends. It now reads the stored history and costs it as the request carries it: tool results cut to the agent's budget (`tool_result_bytes_for_llm`, measured in bytes, so multi-byte text is not undercounted), reasoning only for a provider whose wire profile replays it.
 - Fixed: a swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate no longer takes another subtask with only its task id (no description, no dependency results).
