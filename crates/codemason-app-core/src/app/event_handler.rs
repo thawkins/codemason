@@ -58,6 +58,7 @@ impl App {
     /// team summary (or surface an error) into the chat log.
     #[doc(hidden)]
     pub async fn poll_pending_swarm(&mut self) {
+        self.poll_swarm_synthesis();
         let outcome = {
             let mut guard = recover_poisoned(self.session.swarm_result.lock(), "swarm_result");
             guard.take()
@@ -81,6 +82,29 @@ impl App {
             }
             Err(msg) => {
                 self.report_swarm_failure("Swarm Error", &msg);
+            }
+        }
+    }
+
+    /// Show the finished swarm's combined answer (or the synthesis error) once
+    /// the synthesis call started at completion has returned.
+    fn poll_swarm_synthesis(&mut self) {
+        let outcome = {
+            let mut guard = recover_poisoned(
+                self.session.swarm_synthesis_result.lock(),
+                "swarm_synthesis_result",
+            );
+            guard.take()
+        };
+        let Some(outcome) = outcome else { return };
+        match outcome {
+            Ok(answer) => {
+                self.append_assistant_text(&format!("From: /swarm\n## Swarm Result\n\n{answer}\n"));
+                self.status = "[done] swarm: results combined".to_string();
+                self.push_log_no_agent(LogLevel::Info, "Swarm synthesis complete".to_string());
+            }
+            Err(msg) => {
+                self.report_swarm_failure("Synthesis Failed", &msg);
             }
         }
     }

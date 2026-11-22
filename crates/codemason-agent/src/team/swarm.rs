@@ -269,3 +269,41 @@ pub fn swarm_prompt_with_results(
         .unwrap_or_default();
     build_swarm_task_prompt(subtask, &predecessors)
 }
+
+// -- Synthesis prompt -------------------------------------------------------------
+
+/// System prompt for the step that combines a finished swarm's task results
+/// into one answer to the user's goal.
+pub const SYNTHESIS_SYSTEM_PROMPT: &str = "You combine the work of a multi-agent coding \
+swarm into one answer for the user.\n\n\
+You receive the user's original goal and, for each subtask, its status and the result \
+its agent reported. Write a single Markdown answer that:\n\
+1. States what was achieved against the goal, first.\n\
+2. Merges overlapping findings instead of listing each agent separately.\n\
+3. Names files, functions and decisions the agents reported, exactly as given.\n\
+4. Lists what is unfinished: cancelled subtasks, subtasks with no result, and \
+contradictions between agents.\n\n\
+Use only the results given. Do not invent work that no agent reported.";
+
+/// Build the user message for the synthesis step: the original `goal`
+/// followed by each task's id, title, status and stored result. A task with
+/// no result says so, so the synthesis can report it as unverified.
+#[must_use]
+pub fn build_synthesis_user_prompt(goal: &str, tasks: &[crate::team::Task]) -> String {
+    let goal = if goal.trim().is_empty() {
+        "(goal not recorded)"
+    } else {
+        goal
+    };
+    let mut prompt = format!("## Goal\n\n{goal}\n\n## Subtask results\n\n");
+    for task in tasks {
+        prompt.push_str(&format!(
+            "### {} - {} ({})\n\n{}\n\n",
+            task.id,
+            task.title,
+            task.status.as_str(),
+            task.result.as_deref().unwrap_or("(no result recorded)")
+        ));
+    }
+    prompt
+}

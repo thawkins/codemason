@@ -333,6 +333,9 @@ pub struct SessionView {
     pub swarm_state: Option<SwarmState>,
     /// Pending result from an async `/swarm` LLM decomposition call.
     pub swarm_result: Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    /// Pending answer from the async `/swarm` synthesis call that combines a
+    /// finished swarm's task results (`App::poll_pending_swarm` adopts it).
+    pub swarm_synthesis_result: Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     /// When swarm unblock was last polled (debounces filesystem I/O).
     pub swarm_unblock_last_poll: std::time::Instant,
     /// When swarm completion was last polled (debounces filesystem I/O).
@@ -487,6 +490,7 @@ impl SessionView {
             focused_teammate: None,
             swarm_state: None,
             swarm_result: Arc::new(std::sync::Mutex::new(None)),
+            swarm_synthesis_result: Arc::new(std::sync::Mutex::new(None)),
             swarm_unblock_last_poll: std::time::Instant::now(),
             swarm_completion_last_poll: std::time::Instant::now(),
             swarm_autocomplete: None,

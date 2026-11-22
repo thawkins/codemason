@@ -599,6 +599,8 @@ mod test_swarm_more;
 mod test_swarm_offload;
 #[path = "test_swarm_result_handoff.rs"]
 mod test_swarm_result_handoff;
+#[path = "test_swarm_synthesis.rs"]
+mod test_swarm_synthesis;
 #[path = "test_syntax_highlight.rs"]
 mod test_syntax_highlight;
 #[path = "test_tasks_panel.rs"]

@@ -104,13 +104,14 @@ impl App {
                 output.push_str("\nSpawning teammates...\n");
                 self.append_assistant_text(&output);
 
-                // Record swarm state (prompt is blank for now - it was consumed in the slash command)
-                let swarm_prompt = String::new();
-                let default_agent_type = self
+                // Keep the goal and default agent type `/swarm` recorded before
+                // decomposing: the synthesis step answers that goal.
+                let (swarm_prompt, default_agent_type) = self
                     .session
                     .swarm_state
                     .as_ref()
-                    .and_then(|s| s.default_agent_type.clone());
+                    .map(|s| (s.prompt.clone(), s.default_agent_type.clone()))
+                    .unwrap_or_default();
                 self.session.swarm_state = Some(SwarmState {
                     team_name: team_name.clone(),
                     prompt: swarm_prompt,
@@ -779,6 +780,10 @@ impl App {
             }
         }
 
+        let synthesising = completed > 0 && self.spawn_swarm_synthesis(team_name);
+        if synthesising {
+            output.push_str("Combining the results into one answer...\n\n");
+        }
         output.push_str("Use `/swarm cancel` to clean up the ephemeral team.\n");
 
         self.append_assistant_text(&output);
@@ -791,6 +796,57 @@ impl App {
         if let Some(ref mut s) = self.session.swarm_state {
             s.completed = true;
         }
+    }
+}
+
+impl App {
+    /// Start the synthesis call that combines `team_name`'s task results into
+    /// one answer to the swarm's goal, on the runtime. The answer lands in
+    /// `swarm_synthesis_result` for [`App::poll_pending_swarm`] to show.
+    ///
+    /// Returns `false` (and starts nothing) when no model is selected, the
+    /// task list cannot be read, or there is no runtime to run the call on.
+    fn spawn_swarm_synthesis(&mut self, team_name: &str) -> bool {
+        let Some((provider_id, model_id)) = self
+            .session
+            .selected_model
+            .as_deref()
+            .and_then(|s| s.split_once('/'))
+            .map(|(p, m)| (p.to_string(), m.to_string()))
+        else {
+            return false;
+        };
+        let Some(tasks) = self.load_swarm_tasks(team_name) else {
+            return false;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return false;
+        };
+        let goal = self
+            .session
+            .swarm_state
+            .as_ref()
+            .map(|s| s.prompt.clone())
+            .unwrap_or_default();
+        let user = team::build_synthesis_user_prompt(&goal, &tasks.tasks);
+        let completer = crate::research_adapter::CodemasonCompleter {
+            registry: std::sync::Arc::clone(&self.provider_registry),
+            storage: std::sync::Arc::clone(&self.storage),
+            provider_id,
+            model_id,
+        };
+        let slot = std::sync::Arc::clone(&self.session.swarm_synthesis_result);
+        runtime.spawn(async move {
+            let outcome = completer
+                .complete(team::SYNTHESIS_SYSTEM_PROMPT, &user)
+                .await
+                .map_err(|e| e.to_string());
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(outcome);
+            }
+        });
+        self.status = format!("[wait] swarm: combining results for {team_name}");
+        true
     }
 }
 

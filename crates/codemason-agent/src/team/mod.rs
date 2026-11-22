@@ -74,8 +74,9 @@ pub use store::{
     validate_team_name,
 };
 pub use swarm::{
-    DECOMPOSITION_SYSTEM_PROMPT, MAX_PREDECESSOR_RESULT_BYTES, SwarmDecomposition, SwarmState,
-    SwarmSubtask, build_decomposition_user_prompt, build_swarm_task_prompt, parse_decomposition,
+    DECOMPOSITION_SYSTEM_PROMPT, MAX_PREDECESSOR_RESULT_BYTES, SYNTHESIS_SYSTEM_PROMPT,
+    SwarmDecomposition, SwarmState, SwarmSubtask, build_decomposition_user_prompt,
+    build_swarm_task_prompt, build_synthesis_user_prompt, parse_decomposition,
     parse_decomposition_with_default, swarm_prompt_with_results,
 };
 pub use task::{

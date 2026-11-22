@@ -142,3 +142,27 @@ fn test_swarm_prompt_with_results_picks_dependencies_from_task_list() {
     let no_list = swarm_prompt_with_results(&subtask("s2", &["s1"]), None);
     assert!(!no_list.contains("Results from dependencies"));
 }
+
+// -- build_synthesis_user_prompt -------------------------------------------------
+
+use codemason_agent::team::{TaskStatus, build_synthesis_user_prompt};
+
+#[test]
+fn test_synthesis_prompt_lists_goal_status_and_results() {
+    let mut done = task_with_result("s1", Some("Added rate limiting to login.rs"));
+    done.status = TaskStatus::Completed;
+    let mut dropped = task_with_result("s2", None);
+    dropped.status = TaskStatus::Cancelled;
+    let prompt = build_synthesis_user_prompt("Harden auth", &[done, dropped]);
+    assert!(prompt.starts_with("## Goal\n\nHarden auth"));
+    assert!(prompt.contains("### s1 - Task s1 (completed)"));
+    assert!(prompt.contains("Added rate limiting to login.rs"));
+    assert!(prompt.contains("### s2 - Task s2 (cancelled)"));
+    assert!(prompt.contains("(no result recorded)"));
+}
+
+#[test]
+fn test_synthesis_prompt_marks_missing_goal() {
+    let prompt = build_synthesis_user_prompt("  ", &[]);
+    assert!(prompt.contains("(goal not recorded)"));
+}

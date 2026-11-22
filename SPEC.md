@@ -4399,8 +4399,12 @@ the only override, and `/team cleanup` and `/team delete` share the guard).
 ### 15.1 How Swarm Works
 
 The `/swarm <prompt>` slash command decomposes a user request into parallel
-subtasks and spawns multiple agents to work on them concurrently. A synthesis
-agent combines the outputs into a final answer.
+subtasks and spawns multiple agents to work on them concurrently. When every
+subtask has finished and at least one completed, a synthesis step (one LLM call
+on the session's selected model, `SYNTHESIS_SYSTEM_PROMPT`) combines the goal
+and each task's status and stored result into a final answer, shown in the chat
+as "Swarm Result". With no model selected the swarm ends with the status table
+only; a failed synthesis call is reported as "Synthesis Failed".
 
 ### 15.2 Swarm Slash Commands
 
