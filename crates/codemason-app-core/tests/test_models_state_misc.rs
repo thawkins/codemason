@@ -89,6 +89,7 @@ fn snapshot() -> ContextPartitionSnapshot {
         tool_metadata_tokens: 50,
         history_tokens: 400,
         history_message_count: 7,
+        memory_message_count: 7,
         skills_tokens: 10,
         memory_tokens: 5,
         agents_md_tokens: 3,

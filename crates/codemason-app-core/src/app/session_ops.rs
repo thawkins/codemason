@@ -278,6 +278,42 @@ struct LiveContextPartitions {
     built_in_tools: Vec<ContextItem>,
     mcp_tools: Vec<ContextItem>,
     history: Vec<ContextItem>,
+    /// Messages in the frontend's in-memory history, for the stale-snapshot
+    /// guard (the history fields may come from storage instead).
+    memory_message_count: usize,
+    /// The session whose stored history the agent loads, if any.
+    session_id: Option<String>,
+    /// Whether the active provider's wire format sends reasoning back.
+    echo_reasoning: bool,
+}
+
+impl LiveContextPartitions {
+    /// Replace the history partition with the session's stored history: the
+    /// history the agent loads for its next request. The in-memory history
+    /// keeps everything the frontend has shown, including what a compaction
+    /// has since replaced in storage, so it overstates what is sent. Reads
+    /// SQLite, so it runs with the other disk-bound partitions; without a
+    /// session, or when the read fails, the in-memory history stays.
+    fn with_stored_history(mut self, storage: &codemason_agent::storage::Storage) -> Self {
+        let Some(session_id) = self.session_id.as_deref() else {
+            return self;
+        };
+        match storage.get_messages(session_id) {
+            Ok(messages) if !messages.is_empty() => {
+                self.history_tokens = bytes_to_tokens(
+                    messages
+                        .iter()
+                        .map(|m| context_items::message_bytes(m, self.echo_reasoning))
+                        .sum::<usize>(),
+                );
+                self.history_message_count = messages.len();
+                self.history = context_items::history_items(&messages, self.echo_reasoning);
+            }
+            Ok(_) => {}
+            Err(err) => tracing::debug!(%err, "context panel: stored history not read"),
+        }
+        self
+    }
 }
 
 impl DiskContextPartitions {
@@ -288,6 +324,7 @@ impl DiskContextPartitions {
             tool_metadata_tokens: live.tool_metadata_tokens,
             history_tokens: live.history_tokens,
             history_message_count: live.history_message_count,
+            memory_message_count: live.memory_message_count,
             skills_tokens: self.skills,
             memory_tokens: self.memory,
             agents_md_tokens: self.agents_md,
@@ -471,19 +508,30 @@ impl App {
     /// [`bytes_to_tokens`] heuristic so the estimate is comparable with
     /// provider-reported prompt tokens.
     pub fn conversation_history_token_count(&self) -> u64 {
+        let echo_reasoning = self.reasoning_is_sent();
         bytes_to_tokens(
             self.session
                 .messages
                 .iter()
-                .map(context_items::message_bytes)
+                .map(|m| context_items::message_bytes(m, echo_reasoning))
                 .sum::<usize>(),
         )
+    }
+
+    /// Whether the active provider's wire format sends reasoning back to the
+    /// model (`echo_reasoning`); a provider with no registered wire profile
+    /// is assumed to, so its history is not undercounted.
+    fn reasoning_is_sent(&self) -> bool {
+        self.active_provider_id()
+            .and_then(|id| codemason_llm::provider::wire::profile_table::profile_for(&id))
+            .is_none_or(|profile| profile.echo_reasoning)
     }
 
     /// Capture the context partitions that are safe to compute on the UI
     /// thread (registry caches and the in-memory history), with their
     /// per-item breakdown.
     fn live_context_partitions(&self) -> LiveContextPartitions {
+        let echo_reasoning = self.reasoning_is_sent();
         let registry = &self.session_processor.tool_registry;
         let defs = registry.definitions();
         let (built_in_tools, mcp_tools) = context_items::tool_items(&defs, |name| {
@@ -500,7 +548,10 @@ impl App {
             last_input_tokens: self.session.last_input_tokens,
             built_in_tools,
             mcp_tools,
-            history: context_items::history_items(&self.session.messages),
+            history: context_items::history_items(&self.session.messages, echo_reasoning),
+            memory_message_count: self.conversation_message_count(),
+            session_id: self.session.session_id.clone(),
+            echo_reasoning,
         }
     }
 
@@ -660,7 +711,7 @@ impl App {
             &config,
             &self.session_processor,
         );
-        disk.into_snapshot(live)
+        disk.into_snapshot(live.with_stored_history(&self.storage))
     }
 
     /// Schedule a background refresh of the Context panel snapshot.
@@ -703,7 +754,7 @@ impl App {
                 &config,
                 &session_processor,
             );
-            let snapshot = disk.into_snapshot(live);
+            let snapshot = disk.into_snapshot(live.with_stored_history(&storage));
             if let Ok(mut guard) = result_slot.lock() {
                 *guard = Some(snapshot);
             } else {
@@ -768,9 +819,9 @@ impl App {
         let Some(snapshot) = deposited else {
             return;
         };
-        if snapshot.history_message_count != self.conversation_message_count() {
+        if snapshot.memory_message_count != self.conversation_message_count() {
             tracing::debug!(
-                scheduled = snapshot.history_message_count,
+                scheduled = snapshot.memory_message_count,
                 current = self.conversation_message_count(),
                 "dropping stale context snapshot - history changed mid-refresh"
             );

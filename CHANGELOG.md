@@ -8,6 +8,11 @@
 - Added: each Context row opens on a click to list its items largest first: every tool (MCP tools as `server: tool`), skill, memory entry and the loaded instruction file, and the history by role with tool calls and results apart. `ContextPartitionSnapshot::items` carries the breakdown, built by the new `codemason_app_core::context_items`.
 - Added: `material::feedback::stacked_progress` and `swatch`, and `material::list::dense_item`, a compact legend row with an optional disclosure triangle and right-aligned value columns.
 
+### Fixed
+
+- Fixed: pre-send auto-compaction only appended its summary to the stored history and never removed the messages it summarised, so every later turn loaded the whole history again and compacted again (one session held 26 summaries in 80 messages, each a paid summarisation call). It now replaces the stored history with `[summary, ...recent]` as `/compact` does, through the shared `SessionProcessor::persist_compacted_history`, and keeps the turn's in-flight assistant message in the kept tail.
+- Fixed: the Context pane could show more tokens than the context window (`2.5M / 1.0M`). The history partition counted every tool output in full with its JSON metadata, counted reasoning that most providers never receive, and read the frontend's in-memory transcript rather than the stored history the agent sends. It now reads the stored history and costs it as the request carries it: tool results cut to the agent's budget (`tool_result_bytes_for_llm`), reasoning only for a provider whose wire profile replays it.
+
 ### Changed
 
 - Changed: the Context pane is a pinned tab beside the Sessions tab in the left column. It cannot be closed, floated or moved; `Alt+C` or a click on the tab brings it to the front, and `Alt+C` again gives the front back to Sessions. Hiding the sidebar takes the tab with it, so the left column still collapses. Showing it no longer hides the Log, Profile, Tasks or Memory panes, and opening those no longer hides it. A saved layout with the pane elsewhere has it moved beside Sessions on load.

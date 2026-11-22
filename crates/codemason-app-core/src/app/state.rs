@@ -389,8 +389,14 @@ pub struct ContextPartitionSnapshot {
     pub tool_metadata_tokens: u64,
     /// Byte/token estimate of the conversation history (FR-008).
     pub history_tokens: u64,
-    /// Number of messages in the conversation history (FR-008).
+    /// Number of messages in the conversation history (FR-008): the stored
+    /// history the agent loads, when the session has one.
     pub history_message_count: usize,
+    /// Number of messages in the frontend's in-memory history when the
+    /// snapshot was taken; `App::poll_context_snapshot_refresh` drops a
+    /// snapshot whose count no longer matches (the history changed while it
+    /// was computed).
+    pub memory_message_count: usize,
     /// Skills context injected into the system prompt (FR-009 sub-partition).
     pub skills_tokens: u64,
     /// Memory injections inside the system prompt (FR-009 sub-partition).

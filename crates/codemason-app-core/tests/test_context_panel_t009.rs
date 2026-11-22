@@ -19,6 +19,7 @@ fn snapshot(
         tool_metadata_tokens: metadata,
         history_tokens: history,
         history_message_count: 0,
+        memory_message_count: 0,
         skills_tokens: 0,
         memory_tokens: 0,
         agents_md_tokens: 0,
@@ -98,5 +99,40 @@ fn test_app_snapshot_matches_component_methods() {
     assert!(
         snap.total_tokens() > 0,
         "default registry must produce a positive aggregate"
+    );
+}
+
+#[test]
+fn test_history_partition_counts_the_stored_history_not_the_transcript() {
+    // After a pre-send compaction the agent replaces the stored history with
+    // `[summary, ...recent]`, while the frontend keeps the whole transcript
+    // in memory. The panel counts what the agent loads: the stored history.
+    use codemason_agent::message::{Message, Role};
+    let mut app = support::make_app();
+    let sid = "ctx-stored-history";
+    app.storage
+        .create_session(sid, "/tmp/ctx-stored-history")
+        .expect("create_session");
+    app.session.session_id = Some(sid.to_string());
+    let big = "x".repeat(40_000);
+    app.session.messages = (0..10)
+        .map(|i| Message::user_text(sid, format!("turn {i} {big}")))
+        .collect();
+    let summary = Message::new(
+        sid,
+        Role::Compaction,
+        Message::user_text(sid, "summary of turns 0-8").parts,
+    );
+    for msg in [summary, app.session.messages[9].clone()] {
+        app.storage.create_message(&msg).expect("create_message");
+    }
+
+    let snap = app.context_partition_snapshot();
+    assert_eq!(snap.history_message_count, 2, "the stored history");
+    assert_eq!(snap.memory_message_count, 10, "the guard's in-memory count");
+    assert!(
+        snap.history_tokens < 12_000,
+        "one 40 KB turn plus a summary, not ten: {}",
+        snap.history_tokens
     );
 }

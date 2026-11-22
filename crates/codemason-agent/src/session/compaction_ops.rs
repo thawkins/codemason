@@ -176,16 +176,48 @@ impl SessionProcessor {
         )
         .await?;
 
-        // Replace the persisted history with the compacted form so the next
-        // turn loads `[compaction_message, ...recent]` and not the full
-        // pre-compaction history again.
-        //
-        // `get_messages` orders rows by `created_at ASC`, but the synthetic
-        // compaction message carries `Utc::now()` - newer than every retained
-        // message - which would sort it to the END of the persisted history
-        // and send the summary as the last context entry. Backdate it to one
-        // millisecond before the oldest retained message so the chronological
-        // order matches the FR-005 conceptual order.
+        let outcome = self.persist_compacted_history(session_id, outcome).await;
+
+        info!(
+            session_id,
+            reason,
+            original_tokens = outcome.original_tokens,
+            compressed_tokens = outcome.compressed_tokens,
+            kept_messages = outcome.kept_message_count,
+            "session compaction complete"
+        );
+        Ok(outcome)
+    }
+
+    /// Replace a session's stored history with a compaction's
+    /// `[compaction_message, ...recent]`, so the next turn loads history from
+    /// the compaction point forward (FR-005 / FR-007) instead of the whole
+    /// pre-compaction history again.
+    ///
+    /// `get_messages` orders rows by `created_at ASC`, but the synthetic
+    /// compaction message carries `Utc::now()` - newer than every retained
+    /// message - which would sort it to the END of the persisted history and
+    /// send the summary as the last context entry. It is backdated to one
+    /// millisecond before the oldest retained message so the chronological
+    /// order matches the FR-005 conceptual order.
+    ///
+    /// A storage failure is logged and leaves the stored history as it was;
+    /// the returned outcome still describes the compacted history.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - the compacted session.
+    /// * `outcome` - the compaction's result, built from the stored history.
+    ///
+    /// # Returns
+    ///
+    /// `outcome` with the backdated compaction message in `new_messages` and
+    /// `compaction_message`.
+    pub(crate) async fn persist_compacted_history(
+        &self,
+        session_id: &str,
+        outcome: CompactionOutcome,
+    ) -> CompactionOutcome {
         let mut new_messages = outcome.new_messages;
         if let Some(oldest_recent) = new_messages.get(1).map(|m| m.created_at) {
             let seeded = oldest_recent - chrono::Duration::milliseconds(1);
@@ -213,19 +245,10 @@ impl SessionProcessor {
         if let Some(e) = persist_err {
             warn!(session_id, error = %e, "failed to persist compacted history");
         }
-
-        info!(
-            session_id,
-            reason,
-            original_tokens = outcome.original_tokens,
-            compressed_tokens = outcome.compressed_tokens,
-            kept_messages = outcome.kept_message_count,
-            "session compaction complete"
-        );
-        Ok(CompactionOutcome {
+        CompactionOutcome {
             new_messages,
             compaction_message,
             ..outcome
-        })
+        }
     }
 }

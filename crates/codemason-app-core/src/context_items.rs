@@ -8,12 +8,18 @@
 //! first. Every estimate uses the same ~4-bytes-per-token heuristic as the
 //! partition totals ([`bytes_to_tokens`]), so items compare with them.
 //!
-//! Dependencies: `codemason-agent` for the message types and
+//! The history is costed as the agent's request carries it: tool results
+//! are only their text, cut to the agent's tool-result budget, so a long
+//! session with large tool outputs is not counted many times over.
+//!
+//! Dependencies: `codemason-agent` for the message types and the
+//! tool-result estimate, and
 //! `codemason-types` for [`ToolDefinition`].
 
 use std::collections::BTreeMap;
 
 use codemason_agent::message::{Message, MessagePart, Role};
+use codemason_agent::session::history::tool_result_bytes_for_llm;
 use codemason_types::llm::ToolDefinition;
 
 use crate::app::ContextItem;
@@ -176,35 +182,71 @@ fn role_item(role: &Role) -> &'static str {
     }
 }
 
-/// Bytes the history estimate counts for one message part.
-fn part_bytes(part: &MessagePart) -> usize {
+/// Bytes one part of a `role` message takes in the request to the model.
+///
+/// A tool call is sent as its tool-use block (id, name and input) and, on
+/// an assistant message, as a tool-result block holding only the result
+/// text cut to the agent's budget
+/// ([`codemason_agent::session::history::tool_result_bytes_for_llm`]); the
+/// rest of the recorded output (its metadata) is never sent. Reasoning is
+/// sent only when the provider's wire format replays it (`echo_reasoning`).
+fn part_bytes(part: &MessagePart, role: &Role, echo_reasoning: bool) -> usize {
     match part {
-        MessagePart::Text { text } | MessagePart::Reasoning { text, .. } => text.len(),
-        MessagePart::ToolCall { call_id, state, .. } => {
-            call_id.len()
-                + state.input.to_string().len()
-                + state.output.as_ref().map_or(0, |v| v.to_string().len())
-                + state.error.as_ref().map_or(0, String::len)
+        MessagePart::Text { text } => text.len(),
+        MessagePart::Reasoning { text, .. } if echo_reasoning => text.len(),
+        MessagePart::Reasoning { .. } => 0,
+        MessagePart::ToolCall {
+            tool,
+            call_id,
+            state,
+        } => {
+            let tool_use = call_id.len() + tool.len() + state.input.to_string().len();
+            let result = match role {
+                Role::Assistant => call_id.len() + tool_result_bytes_for_llm(tool, state),
+                Role::User | Role::Compaction => 0,
+            };
+            tool_use + result
         }
         MessagePart::Image(_) => 0,
     }
 }
 
-/// Bytes the history estimate counts for `message`: its role label, a
-/// fixed JSON overhead and every content part.
+/// Bytes of the extra user message that carries an assistant message's
+/// tool results in the request, or zero when it has none.
+fn results_message_bytes(message: &Message) -> usize {
+    let calls = message
+        .parts
+        .iter()
+        .any(|part| matches!(part, MessagePart::ToolCall { .. }));
+    match message.role {
+        Role::Assistant if calls => "user".len() + MESSAGE_OVERHEAD,
+        Role::Assistant | Role::User | Role::Compaction => 0,
+    }
+}
+
+/// Bytes `message` takes in the request to the model: its role label, a
+/// fixed JSON overhead and every content part, plus the message carrying
+/// its tool results.
 ///
 /// # Arguments
 ///
 /// * `message` - the message to cost.
+/// * `echo_reasoning` - whether the provider's wire format sends reasoning
+///   back to the model; when it does not, reasoning costs nothing.
 ///
 /// # Returns
 ///
 /// The message's byte estimate.
 #[must_use]
-pub fn message_bytes(message: &Message) -> usize {
+pub fn message_bytes(message: &Message, echo_reasoning: bool) -> usize {
     message.role.to_string().len()
         + MESSAGE_OVERHEAD
-        + message.parts.iter().map(part_bytes).sum::<usize>()
+        + message
+            .parts
+            .iter()
+            .map(|part| part_bytes(part, &message.role, echo_reasoning))
+            .sum::<usize>()
+        + results_message_bytes(message)
 }
 
 /// The conversation history by message role, with tool calls and their
@@ -213,13 +255,15 @@ pub fn message_bytes(message: &Message) -> usize {
 /// # Arguments
 ///
 /// * `messages` - the conversation history.
+/// * `echo_reasoning` - whether the provider's wire format sends reasoning
+///   back to the model.
 ///
 /// # Returns
 ///
 /// One item per role present (and [`TOOL_CALLS_ITEM`] when any tool was
 /// called), sorted largest first.
 #[must_use]
-pub fn history_items(messages: &[Message]) -> Vec<ContextItem> {
+pub fn history_items(messages: &[Message], echo_reasoning: bool) -> Vec<ContextItem> {
     let mut bytes: BTreeMap<String, usize> = BTreeMap::new();
     for message in messages {
         let (calls, other): (Vec<&MessagePart>, Vec<&MessagePart>) = message
@@ -228,13 +272,19 @@ pub fn history_items(messages: &[Message]) -> Vec<ContextItem> {
             .partition(|part| matches!(part, MessagePart::ToolCall { .. }));
         let own = message.role.to_string().len()
             + MESSAGE_OVERHEAD
-            + other.into_iter().map(part_bytes).sum::<usize>();
+            + other
+                .into_iter()
+                .map(|part| part_bytes(part, &message.role, echo_reasoning))
+                .sum::<usize>();
         *bytes
             .entry(role_item(&message.role).to_string())
             .or_default() += own;
         if !calls.is_empty() {
-            *bytes.entry(TOOL_CALLS_ITEM.to_string()).or_default() +=
-                calls.into_iter().map(part_bytes).sum::<usize>();
+            *bytes.entry(TOOL_CALLS_ITEM.to_string()).or_default() += calls
+                .into_iter()
+                .map(|part| part_bytes(part, &message.role, echo_reasoning))
+                .sum::<usize>()
+                + results_message_bytes(message);
         }
     }
     sorted(

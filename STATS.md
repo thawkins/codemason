@@ -2,6 +2,22 @@
 
 **Version:** 1.0.178
 
+> **Compaction storage and Context history fix (unreleased).** No crate or
+> file is added. Pre-send auto-compaction now replaces the stored history with
+> `[summary, ...recent]` like `/compact` (shared
+> `SessionProcessor::persist_compacted_history` in
+> `codemason-agent/src/session/compaction_ops.rs`, `keep_stored_tail` in
+> `processor.rs`), instead of appending a summary every turn; the Context
+> pane's history partition reads the stored history and costs it as the
+> request carries it (`session::history::tool_result_bytes_for_llm`, reasoning
+> only for an `echo_reasoning` wire profile). 362 lines net (+490 / -128) and
+> 3 tests (`codemason-app-core`; `test_compaction_integration`'s pre-send case
+> is extended): **822,032** crate lines, **2,243** crate files, **1,257** crate
+> test files and **16,148** crate tests (830,909 / 2,267 / 1,267 / 16,235 with
+> the root package). `cargo nextest run -p codemason-agent -p
+> codemason-app-core -p codemason-gui --no-fail-fast` ran **6,924 tests, all
+> passing** (237 s); the full workspace was not re-run.
+
 > **Context panel v2 (unreleased).** No crate is added or removed. The GUI
 > Context pane is redrawn as a usage header, one stacked bar and colour-keyed,
 > non-overlapping partition rows that open to list their items, and it becomes
@@ -439,9 +455,9 @@
 
 | Metric | Value |
 |---|---|
-| Total Rust lines | 830,547 (821,670 in `crates/` + 8,877 in root `src/`/`tests/`) |
+| Total Rust lines | 830,909 (822,032 in `crates/` + 8,877 in root `src/`/`tests/`) |
 | Total Rust files | 2,267 (2,243 under `crates/` + 24 in root `src/`/`tests/`) |
-| Tests defined | 16,232 (`#[test]` / `#[tokio::test]` / `#[rstest]` attributes across `crates/`, `src/`, and root `tests/`) |
+| Tests defined | 16,235 (`#[test]` / `#[tokio::test]` / `#[rstest]` attributes across `crates/`, `src/`, and root `tests/`) |
 | Test files | 1,267 consolidated `tests/test_*.rs` files (1,257 under the crate `tests/` trees + 10 in the root `tests/` tree), plus the `tests/inline/*` modules, 20 `tests/all.rs` roots and the shared support/prelude helpers (re-measured at `1.0.178`) |
 | Test binaries | 19 consolidated `[[test]] name = "all"` integration targets (one per crate) plus the crate lib targets and the root bin and its `tests/all.rs` |
 | Tests executed | 16,228 passed / 0 failed / 16 skipped in a full workspace `cargo nextest run --workspace --no-fail-fast` on this tree (271 s) |
@@ -519,8 +535,8 @@ shows the file count, line count, and test-file count for each crate (including
 
 | Crate | Rust files | Rust lines | Test files |
 |---|---|---|---|
-| `codemason-agent` | 492 | 187,240 | 279 |
-| `codemason-app-core` | 366 | 167,845 | 265 |
+| `codemason-agent` | 492 | 187,403 | 279 |
+| `codemason-app-core` | 366 | 168,044 | 265 |
 | `codemason-bench` | 36 | 11,051 | 9 |
 | `codemason-codeindex` | 82 | 25,550 | 50 |
 | `codemason-config` | 83 | 20,948 | 55 |
@@ -551,8 +567,8 @@ the root binary package.
 ## Crate Size Distribution
 
 ```
-codemason-agent          ###########  187,240 lines (22.8%)
-codemason-app-core       ##########   167,845 lines (20.4%)
+codemason-agent          ###########  187,403 lines (22.8%)
+codemason-app-core       ##########   168,044 lines (20.4%)
 codemason-research       #####         79,182 lines (9.7%)
 codemason-tools-extended ####          62,535 lines (7.6%)
 codemason-gui            ###           49,869 lines (6.1%)
@@ -578,7 +594,7 @@ codemason-surface                       2,502 lines (0.3%)
 
 | Crate | Test Files | Approx. Tests |
 |-------|-----------:|--------------:|
-| `codemason-app-core` | 265 | 3,490 |
+| `codemason-app-core` | 265 | 3,493 |
 | `codemason-agent` | 279 | 2,805 |
 | `codemason-tools-extended` | 81 | 1,897 |
 | `codemason-research` | 80 | 1,505 |

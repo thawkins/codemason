@@ -14,6 +14,7 @@ fn snapshot(window: Option<usize>) -> ContextPartitionSnapshot {
         tool_metadata_tokens: 600,
         history_tokens: 2_400,
         history_message_count: 3,
+        memory_message_count: 3,
         skills_tokens: 100,
         memory_tokens: 50,
         agents_md_tokens: 0,
