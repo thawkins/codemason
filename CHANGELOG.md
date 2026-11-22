@@ -8,6 +8,8 @@
 - Added: material `badge`, `drawer_item_with_count` and `avatar_list_item` components in `codemason_gui::material`.
 - Added: an installed plugin or connector shows an Uninstall button (on its row and in the details pane) that runs `disable` then `remove` for it.
 - Added: tenant-hosted connectors (about 58 Claude directory entries such as Glean, Databricks and Metabase, whose server address is the organisation's own) are listed with a "Needs server URL" badge instead of being skipped; Install asks for the address in a prompt and checks it against the catalogue's pattern, and `/connectors add <id> --url <address>` does the same from the command line.
+- Added: `/swarm` subtasks that depend on others now start with their predecessors' results. `team_task_complete` takes an optional `result` (cut at 16 KiB), stored on the task in `tasks.json`; when a blocked swarm teammate is unblocked its prompt is rebuilt with a "Results from dependencies" section (up to 4 KiB per predecessor), and the completion table gains a Result column.
+- Added: a finished `/swarm` combines its task results into one answer. With a model selected, one LLM call (`SYNTHESIS_SYSTEM_PROMPT`) receives the goal and each task's status and result, and its answer is shown as "Swarm Result" ("Synthesis Failed" when the call fails).
 - Added: an Addons group on the ribbon's Agent tab with Plugins (`/plugins claude`) and Connectors (`/connectors claude`) buttons, and their `extension` and `hub` icons in the bundled Material Symbols subset.
 
 ### Changed
@@ -18,6 +20,8 @@
 - Fixed: plugin `url` sources that carry a `path` now install that subdirectory, and a `ref` pins the checkout, in both the Claude and Codex stores (previously the whole repository at `HEAD`).
 - Fixed: the Claude connector catalogue follows the directory feed's `next_cursor` pages (all ~1200 connectors instead of the first 100), and a connector with only a UUID id and a display name that is not a valid id (`Health Data Avatar (HDA)`) is named by its slugified display name instead of being skipped.
 - Fixed: Claude marketplace `git-subdir` entries that name their repository in GitHub `owner/repo` shorthand (188 entries in `anthropics/claude-plugins-community`) are now installable instead of being skipped as malformed.
+- Fixed: the `/swarm` goal is kept in the swarm state instead of being blanked when the decomposition returns.
+- Fixed: SPEC lists `/swarm cancel`, not the non-existent `/swarm kill`, and documents the real decomposition format.
 - Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.
 
 ## [1.0.178] - 2026-11-21

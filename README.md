@@ -646,7 +646,9 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   scrollable panel of the queued entries where `Enter` moves the highlighted entry
   one step toward the front and `Del` removes it
 - **Teams & Swarms** — multi-agent coordination with named teammates, shared task lists,
-  mailbox messaging, and swarm decomposition for parallel work (`/swarm <prompt>`)
+  mailbox messaging, and swarm decomposition for parallel work (`/swarm <prompt>`);
+  dependent subtasks receive their predecessors' results, and a finished swarm's
+  results are combined into one answer
 
 ![codemason swarm](assets/screens/codemasonswarm.png)
 
