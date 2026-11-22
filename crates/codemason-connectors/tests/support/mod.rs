@@ -136,6 +136,7 @@ pub fn stdio(id: &str, command: &str) -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 

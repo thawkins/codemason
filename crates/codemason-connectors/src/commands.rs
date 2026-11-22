@@ -38,7 +38,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use codemason_config::ConnectorsConfig;
 
-use crate::add::{InstallSource, add, classify_source};
+use crate::add::{InstallSource, add_with_server_url, classify_source};
 use crate::auth::{AuthState, CredentialStore, EnvSource};
 use crate::browse::CategoryFilter;
 use crate::descriptor::ConnectorDescriptor;
@@ -79,12 +79,15 @@ pub enum ConnectorCommand {
         /// Whether the launch asked for a cache-bypassing catalogue re-fetch.
         refresh: bool,
     },
-    /// `add <id|source> [--force]`.
+    /// `add <id|source> [--force] [--url <address>]`.
     Add {
         /// The source path, URL, or catalogue id to install from.
         source: String,
         /// Overwrite an existing connector with the same id.
         force: bool,
+        /// `--url <address>`: the user's own server address for a
+        /// tenant-hosted catalogue connector.
+        url: Option<String>,
     },
     /// `remove <id>`.
     Remove {
@@ -145,9 +148,10 @@ impl ConnectorArgError {
     pub fn report(self, sub: &str) -> String {
         let usage = match self {
             Self::MissingAddSource => {
-                "Usage: `/connectors add <id|source> [--force]`\n\
+                "Usage: `/connectors add <id|source> [--force] [--url <server address>]`\n\
                  Source forms: a catalogue id, a local directory, a local `.zip`/`.tar.gz` \
-                 file, or an `https://` URL ending in `.zip`/`.tar.gz`."
+                 file, or an `https://` URL ending in `.zip`/`.tar.gz`. `--url` gives your \
+                 own server address for a catalogue connector marked \"needs server URL\"."
             }
             Self::MissingId => "Usage: `/connectors <id>`",
         };
@@ -543,12 +547,17 @@ pub fn parse_connector_command(
         }
         "add" => {
             let mut force = false;
+            let mut url = None;
             let mut source_tokens: Vec<&str> = Vec::new();
-            for token in &tokens {
-                if *token == "--force" {
-                    force = true;
-                } else {
-                    source_tokens.push(token);
+            let mut iter = tokens.iter();
+            while let Some(token) = iter.next() {
+                match *token {
+                    "--force" => force = true,
+                    "--url" => match iter.next() {
+                        Some(value) => url = Some((*value).to_string()),
+                        None => return Some(Err(ConnectorArgError::MissingAddSource)),
+                    },
+                    other => source_tokens.push(other),
                 }
             }
             if source_tokens.is_empty() {
@@ -557,6 +566,7 @@ pub fn parse_connector_command(
             Some(Ok(ConnectorCommand::Add {
                 source: source_tokens.join(" "),
                 force,
+                url,
             }))
         }
         "remove" => id_command(&tokens, |id| ConnectorCommand::Remove { id }),
@@ -644,8 +654,8 @@ pub fn run_connector_subcommand(workdir: &Path, sub: &str, rest: &str) -> Option
 
     let parsed = parse_connector_command(sub, rest)?;
     let report = match parsed {
-        Ok(ConnectorCommand::Add { source, force }) => {
-            run_add(&dirs, workdir, &config, &source, force)
+        Ok(ConnectorCommand::Add { source, force, url }) => {
+            run_add(&dirs, workdir, &config, &source, force, url.as_deref())
         }
         Ok(ConnectorCommand::Remove { id }) => match remove(&dirs, &id) {
             Ok(outcome) => remove_report(&outcome),
@@ -1047,6 +1057,18 @@ pub struct CatalogueDescriptors {
     pub refused_marketplace: Option<String>,
 }
 
+/// Whether a catalogue fetch may serve a fresh entry from the on-disk
+/// catalogue cache (FR-031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CatalogueCacheMode {
+    /// Serve an unexpired on-disk entry instead of contacting the network.
+    #[default]
+    UseCache,
+    /// Skip on-disk reads and fetch from the network (an explicit refresh); the
+    /// fresh result is still written back to the cache.
+    Refresh,
+}
+
 /// [`fetch_catalogue_descriptors_with_skipped`] with the refused-marketplace
 /// detail carried too (FR-043).
 ///
@@ -1056,7 +1078,30 @@ pub struct CatalogueDescriptors {
 pub fn fetch_catalogue_descriptors_full(
     config: &ConnectorsConfig,
 ) -> Result<CatalogueDescriptors, String> {
-    let limits = CatalogueLimits::from(&config.stores_or_default());
+    fetch_catalogue_descriptors_with_mode(config, CatalogueCacheMode::UseCache)
+}
+
+/// [`fetch_catalogue_descriptors_full`] with the on-disk cache policy chosen by
+/// the caller: [`CatalogueCacheMode::Refresh`] never serves a cached entry.
+///
+/// # Arguments
+///
+/// * `config` - the connector subsystem configuration (endpoints and limits).
+/// * `mode` - whether an unexpired on-disk entry may be served.
+///
+/// # Errors
+///
+/// Returns a short ASCII cause when no catalogue could be fetched.
+pub fn fetch_catalogue_descriptors_with_mode(
+    config: &ConnectorsConfig,
+    mode: CatalogueCacheMode,
+) -> Result<CatalogueDescriptors, String> {
+    let mut limits = CatalogueLimits::from(&config.stores_or_default());
+    match mode {
+        CatalogueCacheMode::UseCache => {}
+        // A zero TTL makes every cache load a miss while writes still happen.
+        CatalogueCacheMode::Refresh => limits.cache_ttl = std::time::Duration::ZERO,
+    }
     let cache = CatalogueCache::default_cache();
     let now = now_unix_secs();
     let mut descriptors = Vec::new();
@@ -1319,12 +1364,13 @@ fn run_add(
     config: &ConnectorsConfig,
     source: &str,
     force: bool,
+    url: Option<&str>,
 ) -> String {
     let catalogue = match classify_source(source, workdir) {
         InstallSource::CatalogueId(_) => fetch_catalogue_descriptors(config),
         InstallSource::Local(_) => Vec::new(),
     };
-    match add(dirs, workdir, source, force, &catalogue) {
+    match add_with_server_url(dirs, workdir, source, force, &catalogue, url) {
         Ok(outcome) => add_report(&outcome),
         Err(err) => add_error_report(&err),
     }

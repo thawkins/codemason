@@ -189,6 +189,7 @@ fn parses_add_with_and_without_force() {
         Some(Ok(ConnectorCommand::Add {
             source: "google-drive".to_string(),
             force: false,
+            url: None,
         }))
     );
     assert_eq!(
@@ -196,6 +197,7 @@ fn parses_add_with_and_without_force() {
         Some(Ok(ConnectorCommand::Add {
             source: "https://example.org/x.zip".to_string(),
             force: true,
+            url: None,
         }))
     );
     assert_eq!(
@@ -633,4 +635,20 @@ fn store_and_config_defaults_when_no_block_is_present() {
     // No codemason.json at all: the compiled defaults apply (enabled).
     let (_, config): (_, ConnectorsConfig) = store_and_config(tree.path());
     assert!(config.is_enabled());
+}
+
+#[test]
+fn parses_add_with_a_server_url() {
+    assert_eq!(
+        parse_connector_command("add", "glean --url https://acme.glean.com/mcp/x"),
+        Some(Ok(ConnectorCommand::Add {
+            source: "glean".to_string(),
+            force: false,
+            url: Some("https://acme.glean.com/mcp/x".to_string()),
+        }))
+    );
+    assert_eq!(
+        parse_connector_command("add", "glean --url"),
+        Some(Err(ConnectorArgError::MissingAddSource))
+    );
 }

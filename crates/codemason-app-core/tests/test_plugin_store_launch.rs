@@ -17,7 +17,7 @@
 use std::sync::MutexGuard;
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::{PluginStoreFetchResult, PluginStoreStatus};
+use codemason_app_core::app::PluginStoreStatus;
 use codemason_config::{PluginStoreEndpoint, PluginStoresConfig, PluginsConfig};
 use codemason_connectors::CategoryFilter;
 use codemason_plugins::{
@@ -341,15 +341,13 @@ async fn a_known_category_flag_is_applied_when_the_index_arrives() {
 
     app.execute_slash_command("/plugins codex weather --category Web")
         .await;
-    // Deposit a matching index exactly as the off-loop fetch would.
-    *app.plugin_store_result.lock().expect("slot") = Some(PluginStoreFetchResult {
-        kind: StoreKind::Codex,
-        outcome: Ok(index(vec![
-            entry("codex-weather", Some("Web")),
-            entry("codex-db", Some("Database")),
-        ])),
-    });
-    app.poll_plugin_store_result();
+    // Fill the store cache with a matching index exactly as the off-loop fetch would.
+    let fetched = index(vec![
+        entry("codex-weather", Some("Web")),
+        entry("codex-db", Some("Database")),
+    ]);
+    support::deliver_plugin_index(&app, StoreKind::Codex, fetched.entries, fetched.skipped);
+    app.poll_store_cache();
 
     let browser = app.plugin_store.as_ref().expect("panel open");
     assert_eq!(browser.query, "weather", "the query is still pre-filled");
@@ -373,11 +371,9 @@ async fn an_unknown_category_flag_is_reported_and_leaves_the_full_set() {
 
     app.execute_slash_command("/plugins codex --category Nope")
         .await;
-    *app.plugin_store_result.lock().expect("slot") = Some(PluginStoreFetchResult {
-        kind: StoreKind::Codex,
-        outcome: Ok(index(vec![entry("codex-weather", Some("Web"))])),
-    });
-    app.poll_plugin_store_result();
+    let fetched = index(vec![entry("codex-weather", Some("Web"))]);
+    support::deliver_plugin_index(&app, StoreKind::Codex, fetched.entries, fetched.skipped);
+    app.poll_store_cache();
 
     let browser = app.plugin_store.as_ref().expect("panel open");
     assert_eq!(

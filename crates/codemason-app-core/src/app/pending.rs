@@ -25,8 +25,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::App;
 use super::session_view::SessionView;
+use super::{App, CacheSlot, CacheView, SlotData};
 
 /// Whether a job still holds `slot`, or `slot` holds a result
 /// (`has_result`) the pass has not applied yet. A poisoned lock counts as
@@ -45,6 +45,27 @@ fn queue_outstanding<T>(slot: &Arc<Mutex<Vec<T>>>) -> bool {
     slot_outstanding(slot, |queue| !queue.is_empty())
 }
 
+/// Whether a browser showing `slot` up to `view` still waits on it: a fetch in
+/// flight (including a forced re-fetch over the shown index, so its refreshing
+/// note renders and clears), a refresh failure not surfaced yet, an index still
+/// being enriched, or data the browser has not applied.
+fn cache_slot_outstanding<E, U>(slot: &CacheSlot<E, U>, view: Option<CacheView>) -> bool {
+    if slot.in_flight.is_some() || slot.refresh_error.as_ref().is_some_and(|e| !e.shown) {
+        return true;
+    }
+    match &slot.data {
+        SlotData::Empty => false,
+        SlotData::Ready(index) => {
+            let caught_up = CacheView {
+                generation: index.generation,
+                applied_updates: index.updates.len(),
+            };
+            !index.enriched || view != Some(caught_up)
+        }
+        SlotData::Failed { generation, .. } => view.map(|v| v.generation) != Some(*generation),
+    }
+}
+
 /// What a session's own polls (run for the focused session and, through
 /// `poll_background_sessions`, for every background one) still wait for.
 fn session_outstanding(view: &SessionView) -> bool {
@@ -61,6 +82,22 @@ fn session_outstanding(view: &SessionView) -> bool {
 }
 
 impl App {
+    /// Whether the open plugin-store or connector-catalogue browser still waits
+    /// on its store-cache slot ([`App::poll_store_cache`]). Prefetches with no
+    /// browser open are not counted: nothing is shown until a browser opens. A
+    /// poisoned cache lock counts as outstanding, so the pass runs and recovers it.
+    fn store_cache_outstanding(&self) -> bool {
+        let Ok(cache) = self.store_cache.lock() else {
+            return true;
+        };
+        let plugin = self.plugin_store.as_ref().is_some_and(|browser| {
+            cache_slot_outstanding(cache.plugin(browser.kind), self.plugin_store_view)
+        });
+        let connectors = self.connector_store.is_some()
+            && cache_slot_outstanding(cache.connectors(), self.connector_store_view);
+        plugin || connectors
+    }
+
     /// Whether the housekeeping pass has anything to apply or watch: a
     /// background job that will deposit a result, a deposited result not yet
     /// applied, or a state the pass advances on its own (an active swarm, a
@@ -79,12 +116,9 @@ impl App {
             || option_outstanding(&self.newproj_result)
             || queue_outstanding(&self.govcreate_progress)
             || option_outstanding(&self.govcreate_result)
-            || option_outstanding(&self.plugin_store_result)
-            || queue_outstanding(&self.store_enrich_result)
+            || self.store_cache_outstanding()
             || option_outstanding(&self.plugin_store_install_result)
             || option_outstanding(&self.plugin_store_probe_result)
-            || option_outstanding(&self.connector_catalogue_result)
-            || queue_outstanding(&self.connector_enrich_result)
             || option_outstanding(&self.connector_catalogue_install_result)
             || option_outstanding(&self.code_index_bg_result)
             || option_outstanding(&self.websearch_test_result)

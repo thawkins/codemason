@@ -18,6 +18,7 @@
 //! - [`dialog`]: the basic dialog surface, headline, body and actions;
 //! - [`sheet`]: the navigation drawer, its items, and side sheets;
 //! - [`chip`]: assist and filter chips;
+//! - [`badge`]: small state-label pills;
 //! - [`thumbnail`]: a removable image thumbnail;
 //! - [`feedback`]: slider, linear progress, plain tooltip and snackbar.
 //!
@@ -27,6 +28,7 @@
 //!
 //! Dependencies: `egui`, and this crate's palette, icons, fonts and metrics.
 
+pub mod badge;
 pub mod button;
 pub mod card;
 pub mod chip;

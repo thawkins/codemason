@@ -94,23 +94,18 @@ async fn open_fixture(app: &mut App, kind: StoreKind, bytes: Vec<u8>) {
     drain_fetch(app).await;
 }
 
-/// Wait (bounded) for the off-loop fetch to deposit its result, then apply it.
+/// Wait (bounded) for the off-loop fetch to fill the store cache, then apply it.
 async fn drain_fetch(app: &mut App) {
     let mut delivered = false;
     for _ in 0..300 {
-        if app
-            .plugin_store_result
-            .lock()
-            .map(|guard| guard.is_some())
-            .unwrap_or(false)
-        {
+        if support::store_fetch_landed(app) {
             delivered = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(delivered, "the off-loop fixture fetch delivered a result");
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 }
 
 /// The browser behind the open panel.

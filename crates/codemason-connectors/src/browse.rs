@@ -444,6 +444,23 @@ pub enum CatalogueBrowseStatus {
     Failed(String),
 }
 
+/// The prompt for a tenant-hosted connector's server address (the Claude
+/// directory entries such as Glean or Databricks whose address is the user's
+/// own, matching [`Self::pattern`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerUrlPrompt {
+    /// The connector being installed.
+    pub id: String,
+    /// The connector's display name.
+    pub name: String,
+    /// The pattern the address must match.
+    pub pattern: String,
+    /// The address typed so far.
+    pub value: String,
+    /// Why the last submitted address was refused, if it was.
+    pub error: Option<String>,
+}
+
 /// The catalogue-browser state for the connector catalogue (spec `connectors`).
 ///
 /// The state machine behind the `/connectors claude` browse panel, mirroring
@@ -538,6 +555,10 @@ pub struct CatalogueBrowser {
     /// validated, and refuse an unknown name in the footer instead of leaving the
     /// panel silently empty.
     pending_category: Option<CategoryFilter>,
+    /// The open "your server address" prompt for a tenant-hosted connector,
+    /// opened by Install on an entry whose servers need the user's own address.
+    /// While it is open, typed characters edit its value instead of the search.
+    pub server_url_prompt: Option<ServerUrlPrompt>,
     /// Whether the off-loop manifest-metadata enrichment (FR-044) has finished
     /// for the current catalogue.
     ///
@@ -547,6 +568,12 @@ pub struct CatalogueBrowser {
     /// a still-blank description reads as pending rather than missing. It is set
     /// `true` once the enrichment for the currently loaded catalogue has drained.
     pub enriching: bool,
+    /// Whether a forced re-fetch (Refresh) is in flight over the shown
+    /// catalogue; the dialog footer shows a `Refreshing...` note while it is.
+    pub refreshing: bool,
+    /// The cause of the last re-fetch that failed over the shown catalogue,
+    /// shown as a footer note until a later fetch lands.
+    pub refresh_error: Option<String>,
 }
 
 impl Default for CatalogueBrowser {
@@ -584,7 +611,10 @@ impl CatalogueBrowser {
             marketplace_scroll: 0,
             marketplace_viewport: 0,
             pending_category: None,
+            server_url_prompt: None,
             enriching: false,
+            refreshing: false,
+            refresh_error: None,
         };
         if !prefill.is_empty() {
             browser.set_query(prefill.to_string());
@@ -664,6 +694,7 @@ impl CatalogueBrowser {
     /// filter is derived, so the displayed order is independent of the fetch order
     /// and a category filter narrows the already-sorted set.
     pub fn set_entries(&mut self, entries: Vec<ConnectorDescriptor>, skipped: usize) {
+        self.refresh_error = None;
         self.all = entries;
         crate::descriptor::sort_connectors(&mut self.all);
         self.skipped = skipped;
@@ -1138,6 +1169,55 @@ impl CatalogueBrowser {
     /// Record a failed fetch for inline rendering.
     pub fn set_failed(&mut self, detail: String) {
         self.status = CatalogueBrowseStatus::Failed(detail);
+    }
+
+    /// Whether the browser shows a fetched catalogue (loaded, possibly empty),
+    /// as opposed to its loading or failed state.
+    #[must_use]
+    pub fn shows_index(&self) -> bool {
+        matches!(
+            self.status,
+            CatalogueBrowseStatus::Ready | CatalogueBrowseStatus::Empty
+        )
+    }
+
+    /// Show the loading state again (a retry after a failed fetch is in flight).
+    pub fn set_loading(&mut self) {
+        self.status = CatalogueBrowseStatus::Loading;
+    }
+
+    /// Replace a shown catalogue with a re-fetched one without disturbing the
+    /// user.
+    ///
+    /// Like [`Self::set_entries`], but a connector that is still listed keeps
+    /// the description the earlier catalogue (or its enrichment) filled in
+    /// where the new catalogue leaves it blank, so enriched rows do not blank
+    /// and refill. The query and the category/marketplace filters are kept as
+    /// `set_entries` keeps them, and the cursor stays on the same connector id
+    /// while that connector still matches; otherwise it falls back to the first
+    /// result. Clears any refresh failure note.
+    pub fn refresh_entries(&mut self, mut entries: Vec<ConnectorDescriptor>, skipped: usize) {
+        let selected = self.selected().map(|entry| entry.id.as_str().to_string());
+        let previous: std::collections::HashMap<String, ConnectorDescriptor> =
+            std::mem::take(&mut self.all)
+                .into_iter()
+                .map(|entry| (entry.id.as_str().to_string(), entry))
+                .collect();
+        for entry in &mut entries {
+            if let Some(old) = previous.get(entry.id.as_str())
+                && entry.description.trim().is_empty()
+            {
+                entry.description = old.description.clone();
+            }
+        }
+        self.set_entries(entries, skipped);
+        if let Some(position) = selected.and_then(|id| {
+            self.filtered
+                .iter()
+                .position(|&i| self.all.get(i).is_some_and(|entry| entry.id.as_str() == id))
+        }) {
+            self.cursor = position;
+        }
     }
 
     /// Replace the derived installed-connector-id set.

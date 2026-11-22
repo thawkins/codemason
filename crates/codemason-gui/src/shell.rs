@@ -1193,14 +1193,18 @@ impl Shell {
     /// Without attached sources there is no runtime, so they are dropped.
     fn run_dialog_keys(&mut self, ctx: &egui::Context) {
         let keys = dialogs::take_keys(ctx);
+        let lines = dialogs::take_slash_commands(ctx);
         let Some(sources) = self.sources.as_ref() else {
             return;
         };
-        if keys.is_empty() {
+        if keys.is_empty() && lines.is_empty() {
             return;
         }
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
+        }
+        for line in lines {
+            run_slash_keeping_draft(&mut self.app, &sources.runtime, &line);
         }
         ctx.request_repaint();
     }

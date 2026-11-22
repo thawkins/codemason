@@ -2806,6 +2806,8 @@ graph LR
 
 ### 6.5 Plugin-Store Category and Marketplace Navigators
 
+In the GUI, the Codex plugin, Claude plugin and Claude connector indexes are prefetched at startup into an in-memory store index cache in `codemason-app-core`; the browsers read it (warnings surface on first open), `--refresh` or the footer Refresh button re-fetches it, and a marketplace add/remove refetches the affected index. The GUI presents plugins as a wide three-pane Plugin Store dialog with a Codex | Claude switcher and connectors as a separate Connectors dialog (sign-in badges, requested scopes, credential name, MCP servers); see `docs/superpowers/specs/2026-11-22-marketplace-browser-gui-design.md`.
+
 The plugin-store browse panel opened by `/plugins codex` and `/plugins claude`
 (spec `catnav`, `pluginstores` FR-052) splits its inner area into a left-hand
 navigator column and the existing result column, and the navigator column is split

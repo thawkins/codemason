@@ -2,14 +2,13 @@
 //! panel and is surfaced as a warning in the message window instead (spec
 //! `connectors` FR-043).
 //!
-//! The off-loop fetch delivers a [`ConnectorCatalogueResult`] whose
-//! `refused_marketplace` carries the refusal; `poll_connector_catalogue_result`
-//! must apply the surviving descriptors AND push a `warn` log line naming the
-//! refusal. Driving the poll directly with a hand-built result keeps the test
-//! offline (NFR-003).
+//! The off-loop fetch job fills the store cache with the surviving descriptors
+//! and a warning naming the refusal; `poll_store_cache` must apply the
+//! descriptors AND push a `warn` log line naming the refusal. Filling the cache
+//! directly with a hand-built index keeps the test offline (NFR-003).
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::{ConnectorCatalogueResult, LogLevel};
+use codemason_app_core::app::{LogLevel, StoreCacheKey};
 use codemason_connectors::{
     CatalogueBrowseStatus, CategoryFilter, ConnectorAuthShape, ConnectorDescriptor, ConnectorId,
     ConnectorServer,
@@ -27,6 +26,7 @@ fn server() -> ConnectorServer {
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        url_pattern: None,
     }
 }
 
@@ -48,9 +48,14 @@ fn entry(id: &str) -> ConnectorDescriptor {
     }
 }
 
-/// An app with the connector panel open and no fetch started.
+/// An app with the connector panel open and no fetch started (the catalogue
+/// slot is marked in flight first, so the open starts no network fetch).
 fn open_loading() -> App {
     let mut app = support::make_app();
+    app.store_cache
+        .lock()
+        .expect("store cache")
+        .begin(StoreCacheKey::Connectors);
     app.open_connector_catalogue("", CategoryFilter::all(), false);
     app
 }
@@ -59,15 +64,19 @@ fn open_loading() -> App {
 fn a_refused_added_marketplace_warns_and_leaves_the_base_rows_intact() {
     let mut app = open_loading();
 
-    // Deliver a merged result carrying the base catalogue's rows plus the refusal
-    // of one added marketplace URL.
-    *app.connector_catalogue_result.lock().expect("slot") = Some(ConnectorCatalogueResult {
-        outcome: Ok(vec![entry("claude-official"), entry("linear")]),
-        skipped: 0,
-        refused_marketplace: Some("http://insecure.example.org/servers".to_string()),
-    });
+    // Deliver a merged result carrying the base catalogue's rows plus the warning
+    // the fetch job records for the refusal of one added marketplace URL.
+    support::deliver_connectors(
+        &app,
+        vec![entry("claude-official"), entry("linear")],
+        0,
+        vec![
+            "a configured connector marketplace was skipped: http://insecure.example.org/servers"
+                .to_string(),
+        ],
+    );
 
-    app.poll_connector_catalogue_result();
+    app.poll_store_cache();
 
     // The base rows survive: the refused marketplace never blinds the panel.
     let browser = app.connector_store.as_ref().expect("panel open");
@@ -99,13 +108,9 @@ fn a_refused_added_marketplace_warns_and_leaves_the_base_rows_intact() {
 fn a_clean_merge_pushes_no_marketplace_warning() {
     let mut app = open_loading();
 
-    *app.connector_catalogue_result.lock().expect("slot") = Some(ConnectorCatalogueResult {
-        outcome: Ok(vec![entry("claude-official")]),
-        skipped: 0,
-        refused_marketplace: None,
-    });
+    support::deliver_connectors(&app, vec![entry("claude-official")], 0, Vec::new());
 
-    app.poll_connector_catalogue_result();
+    app.poll_store_cache();
 
     assert!(
         !app.log_entries

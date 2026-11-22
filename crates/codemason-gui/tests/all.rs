@@ -126,6 +126,10 @@ mod test_main_thread;
 mod test_markdown;
 #[path = "test_markdown_table_border.rs"]
 mod test_markdown_table_border;
+#[path = "test_material_avatar_item.rs"]
+mod test_material_avatar_item;
+#[path = "test_material_badge.rs"]
+mod test_material_badge;
 #[path = "test_material_button.rs"]
 mod test_material_button;
 #[path = "test_material_card.rs"]
@@ -134,6 +138,8 @@ mod test_material_card;
 mod test_material_chip;
 #[path = "test_material_dialog.rs"]
 mod test_material_dialog;
+#[path = "test_material_drawer_count.rs"]
+mod test_material_drawer_count;
 #[path = "test_material_feedback.rs"]
 mod test_material_feedback;
 #[path = "test_material_icon_button.rs"]
@@ -180,6 +186,8 @@ mod test_side_panels;
 mod test_startup;
 #[path = "test_status_bar.rs"]
 mod test_status_bar;
+#[path = "test_store_dialog_gui.rs"]
+mod test_store_dialog_gui;
 #[path = "test_theme.rs"]
 mod test_theme;
 #[path = "test_theme_editor_dialog.rs"]
@@ -233,6 +241,8 @@ mod test_alt_t_teams_window_gui;
 mod test_connector_catalogue_mouse_gui;
 #[path = "test_connector_catalogue_panel_gui.rs"]
 mod test_connector_catalogue_panel_gui;
+#[path = "test_connector_dialog_gui.rs"]
+mod test_connector_dialog_gui;
 #[path = "test_context_panel_t002_gui.rs"]
 mod test_context_panel_t002_gui;
 #[path = "test_context_panel_t010_gui.rs"]

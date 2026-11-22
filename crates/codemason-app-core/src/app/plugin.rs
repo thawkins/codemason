@@ -23,6 +23,7 @@
 //! never stored on [`App`](crate::app::App) and never crosses an `.await`, so
 //! `App` stays `Send + Sync` for the async event loop.
 
+use crate::app::StoreCacheKey;
 use codemason_connectors::CategoryFilter;
 use codemason_plugins::{
     PLUGIN_SUBCOMMANDS, StoreKind, render_help, run_plugin_subcommand, store_and_config,
@@ -43,6 +44,46 @@ use codemason_plugins::{
 /// render the usage block and create no files (FR-014).
 #[must_use]
 pub(super) fn handle_plugins_command(app: &mut crate::app::App, args: &str) -> Option<String> {
+    let result = dispatch_plugins_command(app, args);
+    // A marketplace add/remove changes what the store index lists, so the
+    // cached index is dropped and refetched whatever the command reported.
+    let args = args.trim();
+    let sub = subcommand_of(args);
+    if sub == "marketplace" {
+        let rest = args.strip_prefix(sub).map(str::trim_start).unwrap_or("");
+        if let Some(kind) = marketplace_mutation_target(rest) {
+            app.marketplace_changed(StoreCacheKey::Plugins(kind));
+        }
+    }
+    // A removal changes what is installed, so an open plugin store re-derives
+    // its installed rows (the browser's Uninstall runs this command).
+    if sub == "remove"
+        && let Some(id) = args
+            .strip_prefix(sub)
+            .and_then(|rest| rest.split_whitespace().next())
+    {
+        app.plugin_store_removed(id);
+    }
+    result
+}
+
+/// The store a `/plugins marketplace <rest>` invocation adds to or removes from.
+///
+/// `rest` is the text after `marketplace`. Returns `Some(kind)` for
+/// `<codex|claude> add|remove ...` and `None` for `show`, `list` and anything
+/// else, none of which change the configured marketplaces.
+#[must_use]
+pub fn marketplace_mutation_target(rest: &str) -> Option<StoreKind> {
+    let mut tokens = rest.split_whitespace();
+    let kind = StoreKind::from_token(tokens.next()?)?;
+    match tokens.next()? {
+        "add" | "remove" => Some(kind),
+        _ => None,
+    }
+}
+
+/// Runs the `/plugins` subcommand ladder; see [`handle_plugins_command`].
+fn dispatch_plugins_command(app: &mut crate::app::App, args: &str) -> Option<String> {
     let args = args.trim();
     // A bare `/plugins` renders usage (FR-014).
     if args.is_empty() {
@@ -230,7 +271,7 @@ fn render_mcp_tool_report(app: &crate::app::App) -> String {
 /// may contain spaces. A missing `--category` value degrades to the unfiltered
 /// `ALL` selection so a malformed flag never filters everything out. The category
 /// value is validated against the categories the fetched index actually carries
-/// once the off-loop fetch lands (see [`crate::app::App::poll_plugin_store_result`]),
+/// once the off-loop fetch lands (see [`crate::app::App::poll_store_cache`]),
 /// so an unknown value renders the panel's inline refusal rather than an empty list.
 #[must_use]
 fn parse_store_launch(rest: &str) -> (String, CategoryFilter, bool) {

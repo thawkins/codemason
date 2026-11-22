@@ -149,14 +149,24 @@ pub fn outlined_value(
         node.set_value(value);
     });
     let border_slot = ui.painter().add(Shape::Noop);
+    let input = input_rect(rect);
+    let mut text_width = 0.0;
     if !value.is_empty() {
         let colour = content_colour(ui, palette, rgb(palette.m3.on_surface));
         let text = text_galley(ui, value, egui::FontId::proportional(INPUT_SIZE), colour);
-        let input = input_rect(rect);
+        text_width = text.size().x;
         let pos = egui::pos2(input.left(), rect.center().y - text.size().y / 2.0);
         ui.painter()
             .with_clip_rect(input.expand2(Vec2::new(0.0, 4.0)))
             .galley(pos, text, colour);
+    }
+    if active {
+        // Typing reaches this field through the key router, so it has no
+        // egui text cursor of its own: draw one after the text so an active
+        // field reads as the place typing goes.
+        let caret = value_caret(input, text_width);
+        let colour = content_colour(ui, palette, rgb(palette.m3.primary));
+        ui.painter().rect_filled(caret, 0.0, colour);
     }
     let look = Look {
         label,
@@ -167,6 +177,33 @@ pub fn outlined_value(
     };
     decorate(ui, palette, rect, border_slot, &look);
     response
+}
+
+/// Width of the text cursor an active [`outlined_value`] draws, in points.
+pub const CARET_WIDTH: f32 = 2.0;
+
+/// The text cursor of an active [`outlined_value`]: a [`CARET_WIDTH`] bar
+/// the input text's height, just after `text_width` points of text, kept
+/// inside `input` (the text area) when the text overflows it.
+///
+/// # Arguments
+///
+/// * `input` - the field's text area.
+/// * `text_width` - the shown text's width; `0` for an empty field.
+///
+/// # Returns
+///
+/// The caret's rect.
+#[must_use]
+pub fn value_caret(input: Rect, text_width: f32) -> Rect {
+    let left = (input.left() + text_width + 1.0).min(input.right() - CARET_WIDTH);
+    Rect::from_min_size(
+        egui::pos2(
+            left.max(input.left()),
+            input.center().y - INPUT_SIZE / 2.0 - 1.0,
+        ),
+        Vec2::new(CARET_WIDTH, INPUT_SIZE + 2.0),
+    )
 }
 
 /// Where the input text sits inside a field's `rect`.

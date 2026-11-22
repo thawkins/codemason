@@ -118,11 +118,15 @@ pub enum Icon {
     Provider,
     /// Resume a halted agent (`play_arrow`).
     Resume,
+    /// The plugin store (`extension`).
+    Plugins,
+    /// The connector catalogue (`hub`).
+    Connectors,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 46] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -167,6 +171,8 @@ impl Icon {
         Self::Restore,
         Self::Provider,
         Self::Resume,
+        Self::Plugins,
+        Self::Connectors,
     ];
 
     /// The icon's character in the Material Symbols font.
@@ -217,6 +223,8 @@ impl Icon {
             Self::Restore => "\u{e3e0}",
             Self::Provider => "\u{e2bd}",
             Self::Resume => "\u{e037}",
+            Self::Plugins => "\u{e87b}",
+            Self::Connectors => "\u{e9f4}",
         }
     }
 
@@ -268,6 +276,8 @@ impl Icon {
             Self::Restore => "[=]",
             Self::Provider => "api",
             Self::Resume => "|>",
+            Self::Plugins => "plg",
+            Self::Connectors => "con",
         }
     }
 }

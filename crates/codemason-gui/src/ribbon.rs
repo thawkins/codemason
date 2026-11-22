@@ -238,6 +238,13 @@ pub const TABS: &[RibbonTab] = &[
                     slash("Resume", Icon::Resume, "/resume"),
                 ],
             },
+            RibbonGroup {
+                label: "Addons",
+                items: &[
+                    slash("Plugins", Icon::Plugins, "/plugins claude"),
+                    slash("Connectors", Icon::Connectors, "/connectors claude"),
+                ],
+            },
         ],
     },
     RibbonTab {

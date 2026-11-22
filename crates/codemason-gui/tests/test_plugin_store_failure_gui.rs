@@ -12,7 +12,7 @@
 //! silently dropped.
 //!
 //! These tests drive the real renderer through a `TestBackend` and the real poll
-//! path through the shared delivery slot, so nothing is contacted over the
+//! path through the store cache, so nothing is contacted over the
 //! network and no plugin is installed.
 //!
 //! Ported to codemason-gui when the terminal UI was removed: these tests of
@@ -23,7 +23,7 @@
 //! assertions that read the drawn terminal frame were dropped with it.
 
 use codemason_app_core::app::App;
-use codemason_app_core::app::{PluginStoreBrowser, PluginStoreFetchResult};
+use codemason_app_core::app::PluginStoreBrowser;
 use codemason_plugins::{StoreError, StoreIndex, StoreKind};
 
 #[path = "../../codemason-app-core/tests/support/mod.rs"]
@@ -36,10 +36,14 @@ fn open_loading() -> App {
     app
 }
 
-/// Deposit one fetch outcome into the app's delivery slot.
+/// Record one fetch outcome in the store cache, as the fetch job would.
 fn deliver(app: &App, kind: StoreKind, outcome: Result<StoreIndex, StoreError>) {
-    let mut guard = app.plugin_store_result.lock().expect("slot");
-    *guard = Some(PluginStoreFetchResult { kind, outcome });
+    match outcome {
+        Ok(index) => {
+            support::deliver_plugin_index(app, kind, index.entries, index.skipped);
+        }
+        Err(err) => support::deliver_plugin_failure(app, kind, &err),
+    }
 }
 
 /// `render` without its terminal draw: the setup it performs, then
@@ -86,7 +90,7 @@ fn an_unreachable_marketplace_renders_a_clean_unavailable_line() {
         }),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     render_effects(&mut app, 100, 30);
     crate::frame::publish(&mut app);
@@ -105,7 +109,7 @@ fn a_timed_out_marketplace_renders_a_clean_unavailable_line() {
         Err(StoreError::Timeout { ms: 10_000 }),
     );
 
-    app.poll_plugin_store_result();
+    app.poll_store_cache();
 
     render_effects(&mut app, 100, 30);
     crate::frame::publish(&mut app);

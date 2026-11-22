@@ -165,3 +165,72 @@ impl Drop for GlobalConfigGuard {
         codemason_config::Config::invalidate_load_cache();
     }
 }
+
+/// Fill the store-cache slot of plugin store `kind` with `entries`, as the
+/// background fetch job would, and return the slot's generation. The open
+/// browser picks it up on the next `App::poll_store_cache`.
+#[allow(dead_code)]
+pub fn deliver_plugin_index(
+    app: &App,
+    kind: codemason_plugins::StoreKind,
+    entries: Vec<codemason_plugins::StoreEntry>,
+    skipped: usize,
+) -> u64 {
+    let key = codemason_app_core::app::StoreCacheKey::Plugins(kind);
+    let mut cache = app.store_cache.lock().expect("store cache");
+    let generation = cache.begin(key);
+    cache.fill_plugins(kind, generation, entries, skipped, Vec::new(), Vec::new());
+    generation
+}
+
+/// Record a failed fetch of plugin store `kind` in the store cache with the
+/// fetch job's own detail for `err` (`StoreError::panel_detail`).
+#[allow(dead_code)]
+pub fn deliver_plugin_failure(
+    app: &App,
+    kind: codemason_plugins::StoreKind,
+    err: &codemason_plugins::StoreError,
+) {
+    let key = codemason_app_core::app::StoreCacheKey::Plugins(kind);
+    let mut cache = app.store_cache.lock().expect("store cache");
+    let generation = cache.begin(key);
+    cache.fail(key, generation, err.panel_detail(kind));
+}
+
+/// Fill the connector-catalogue store-cache slot with `entries`, as the
+/// background fetch job would, and return the slot's generation.
+#[allow(dead_code)]
+pub fn deliver_connectors(
+    app: &App,
+    entries: Vec<codemason_connectors::ConnectorDescriptor>,
+    skipped: usize,
+    warnings: Vec<String>,
+) -> u64 {
+    let key = codemason_app_core::app::StoreCacheKey::Connectors;
+    let mut cache = app.store_cache.lock().expect("store cache");
+    let generation = cache.begin(key);
+    cache.fill_connectors(generation, entries, skipped, warnings);
+    generation
+}
+
+/// Record a failed connector-catalogue fetch with `cause` in the store cache.
+#[allow(dead_code)]
+pub fn deliver_connector_failure(app: &App, cause: &str) {
+    let key = codemason_app_core::app::StoreCacheKey::Connectors;
+    let mut cache = app.store_cache.lock().expect("store cache");
+    let generation = cache.begin(key);
+    cache.fail(key, generation, cause.to_string());
+}
+
+/// Whether the store-cache fetch for the open plugin-store browser has landed:
+/// no fetch in flight and the slot holds an index or a failure. `false` when no
+/// browser is open.
+#[allow(dead_code)]
+pub fn store_fetch_landed(app: &App) -> bool {
+    let Some(kind) = app.plugin_store.as_ref().map(|browser| browser.kind) else {
+        return false;
+    };
+    let cache = app.store_cache.lock().expect("store cache");
+    let slot = cache.plugin(kind);
+    slot.in_flight.is_none() && !matches!(slot.data, codemason_app_core::app::SlotData::Empty)
+}
