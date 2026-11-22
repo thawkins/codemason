@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [1.0.181] - 2026-11-22
+
+Git test fixtures isolate from inherited command-line config, the swarm, Context
+and teams how-tos were brought up to shipped behaviour with every how-to PDF
+regenerated, and `/release` composes a release message when none is supplied.
+
+### Fixed
+
+- Fixed: nine git-remote tests failed on a harness that exports command-line-scope config, because `GIT_CONFIG_PARAMETERS='safe.bareRepository=explicit'` refuses to read the local bare repositories the fixtures push to (`fatal: cannot use bare repository ...`). The `git()` helpers in `crates/codemason-agent/tests/test_autofix_add_tool.rs`, `crates/codemason-tools-extended/tests/test_project_scaffold_remote.rs` and `crates/codemason-tools-extended/tests/test_project_scaffold_gitlab_remote.rs` now remove `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` from the child environment (the latter two also pin `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to `/dev/null`), so each fixture sees the same config on every machine. Command-line scope outranks system, global and local config, so the two `GIT_CONFIG_*` reads were not enough on their own.
+
+### Changed
+
+- Changed: the `/release` skill composes the release message itself when the invocation supplies none, instead of committing the bare `Version: <new-version>` subject. It reads `git log <last-tag>..HEAD --oneline` (the tag from `git describe --tags --abbrev=0`, falling back to `git log -20 --oneline`) and the `## [Unreleased]` section of `CHANGELOG.md`, then summarises them into one line of at most 256 characters, dropping the least important items rather than truncating a word. A supplied message is still used verbatim. The skill also names the release message in its report step, which is how this entry was produced.
+
+### Documentation
+
+- Updated: `docs/howtos/slashcommands/swarm.md` documents what a swarm now does after decomposition - a `depends_on` subtask is held until its predecessors complete and is then spawned with a `Results from dependencies` section carrying up to 4 KiB of each predecessor's `team_task_complete` result; the swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate never takes a subtask with only its id; a finished swarm synthesises one `Swarm Result` answer from the goal and each task's status and result, ending with the status table alone when no model is selected and reporting `Swarm Error` / `Synthesis Failed` on a failed call, and cancelling aborts an in-flight synthesis.
+- Updated: `docs/howtos/tools/teams.md` documents `team_task_complete`'s optional `result` argument (cut at 16 KiB), that it is stored on the task in `tasks.json`, and that dependent tasks receive it in a `Results from dependencies` prompt section (up to 4 KiB per predecessor); its swarm walkthrough now describes the `auto_claim_tasks`-off pre-assignment and the synthesis step instead of teammates claiming tasks.
+- Updated: `docs/howtos/teams.md` and `docs/howtos/slashcommands/context.md` follow the shipped behaviour - the swarm walkthrough no longer says teammates claim tasks as they become available, and the Context pane reference describes the pinned tab, the stacked bar and the per-partition rows that open to list their items.
+- Regenerated: every how-to PDF through pandoc/xelatex at A4 - 24 pages in `docs/howtos/pdf/`, 89 in `docs/howtos/slashcommands/pdf/` and 23 in `docs/howtos/tools/pdf/`.
+
+## [1.0.180] - 2026-11-22
+
+A redesigned Context pane, compaction-summary pruning, and swarm result handling.
+
+The Context pane becomes a pinned tab with a stacked usage bar and one row per
+partition that opens to list its items, and it now costs the history as the
+request actually carries it, so it can no longer report more tokens than the
+window. Compaction is fixed on both sides: a superseded summary is no longer
+replayed or re-summarised forever, and `/compact prune` deletes the summaries a
+long-lived session accumulates. Swarm subtasks start with their predecessors'
+results, a finished swarm synthesises one answer, and a failed stream is
+reported instead of passing as a partial success.
+
 ### Added
 
 - Added: the Context pane shows a header with the share of the context window used and `used / window`, one stacked bar with a coloured segment per partition, and one colour-keyed row per partition with its tokens and share of the window. The rows no longer overlap (system prompt, skills, memory, instruction files, built-in tools, MCP tools, tool metadata, history), so they add up to the bar.
@@ -11,11 +45,13 @@
 - Added: a finished `/swarm` combines its task results into one answer. With a model selected, one LLM call (`SYNTHESIS_SYSTEM_PROMPT`) receives the goal and each task's status and result, and its answer is shown as "Swarm Result" ("Synthesis Failed" when the call fails).
 - Added: the activity log (`/alog on`) records a `model_step` event after every model response: the model, finish reason, input and output tokens, visible-text and reasoning sizes, tool-call count and elapsed time, so a step that ended a turn can be compared with normal tool-calling steps. `/alog list` gains a "Model steps" column. The activity event schema version is now 2.
 - Added: a turn that the stall guard judges stalled shows an agent notice, `Stall detected. Turn ended without a tool call after tool work: step=... finish=... output_tokens=... text_bytes=... reasoning_bytes=...`; every turn that ends without a tool call after tool work also logs the same line at `WARN`.
+- Added: `/compact prune [--all] [--dry-run]` deletes the compaction summaries a long-lived session has accumulated. Each compaction anchors on the previous summary, so only the newest is meaningful; `prune` drops the rest, `--all` drops every summary behind a `Delete every compaction summary?` dialog that opens on `No`, and `--dry-run` reports the count and deletes nothing. Backed by the new `Storage::delete_compaction_messages(session, keep)` and `Storage::count_compaction_messages(session, keep)`, which share one candidate query so a dry run and the delete cannot disagree, and reload the transcript afterwards so the visible list matches storage.
 
 ### Fixed
 
 - Fixed: the agent loop could stop mid-task. After tool work, some models (seen with `deepseek-v4.1-flash` on Ollama Cloud, most often while following a multi-step skill) end a step with a short note announcing the next action ("Now the full test suite.") and no tool call, and the loop took that as the final answer, so the user had to type "continue" and `/resume` found nothing to restart. The new `session::stall_guard` recognises a short reply whose last sentence announces the model's own next step, or a reply the provider truncated, and feeds the model a continue message, at most twice per turn. Sub-agents keep their own findings nudge.
 - Fixed: DeepSeek models drifted into Chinese in long sessions although the system prompt ends with the "Response Language" rule. Every request now ends with a one-line `[Reply in <language>.]` reminder on the newest user message (the user's prompt or the last tool results), taken from `response_language`; it is added to the outgoing request only, never to the stored history.
+- Fixed: the transcript builder replayed every compaction summary as its own assistant turn. `session::history::drop_superseded_summaries` now collapses them to the newest before the request is built, so a session that has compacted many times is not billed for summaries that a later one already merged in. The stored rows are left alone; `/compact prune` is the delete.
 - Fixed: pre-send auto-compaction only appended its summary to the stored history and never removed the messages it summarised, so every later turn loaded the whole history again and compacted again (one session held 26 summaries in 80 messages, each a paid summarisation call). It now stores `[summary, ...kept tail, ...this turn]` in place of the history, in one transaction (the new `Storage::replace_messages`, shared with `/compact` through `SessionProcessor::persist_compacted_history`). The turn's assistant row and inbox messages are always kept (`compaction::runner::compacted_stored_history`), and the request is still compacted from the in-memory request, so request-only observations are kept and the empty assistant placeholder is never sent. A failed save leaves the history unchanged and is reported (`/compact` returns it as an error).
 - Fixed: the Context pane could show more tokens than the context window (`2.5M / 1.0M`). The history partition counted every tool output in full with its JSON metadata, counted reasoning that most providers never receive, and read the frontend's in-memory transcript rather than the stored history the agent sends. It now reads the stored history and costs it as the request carries it: tool results cut to the agent's budget (`tool_result_bytes_for_llm`, measured in bytes, so multi-byte text is not undercounted), reasoning only for a provider whose wire profile replays it.
 - Fixed: a swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate no longer takes another subtask with only its task id (no description, no dependency results).

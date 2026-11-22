@@ -3637,6 +3637,134 @@ impl Storage {
         usize::try_from(n).context("message count out of range")
     }
 
+    /// The ids of the compaction summaries of `session_id` that a prune with
+    /// `keep` would delete, newest-first order applied so the newest `keep`
+    /// summaries are the ones retained.
+    fn compaction_summary_ids_tx(
+        tx: &rusqlite::Transaction<'_>,
+        session_id: &str,
+        keep: usize,
+    ) -> Result<Vec<(i64, String)>> {
+        // Compaction summaries are distinguished by their role column, so the
+        // lookup is an index seek on `(session_id)` plus a row filter rather
+        // than a scan of the whole messages table.
+        let mut stmt = tx.prepare_cached(
+            "SELECT m.rowid, m.id
+               FROM messages m
+              WHERE m.session_id = ?1 AND m.role = 'compaction'
+              ORDER BY m.created_at DESC, m.rowid DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // The first `keep` rows are the newest summaries and stay; the rest are
+        // superseded by them because every compaction anchors on the previous
+        // summary.
+        Ok(rows.into_iter().skip(keep).collect())
+    }
+
+    /// Deletes every compaction summary of `session_id` except the newest
+    /// `keep`, returning how many were deleted.
+    ///
+    /// Every compaction is summarised with the previous summary as its anchor,
+    /// so a later summary already merges in everything still true from the
+    /// earlier ones: only the newest `keep` are meaningful, and each superseded
+    /// copy is replayed by the transcript builder as its own assistant turn.
+    /// This is the stored-history counterpart to
+    /// `codemason_agent::session::history::drop_superseded_summaries`, which
+    /// filters the request without touching the database.
+    ///
+    /// Ordinary messages are never touched: only rows whose role is
+    /// `compaction` are candidates. `keep = 0` deletes every summary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a delete fails; nothing is deleted in that case,
+    /// because the FTS rows, the key rows and the message rows are removed in
+    /// one transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::{Message, MessagePart, Role};
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// for (index, text) in ["oldest", "newest"].iter().enumerate() {
+    ///     let mut msg = Message {
+    ///         id: format!("summary-{index}"),
+    ///         session_id: "sess-1".to_string(),
+    ///         role: Role::Compaction,
+    ///         parts: vec![MessagePart::Text {
+    ///             text: (*text).to_string(),
+    ///         }],
+    ///         created_at: chrono::Utc::now() + chrono::Duration::minutes(index as i64),
+    ///         updated_at: chrono::Utc::now() + chrono::Duration::minutes(index as i64),
+    ///         edit_seq: 0,
+    ///     };
+    ///     msg.touch();
+    ///     storage.create_message(&msg).unwrap();
+    /// }
+    /// assert_eq!(storage.delete_compaction_messages("sess-1", 1).unwrap(), 1);
+    /// let stored = storage.get_messages("sess-1").unwrap();
+    /// assert_eq!(stored.len(), 1);
+    /// assert_eq!(stored[0].text_content(), "newest");
+    /// ```
+    pub fn delete_compaction_messages(&self, session_id: &str, keep: usize) -> Result<usize> {
+        let mut conn = lock_conn!(self)?;
+        let tx = conn.transaction()?;
+        let doomed = Self::compaction_summary_ids_tx(&tx, session_id, keep)?;
+        let mut deleted = 0;
+        for (rowid, message_id) in &doomed {
+            tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", params![rowid])?;
+            tx.execute(
+                "DELETE FROM message_fts_keys WHERE session_id = ?1 AND message_id = ?2",
+                params![session_id, message_id],
+            )?;
+            deleted += tx.execute(
+                "DELETE FROM messages WHERE session_id = ?1 AND id = ?2",
+                params![session_id, message_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+
+    /// Counts the compaction summaries that
+    /// [`Storage::delete_compaction_messages`] would delete for the same
+    /// `keep`, without deleting anything.
+    ///
+    /// The read-only counterpart to the prune, sharing its candidate query so
+    /// a `--dry-run` report and the delete that follows it cannot disagree.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    /// use codemason_types::message::Message;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// storage.create_session("sess-1", "/tmp/project").unwrap();
+    /// storage.create_message(&Message::user_text("sess-1", "hello")).unwrap();
+    /// // No summaries, so nothing to prune and nothing counted.
+    /// assert_eq!(storage.count_compaction_messages("sess-1", 1).unwrap(), 0);
+    /// ```
+    pub fn count_compaction_messages(&self, session_id: &str, keep: usize) -> Result<usize> {
+        let conn = lock_conn_read!(self)?;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role = 'compaction'",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        let total = usize::try_from(total).context("message count out of range")?;
+        Ok(total.saturating_sub(keep))
+    }
+
     // -- Run-cost summaries (FR-018) ------------------------------------
 
     /// Inserts a persisted run-cost summary row (FR-018).

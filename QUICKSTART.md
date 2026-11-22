@@ -2136,7 +2136,7 @@ Type `/` in the input to open an autocomplete menu:
 |---------|-------------|
 | `/agent [name]` | Switch agent (dialog or direct) |
 | `/clear` | Clear message history |
-| `/compact [help]` | Summarise and compact history |
+| `/compact [help]` | Summarise and compact history. Each compaction anchors on the previous summary, so only the newest is meaningful; `/compact prune [--all] [--dry-run]` deletes the superseded copies (`--all` deletes every summary behind a confirmation, `--dry-run` only counts) |
 | `/help` | Show available commands |
 | `/log` | Toggle log panel |
 | `/theme [<name>\|system\|dark\|light\|list]` | Open the theme picker, or switch the colour theme (the choice is saved to `codemason.json` and kept on restart). In the picker, the edit button on a theme opens the theme editor: change its colours with a live preview, then Save (kept on restart) or Reset to default |
@@ -2173,7 +2173,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/codeindex communities` | Run community detection and list communities |
 | `/codeindex godnodes [n]` | Show top-N most-connected symbols |
 | `/codeindex help` | Show code index help |
-| `/context refresh` \| `/context help` | Manage the prompt context cache (`refresh` recomputes file tree, git status and README); `Alt+C` toggles the live context-window panel |
+| `/context refresh` \| `/context help` | Manage the prompt context cache (`refresh` recomputes file tree, git status and README); `Alt+C` brings the pinned context-window tab to the front |
 | `/cron add \|remove\|enable\|disable\|list\|detail\|log\|help` | Schedule and manage recurring agent runs |
 | `/spec create <name> <title> [--from-research <name>]` | Create a new spec (SPEC.md + PLAN.md + TESTPLAN.md) |
 | `/spec specify <name> <feature> [--from-research <name>]` | Generate SPEC.md only (EARS spec with clarification markers) |

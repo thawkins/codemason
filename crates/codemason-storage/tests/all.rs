@@ -44,6 +44,8 @@ mod test_activity_tool_call;
 mod test_automation_runs_table;
 #[path = "test_background_tasks_crud.rs"]
 mod test_background_tasks_crud;
+#[path = "test_compaction_prune.rs"]
+mod test_compaction_prune;
 #[path = "test_compaction_role.rs"]
 mod test_compaction_role;
 #[path = "test_cron_automation_lifecycle.rs"]

@@ -2302,6 +2302,27 @@ impl App {
                         self.close_db_prune_confirm();
                     }
                 }
+                // `Delete every compaction summary?` confirmation dialog
+                // (opened by `/compact prune --all`). Summaries are deleted
+                // only here, on an explicit `Yes`.
+                InputAction::ConfirmCompactPrune => {
+                    if self.compact_prune_confirm_open && self.compact_prune_confirm_is_yes() {
+                        self.close_compact_prune_confirm();
+                        self.run_compaction_prune(0, true);
+                    } else if self.compact_prune_confirm_open {
+                        // `No` is the default selection: treat it as a cancel
+                        // rather than deleting on a dialog the user did not
+                        // explicitly accept.
+                        self.close_compact_prune_confirm();
+                    }
+                }
+                InputAction::CancelCompactPrune => {
+                    if self.compact_prune_confirm_open {
+                        // Dismissing with `No`/`Esc` leaves the stored
+                        // summaries unchanged; only the dialog state is reset.
+                        self.close_compact_prune_confirm();
+                    }
+                }
                 InputAction::ConfirmRouterSave => {
                     if let Some(draft) = self.pending_router_save.take() {
                         match self.save_router_config(&draft) {

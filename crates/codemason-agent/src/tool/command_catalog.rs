@@ -133,6 +133,8 @@ const ROUTER_SUBS: &[&str] = &[
     "reload",
 ];
 const CONFIG_SUBS: &[&str] = &["show", "save", "list", "help"];
+const COMPACT_SUBS: &[&str] = &["prune", "help"];
+const COMPACT_FLAGS: &[&str] = &["--all", "--dry-run"];
 const TRIGGERS_SUBS: &[&str] = &["list", "enable", "disable", "remove", "status", "help"];
 const RESEARCH_SUBS: &[&str] = &[
     "help", "create", "list", "open", "search", "show", "delete", "archive", "update", "cluster",
@@ -308,9 +310,9 @@ pub const COMMAND_CATALOG: &[CommandCatalogEntry] = &[
     },
     CommandCatalogEntry {
         trigger: "compact",
-        description: "Summarise and compact the conversation history",
-        subcommands: EMPTY,
-        flags: EMPTY,
+        description: "Summarise and compact the conversation history; `prune [--all] [--dry-run]` deletes superseded summaries",
+        subcommands: COMPACT_SUBS,
+        flags: COMPACT_FLAGS,
     },
     CommandCatalogEntry {
         trigger: "config",

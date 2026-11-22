@@ -19,7 +19,9 @@
 use std::collections::BTreeMap;
 
 use codemason_agent::message::{Message, MessagePart, Role};
-use codemason_agent::session::history::tool_result_bytes_for_llm;
+use codemason_agent::session::history::{
+    MESSAGE_OVERHEAD_BYTES, TOOL_DEFINITION_OVERHEAD_BYTES, tool_result_bytes_for_llm,
+};
 use codemason_types::llm::ToolDefinition;
 
 use crate::app::ContextItem;
@@ -27,14 +29,6 @@ use crate::app::ContextItem;
 /// Bytes per token of the partition estimates (mixed English, code and
 /// JSON), so the estimates compare with provider-reported prompt tokens.
 const BYTES_PER_TOKEN: u64 = 4;
-
-/// Fixed per-definition JSON overhead, as
-/// `codemason_agent::session::processor::estimate_tool_definition_bytes`
-/// counts it.
-const TOOL_DEFINITION_OVERHEAD: usize = 60;
-
-/// Fixed per-message JSON overhead of the history estimate.
-const MESSAGE_OVERHEAD: usize = 40;
 
 /// Name of the history item holding tool calls and their results.
 pub const TOOL_CALLS_ITEM: &str = "Tool calls & results";
@@ -88,7 +82,7 @@ pub fn tool_items(
             let bytes = def.name.len()
                 + def.description.len()
                 + def.parameters.to_string().len()
-                + TOOL_DEFINITION_OVERHEAD;
+                + TOOL_DEFINITION_OVERHEAD_BYTES;
             let tokens = bytes_to_tokens(bytes);
             match mcp_name(&def.name) {
                 Some(name) => (true, ContextItem { name, tokens }),
@@ -219,7 +213,7 @@ fn results_message_bytes(message: &Message) -> usize {
         .iter()
         .any(|part| matches!(part, MessagePart::ToolCall { .. }));
     match message.role {
-        Role::Assistant if calls => "user".len() + MESSAGE_OVERHEAD,
+        Role::Assistant if calls => "user".len() + MESSAGE_OVERHEAD_BYTES,
         Role::Assistant | Role::User | Role::Compaction => 0,
     }
 }
@@ -240,7 +234,7 @@ fn results_message_bytes(message: &Message) -> usize {
 #[must_use]
 pub fn message_bytes(message: &Message, echo_reasoning: bool) -> usize {
     message.role.to_string().len()
-        + MESSAGE_OVERHEAD
+        + MESSAGE_OVERHEAD_BYTES
         + message
             .parts
             .iter()
@@ -271,7 +265,7 @@ pub fn history_items(messages: &[Message], echo_reasoning: bool) -> Vec<ContextI
             .iter()
             .partition(|part| matches!(part, MessagePart::ToolCall { .. }));
         let own = message.role.to_string().len()
-            + MESSAGE_OVERHEAD
+            + MESSAGE_OVERHEAD_BYTES
             + other
                 .into_iter()
                 .map(|part| part_bytes(part, &message.role, echo_reasoning))

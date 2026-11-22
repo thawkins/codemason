@@ -3725,6 +3725,129 @@ impl App {
         }
     }
 
+    /// Open the `Delete every compaction summary?` confirmation dialog.
+    ///
+    /// Invoked by `/compact prune --all`. It only arms the dialog - nothing is
+    /// deleted until the user picks `Yes`. The default selection is reset to
+    /// `No` every time it opens so a stray `Enter` cannot delete summaries.
+    pub fn open_compact_prune_confirm(&mut self) {
+        self.compact_prune_confirm_open = true;
+        self.compact_prune_confirm_selected = crate::app::COMPACT_PRUNE_CONFIRM_NO;
+    }
+
+    /// Flip the `Delete every compaction summary?` dialog selection between
+    /// `Yes` and `No`.
+    ///
+    /// The dialog has exactly two options, so any horizontal move (`Left` /
+    /// `Right` / `Tab` / `BackTab`) simply toggles the current selection.
+    pub fn compact_prune_confirm_toggle(&mut self) {
+        self.compact_prune_confirm_selected = if self.compact_prune_confirm_is_yes() {
+            crate::app::COMPACT_PRUNE_CONFIRM_NO
+        } else {
+            crate::app::COMPACT_PRUNE_CONFIRM_YES
+        };
+    }
+
+    /// Whether the `Delete every compaction summary?` dialog currently has
+    /// `Yes` selected.
+    #[must_use]
+    pub fn compact_prune_confirm_is_yes(&self) -> bool {
+        self.compact_prune_confirm_selected == crate::app::COMPACT_PRUNE_CONFIRM_YES
+    }
+
+    /// Close the `Delete every compaction summary?` confirmation dialog,
+    /// resetting the selection to `No`.
+    pub(crate) fn close_compact_prune_confirm(&mut self) {
+        self.compact_prune_confirm_open = false;
+        self.compact_prune_confirm_selected = crate::app::COMPACT_PRUNE_CONFIRM_NO;
+    }
+
+    /// Delete the compaction summaries of the active session except the newest
+    /// `keep`, reporting the outcome in the chat.
+    ///
+    /// Shared by `/compact prune` (`keep = 1`, `all = false`) and both the
+    /// confirmed `--all` dialog and a direct call (`keep = 0`, `all = true`).
+    /// `all` only selects the wording of the report, so the transcript says
+    /// which form ran; the delete is identical.
+    ///
+    /// The stored history is pruned first, then the in-memory transcript is
+    /// reloaded from storage, so the list the user sees and the history the
+    /// next request replays cannot disagree.
+    ///
+    /// # Arguments
+    ///
+    /// * `keep` - how many of the newest summaries to retain.
+    /// * `all` - whether this is the `--all` form, which keeps none.
+    pub fn run_compaction_prune(&mut self, keep: usize, all: bool) {
+        let Some(session_id) = self.session.session_id.clone() else {
+            self.append_assistant_text(
+                "From: /compact prune\n\n[warn] No active session to prune.",
+            );
+            self.status = "compact: no session".to_string();
+            return;
+        };
+
+        match self.storage.delete_compaction_messages(&session_id, keep) {
+            Ok(deleted) => {
+                if let Ok(messages) = self.storage.get_messages(&session_id) {
+                    self.session.messages = messages;
+                }
+                self.append_assistant_text(&format!(
+                    "From: /compact prune{}\n\nDeleted **{deleted}** superseded \
+                     compaction summar(ies).",
+                    if all { " --all" } else { "" }
+                ));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("compact: pruned {deleted} summary(ies), keeping {keep}"),
+                );
+                self.status = format!("compact: pruned {deleted}");
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "From: /compact prune\n\n[warn] Could not prune compaction \
+                     summaries: {e}"
+                ));
+                self.status = "compact: prune failed".to_string();
+            }
+        }
+    }
+
+    /// Report how many compaction summaries
+    /// [`Self::run_compaction_prune`] would delete for the same `keep`, without
+    /// deleting anything (`/compact prune [--all] --dry-run`).
+    ///
+    /// # Arguments
+    ///
+    /// * `keep` - how many of the newest summaries the delete would retain.
+    /// * `all` - whether this is the `--all` form, which retains none.
+    pub fn count_compaction_prunable(&mut self, keep: usize, all: bool) {
+        let Some(session_id) = self.session.session_id.clone() else {
+            self.append_assistant_text(
+                "From: /compact prune --dry-run\n\n[warn] No active session to prune.",
+            );
+            self.status = "compact: no session".to_string();
+            return;
+        };
+        match self.storage.count_compaction_messages(&session_id, keep) {
+            Ok(n) => {
+                self.append_assistant_text(&format!(
+                    "From: /compact prune{} --dry-run\n\nWould delete **{n}** \
+                     compaction summar(ies); nothing was deleted.",
+                    if all { " --all" } else { "" }
+                ));
+                self.status = format!("compact: would prune {n}");
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "From: /compact prune --dry-run\n\n[warn] Could not count \
+                     compaction summaries: {e}"
+                ));
+                self.status = "compact: count failed".to_string();
+            }
+        }
+    }
+
     /// Clear every structured memory scoped to the current project directory.
     ///
     /// Only the project's own memories are removed - other projects' entries are

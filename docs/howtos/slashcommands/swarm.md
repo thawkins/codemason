@@ -70,13 +70,50 @@ decomposed subtasks.
   and the decomposed subtasks are reported as the model produces them.
 - `/swarm status` reports the running swarm's progress.
 - `/swarm cancel` stops the active swarm, after which a new `/swarm` can be
-  started.
+  started. A synthesis call still in flight is aborted, and an answer for a
+  swarm that is no longer current is dropped.
+
+### Dependent subtasks inherit their predecessors' results
+
+A decomposed subtask may carry a `depends_on` list. Those subtasks run in
+dependency order: a subtask whose dependencies have not completed is not
+spawned, and a teammate completes its work with `team_task_complete`, passing an
+optional `result` (a short account of what it found or changed, cut at 16 KiB).
+The result is stored on the task in `tasks.json`.
+
+When a blocked subtask is unblocked, its prompt is rebuilt with a **`Results
+from dependencies`** section carrying up to 4 KiB of each predecessor's result,
+so a follow-up task starts with the findings rather than rediscovering them. A
+predecessor that recorded no result is marked
+`(no result recorded - inspect this task's file changes directly)` rather than
+silently omitted, and the teammate is told to pass its own `result` so its
+dependents receive it in turn.
+
+A swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its
+own teammate (a ready task at spawn, a dependent one at unblock). An idle
+teammate therefore never takes another subtask with only a task id - it always
+has that task's description and dependency results.
+
+### The swarm synthesises one answer
+
+When every subtask has finished and at least one completed, the swarm combines
+the results into a single answer with one LLM call on the session's selected
+model (`SYNTHESIS_SYSTEM_PROMPT`). It receives the goal plus each task's status
+and result, and its answer is shown in the chat as **Swarm Result**. The
+per-task status table is still shown above it.
+
+- With no model selected, the swarm ends with the status table only.
+- A failed synthesis call - including a provider stream error - is reported as
+  **Swarm Error** / **Synthesis Failed** rather than passing a partial answer
+  off as success.
 
 ## Notes
 
 - A model must be selected before a swarm can start (`/model`).
 - The decomposed subtasks run as teammates; use `/team tasks` to watch the
-  shared task list fill up, and `/swarm status` for swarm-level progress.
+  shared task list fill up, and `/swarm status` for swarm-level progress. The
+  task list's completion table has a Result column showing what each task
+  reported.
 - Only one swarm may be active at a time.
 
 ## Related

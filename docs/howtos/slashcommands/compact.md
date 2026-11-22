@@ -26,8 +26,9 @@ content that uses `/compress`.
 /compact
 ```
 
-No arguments, options, or subcommands. The command operates on the current
-session only.
+Bare `/compact` takes no arguments and operates on the current session only.
+`/compact help` prints the usage. The only subcommand is `prune`, described
+below.
 
 Alias:
 
@@ -35,12 +36,44 @@ Alias:
 /compress        # deprecated alias, identical behaviour
 ```
 
+### `/compact prune`
+
+Every compaction anchors on the previous summary, so a later summary already
+merges in everything still true from the earlier ones, and only the newest is
+meaningful. The pre-send path nevertheless only *appends*, so a long-lived
+session accumulates one summary block per compaction and the transcript builder
+replays each as a separate assistant turn.
+
+`/compact prune` is the delete that clears those superseded copies:
+
+| Form | Behaviour |
+| --- | --- |
+| `/compact prune` | Delete every compaction summary except the newest one |
+| `/compact prune --all` | Delete every compaction summary, behind a confirmation prompt |
+| `/compact prune --dry-run` | Report the count that would be deleted and delete nothing |
+
+The count and the delete come from
+`Storage::delete_compaction_messages(session, keep)` /
+`Storage::count_compaction_messages(session, keep)`. The request side is
+filtered whether or not you ever prune: `session::history::drop_superseded_summaries`
+collapses consecutive summaries to the newest before the transcript is built, so
+the model never sees a superseded copy even in a session that has never been
+pruned. `/compact prune` is what removes the stored rows.
+
+`--all` never deletes directly. It opens the `Delete every compaction summary?`
+dialog with `No` preselected, so a stray `Enter` deletes nothing; only an
+explicit `Yes` runs the delete. `--dry-run` never opens the dialog.
+
 ## Options / Subcommands
 
 | Form | Description |
 | --- | --- |
 | `/compact` | Start manual compaction of the current session history |
 | `/compress` | Deprecated alias of `/compact`; logs a deprecation line then behaves identically |
+| `/compact prune` | Delete every compaction summary but the newest |
+| `/compact prune --all` | Delete every compaction summary, with a confirmation |
+| `/compact prune --dry-run` | Report what prune would delete, deleting nothing |
+| `/compact help` | Show the usage |
 
 ## Examples
 
@@ -76,6 +109,19 @@ history swap completes:
 ```
 /compact
 continue with the next test file
+```
+
+Delete the superseded summaries a long-lived session has accumulated, keeping
+the newest:
+
+```
+/compact prune
+```
+
+See what `--all` would delete before committing to it:
+
+```
+/compact prune --all --dry-run
 ```
 
 ## Output

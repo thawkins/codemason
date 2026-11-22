@@ -533,6 +533,8 @@ mod test_slash_codeindex;
 mod test_slash_codeindex_deep;
 #[path = "test_slash_commands.rs"]
 mod test_slash_commands;
+#[path = "test_slash_compact_prune.rs"]
+mod test_slash_compact_prune;
 #[path = "test_slash_config_write.rs"]
 mod test_slash_config_write;
 #[path = "test_slash_deep2.rs"]

@@ -128,6 +128,9 @@ mod test_compacted_stored_history;
 #[path = "test_compaction_flow.rs"]
 mod test_compaction_flow;
 
+#[path = "test_compaction_history_filter.rs"]
+mod test_compaction_history_filter;
+
 #[path = "test_compaction_integration.rs"]
 mod test_compaction_integration;
 

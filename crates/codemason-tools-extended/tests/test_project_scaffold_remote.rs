@@ -29,6 +29,13 @@ fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
         .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        // A harness may export command-line-scope config, including
+        // `safe.bareRepository=explicit`, which refuses to read the local bare
+        // repositories these fixtures push to and inspect.
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
         .output()
         .expect("git spawn");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

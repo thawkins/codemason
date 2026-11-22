@@ -796,7 +796,7 @@ impl SessionProcessor {
         _session_config: &codemason_config::Config,
         profiler: &Arc<crate::session::profiler::AgentLoopProfiler>,
     ) -> Result<(Arc<Vec<ChatMessage>>, u64, usize)> {
-        let history = {
+        let mut history = {
             let _scope = profiler.scope("history.load");
             // P-1: route `get_messages` through `storage_op` so the SQLite
             // read runs on a dedicated blocking thread instead of stalling
@@ -804,6 +804,12 @@ impl SessionProcessor {
             let sid = session_id.to_string();
             self.storage_op(move |s| s.get_messages(&sid)).await?
         };
+        // Only the newest compaction summary is meaningful: each compaction
+        // anchors on the previous one, so every older summary is already merged
+        // into it. The pre-send path only appends, so without this the
+        // transcript builder replays one assistant turn per compaction. The
+        // stored rows are untouched - `/compact prune` is the delete.
+        super::history::drop_superseded_summaries(&mut history);
 
         let last_reported_input_tokens: u64 = {
             let session_state_lock = self

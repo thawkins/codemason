@@ -19,7 +19,7 @@ Per-command reference documents for the codemason GUI slash commands. Each docum
 | `/config` | [config](config.md) | Configuration: /config show\|save\|list\|help |
 | `/context` | [context](context.md) | Manage context cache: /context refresh \| /context help |
 | `/cron` | [cron](cron.md) | Schedule agent runs: /cron add <cronname> <agent> <schedule> "<prompt>"\|remove\|enable\|disable\|list\|log\|help |
-| `/compact` | [compact](compact.md) | Summarise and compact the conversation history |
+| `/compact` | [compact](compact.md) | Summarise and compact the conversation history; `prune [--all] [--dry-run]` deletes superseded summaries |
 | `/inbox` | [inbox](inbox.md) | Triage inbox: /inbox list\|claim <id>\|dismiss <id>\|clear\|help |
 | `/cost` | [cost](cost.md) | Show session token usage and estimated cost |
 | `/help` | [help](help.md) | Show available slash commands |

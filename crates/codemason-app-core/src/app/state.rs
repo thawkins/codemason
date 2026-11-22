@@ -937,7 +937,7 @@ pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     },
     SlashCommandDef {
         trigger: "compact",
-        description: "Summarise and compact the conversation history",
+        description: "Summarise and compact the conversation history; `prune [--all] [--dry-run]` deletes superseded summaries",
     },
     SlashCommandDef {
         trigger: "gcf",
@@ -3375,6 +3375,16 @@ pub struct App {
     /// `None` while the dialog is closed; captured when it opens so the
     /// title and the confirmed action cannot disagree.
     pub db_prune_confirm_days: Option<u32>,
+    /// Whether the `Delete every compaction summary?` confirmation dialog
+    /// (opened by `/compact prune --all`) is displayed. Nothing is deleted
+    /// while it is open; the delete runs only after the user confirms with
+    /// `Yes`.
+    pub compact_prune_confirm_open: bool,
+    /// Selected option index within the `Delete every compaction summary?`
+    /// confirmation dialog: [`COMPACT_PRUNE_CONFIRM_YES`] (`Yes`) or
+    /// [`COMPACT_PRUNE_CONFIRM_NO`] (`No`). Initialised to `No` and reset to it
+    /// every time the dialog opens so a stray `Enter` cannot delete summaries.
+    pub compact_prune_confirm_selected: usize,
     /// Default retention window, in days, for `/db prune` when `--days` is
     /// omitted. Resolved once at startup from
     /// [`codemason_config::retention::RetentionConfig::message_days`] (the same
@@ -5565,6 +5575,15 @@ pub const DB_PRUNE_CONFIRM_YES: usize = 0;
 /// confirmation dialog. `No` is the default selection so pressing `Enter`
 /// without changing the selection does not delete messages.
 pub const DB_PRUNE_CONFIRM_NO: usize = 1;
+
+/// Index of the `Yes` option in the `Delete every compaction summary?`
+/// confirmation dialog (opened by `/compact prune --all`).
+pub const COMPACT_PRUNE_CONFIRM_YES: usize = 0;
+
+/// Index of the `No` option in the `Delete every compaction summary?`
+/// confirmation dialog. `No` is the default selection so pressing `Enter`
+/// without changing the selection does not delete summaries.
+pub const COMPACT_PRUNE_CONFIRM_NO: usize = 1;
 
 /// Index of the `Yes` option in the destructive row-action confirmation dialog
 /// (spec `agentui` T-009, FR-036, FR-037, FR-040).

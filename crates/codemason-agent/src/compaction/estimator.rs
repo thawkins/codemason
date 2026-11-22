@@ -45,6 +45,8 @@ use codemason_types::llm::{ChatContent, ChatMessage, ChatRequest, ContentPart, T
 
 use codemason_config::compaction::CompactionConfig;
 
+use crate::session::history::TOOL_DEFINITION_OVERHEAD_BYTES;
+
 /// Characters per token for the estimation fallback.
 ///
 /// Matches OpenCode's `Token.CHARS_PER_TOKEN`.
@@ -157,7 +159,12 @@ pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
 pub fn estimate_tool_tokens(tools: &[ToolDefinition]) -> usize {
     let bytes: usize = tools
         .iter()
-        .map(|t| t.name.len() + t.description.len() + json_serialized_len(&t.parameters) + 60)
+        .map(|t| {
+            t.name.len()
+                + t.description.len()
+                + json_serialized_len(&t.parameters)
+                + TOOL_DEFINITION_OVERHEAD_BYTES
+        })
         .sum();
     estimate_text_tokens_from_bytes(bytes)
 }

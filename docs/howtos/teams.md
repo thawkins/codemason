@@ -796,10 +796,19 @@ creates an ephemeral team, and orchestrates parallel execution.
 1. The swarm analyses your prompt using the selected LLM model.
 2. It breaks the goal into independent subtasks with dependency edges.
 3. It creates an ephemeral team and spawns teammates for each subtask.
-4. Teammates work in parallel, claiming tasks as they become available
-   (respecting dependency ordering).
-5. The lead monitors progress via `/swarm status` and can cancel with
-   `/swarm cancel`.
+4. Teammates work in parallel on tasks that are ready. The swarm team runs with
+   `auto_claim_tasks` **off** and pre-assigns each task to its own teammate (a
+   ready task at spawn, a dependent one when it unblocks), so an idle teammate
+   never takes another subtask with only its task id.
+5. A blocked subtask is spawned once its dependencies complete, with a
+   `Results from dependencies` section carrying up to 4 KiB of each
+   predecessor's `team_task_complete` result.
+6. When every subtask has finished, the selected model synthesises one answer
+   from the goal and each task's status and result, shown as "Swarm Result".
+   A failed call is reported as "Synthesis Failed" instead of passing a partial
+   answer off as success.
+7. The lead monitors progress via `/swarm status` and can cancel with
+   `/swarm cancel`; a cancel aborts an in-flight synthesis call.
 
 ### Example
 

@@ -112,6 +112,9 @@ pub enum ActiveDialog {
     Notice,
     /// The `/db prune` confirmation (`App::db_prune_confirm_open`).
     DbPrune,
+    /// The `/compact prune --all` confirmation
+    /// (`App::compact_prune_confirm_open`).
+    CompactPrune,
     /// The team force-cleanup confirmation
     /// (`session.pending_forcecleanup`).
     ForceCleanup,
@@ -234,6 +237,9 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
     if app.db_prune_confirm_open {
         return Some(ActiveDialog::DbPrune);
     }
+    if app.compact_prune_confirm_open {
+        return Some(ActiveDialog::CompactPrune);
+    }
     if app.session.pending_forcecleanup.is_some() {
         return Some(ActiveDialog::ForceCleanup);
     }
@@ -287,6 +293,7 @@ pub fn locks_prompt(app: &App) -> bool {
         || app.connector_store.is_some()
         || app.memory_clear_confirm_open
         || app.db_prune_confirm_open
+        || app.compact_prune_confirm_open
 }
 
 /// Draw the active dialog ([`active`]), if any.
@@ -346,6 +353,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         Some(ActiveDialog::Permission) => permission::show(ctx, app),
         Some(ActiveDialog::Notice) => confirm::show_notice(ctx, app),
         Some(ActiveDialog::DbPrune) => confirm::show_db_prune(ctx, app),
+        Some(ActiveDialog::CompactPrune) => confirm::show_compact_prune(ctx, app),
         Some(ActiveDialog::ForceCleanup) => confirm::show_force_cleanup(ctx, app),
         Some(ActiveDialog::Rollback) => confirm::show_rollback(ctx, app),
         Some(ActiveDialog::PlanApproval) => confirm::show_plan_approval(ctx, app),
@@ -399,6 +407,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
             | ActiveDialog::Permission
             | ActiveDialog::Notice
             | ActiveDialog::DbPrune
+            | ActiveDialog::CompactPrune
             | ActiveDialog::ForceCleanup
             | ActiveDialog::Rollback
             | ActiveDialog::PlanApproval
