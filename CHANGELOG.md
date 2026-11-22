@@ -6,11 +6,13 @@
 
 - Added: an in-memory store index cache in `codemason-app-core`, prefetched at GUI startup for the Codex plugin, Claude plugin and Claude connector indexes; `--refresh` and the footer Refresh button re-fetch it, and marketplace add/remove refetches the affected index.
 - Added: material `badge`, `drawer_item_with_count` and `avatar_list_item` components in `codemason_gui::material`.
+- Added: an installed plugin or connector shows an Uninstall button (on its row and in the details pane) that runs `disable` then `remove` for it.
 - Added: an Addons group on the ribbon's Agent tab with Plugins (`/plugins claude`) and Connectors (`/connectors claude`) buttons, and their `extension` and `hub` icons in the bundled Material Symbols subset.
 
 ### Changed
 
 - Changed: the GUI plugin browser is a wide three-pane Plugin Store dialog with a Codex | Claude switcher, and connectors open in a separate Connectors dialog with sign-in badges, requested scopes, credential name and MCP servers.
+- Changed: the store dialogs draw only the result rows in view, so large indexes no longer lag; the Codex | Claude switcher marks the selected store by highlight instead of a check mark.
 
 ## [1.0.178] - 2026-11-21
 

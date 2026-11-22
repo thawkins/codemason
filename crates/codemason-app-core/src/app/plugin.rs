@@ -55,6 +55,15 @@ pub(super) fn handle_plugins_command(app: &mut crate::app::App, args: &str) -> O
             app.marketplace_changed(StoreCacheKey::Plugins(kind));
         }
     }
+    // A removal changes what is installed, so an open plugin store re-derives
+    // its installed rows (the browser's Uninstall runs this command).
+    if sub == "remove"
+        && let Some(id) = args
+            .strip_prefix(sub)
+            .and_then(|rest| rest.split_whitespace().next())
+    {
+        app.plugin_store_removed(id);
+    }
     result
 }
 

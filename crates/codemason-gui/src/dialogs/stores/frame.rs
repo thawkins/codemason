@@ -23,7 +23,7 @@ use egui::{
 use super::snapshot::{FilterRow, ListState, Pane, RowSnapshot, StoreSnapshot};
 use super::{
     CATEGORIES_LABEL, CLEAR_SEARCH, CLOSE, Click, DETAILS_LABEL, INSTALL, INSTALLED, KIND_OPTIONS,
-    MARKETPLACES_LABEL, PANES_TOOLTIP, REFRESH, RESULTS_LABEL, RETRY, SEARCH_TOOLTIP,
+    MARKETPLACES_LABEL, PANES_TOOLTIP, REFRESH, RESULTS_LABEL, RETRY, SEARCH_TOOLTIP, UNINSTALL,
 };
 use crate::dialogs::material_modal_sized;
 use crate::icons::Icon;
@@ -32,7 +32,7 @@ use crate::material::button::{ButtonKind, button};
 use crate::material::feedback::{linear_progress, plain_tooltip};
 use crate::material::icon_button::{IconButtonKind, icon_button, icon_button_dense};
 use crate::material::list::{AvatarItem, avatar_list_item};
-use crate::material::segmented::segmented_buttons;
+use crate::material::segmented::{SegmentMark, segmented_buttons_with};
 use crate::material::sheet::drawer_item_with_count;
 use crate::material::text_field::outlined_value;
 use crate::metrics::{radius, space, text_size};
@@ -199,7 +199,15 @@ fn header(
             );
             if let Some(kind) = snap.plugin_kind {
                 let mut selected = kind_index(kind);
-                if segmented_buttons(ui, palette, &KIND_OPTIONS, &mut selected).changed() {
+                if segmented_buttons_with(
+                    ui,
+                    palette,
+                    &KIND_OPTIONS,
+                    &mut selected,
+                    SegmentMark::Highlight,
+                )
+                .changed()
+                {
                     *click = Some(Click::SwitchKind(kind_at(selected)));
                 }
             }
@@ -405,27 +413,33 @@ fn results(
 ) -> Option<Click> {
     let mut click = None;
     let inner = ui.scope(|ui| {
-        ScrollArea::vertical()
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let scroll = ScrollArea::vertical()
             .id_salt((id, "store_results"))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                match &snap.state {
-                    ListState::Loading => {
-                        status(ui, palette, look.loading, true);
-                    }
-                    ListState::Empty => status(ui, palette, look.empty, false),
-                    ListState::Failed(cause) => {
-                        if failed(ui, palette, cause) {
-                            click = Some(Click::Retry);
-                        }
-                    }
-                    ListState::Ready if snap.rows.is_empty() => {
-                        status(ui, palette, NO_MATCHES, false);
-                    }
-                    ListState::Ready => set(&mut click, rows(ui, palette, id, snap, look)),
-                }
+            .auto_shrink([false, false]);
+        if matches!(snap.state, ListState::Ready) && !snap.rows.is_empty() {
+            // Only the rows in view are laid out: drawing every row each
+            // frame made a large index lag behind the pointer.
+            scroll.show_rows(ui, ROW_HEIGHT, snap.rows.len(), |ui, range| {
+                set(&mut click, rows(ui, palette, id, snap, look, range));
             });
+            return;
+        }
+        scroll.show(ui, |ui| match &snap.state {
+            ListState::Loading => {
+                status(ui, palette, look.loading, true);
+            }
+            ListState::Empty => status(ui, palette, look.empty, false),
+            ListState::Failed(cause) => {
+                if failed(ui, palette, cause) {
+                    click = Some(Click::Retry);
+                }
+            }
+            ListState::Ready if snap.rows.is_empty() => {
+                status(ui, palette, NO_MATCHES, false);
+            }
+            ListState::Ready => {}
+        });
     });
     inner
         .response
@@ -464,37 +478,51 @@ fn failed(ui: &mut egui::Ui, palette: &Palette, cause: &str) -> bool {
     pressed
 }
 
-/// The result rows; the highlighted one is scrolled into view when the
-/// highlight moved.
+/// The result rows in `range` (the ones in view); the highlighted row is
+/// scrolled into view when the highlight moved, even when it lies outside
+/// `range`, since every row is [`ROW_HEIGHT`] points high.
 fn rows(
     ui: &mut egui::Ui,
     palette: &Palette,
     id: &str,
     snap: &StoreSnapshot,
     look: &Look,
+    range: std::ops::Range<usize>,
 ) -> Option<Click> {
     let cursor_key = egui::Id::unique((id, "store_cursor"));
     let last_cursor = ui.data(|d| d.get_temp::<usize>(cursor_key));
+    if last_cursor != Some(snap.cursor) && snap.cursor < snap.rows.len() {
+        // `show_rows` starts the ui at row `range.start`.
+        let offset = (snap.cursor as f32 - range.start as f32) * ROW_HEIGHT;
+        let top = ui.cursor().top() + offset;
+        let rect = Rect::from_min_size(
+            egui::pos2(ui.max_rect().left(), top),
+            Vec2::new(ui.available_width(), ROW_HEIGHT),
+        );
+        ui.scroll_to_rect(rect, None);
+    }
     let mut click = None;
-    for (index, row) in snap.rows.iter().enumerate() {
+    for index in range {
+        let Some(row) = snap.rows.get(index) else {
+            break;
+        };
         let selected = index == snap.cursor;
-        let (found, rect) = result_row(ui, palette, look, row, index, selected);
-        set(&mut click, found);
-        if selected && last_cursor != Some(snap.cursor) {
-            ui.scroll_to_rect(rect, None);
-        }
+        set(
+            &mut click,
+            result_row(ui, palette, look, row, index, selected),
+        );
     }
     ui.data_mut(|d| d.insert_temp(cursor_key, snap.cursor));
     click
 }
 
 /// One result row: a material avatar list item with the Installed badge and
-/// the dialog's extras on its meta line, and Install (or a disabled
-/// Installed) in its trailing slot.
+/// the dialog's extras on its meta line, and Install (or Uninstall
+/// when installed) in its trailing slot.
 ///
 /// # Returns
 ///
-/// What was clicked, and the row's rect.
+/// What was clicked.
 fn result_row(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -502,7 +530,7 @@ fn result_row(
     row: &RowSnapshot,
     index: usize,
     selected: bool,
-) -> (Option<Click>, Rect) {
+) -> Option<Click> {
     let item = AvatarItem {
         headline: &row.name,
         subtitle: &row.subtitle,
@@ -521,10 +549,7 @@ fn result_row(
         },
         |ui| {
             if row.installed {
-                ui.add_enabled_ui(false, |ui| {
-                    button(ui, palette, ButtonKind::Outlined, None, INSTALLED)
-                });
-                false
+                button(ui, palette, ButtonKind::Outlined, None, UNINSTALL).clicked()
             } else {
                 let kind = if selected {
                     ButtonKind::Filled
@@ -535,7 +560,9 @@ fn result_row(
             }
         },
     );
-    let click = if pressed {
+    if pressed && row.installed {
+        Some(Click::RowUninstall(index))
+    } else if pressed {
         Some(Click::RowInstall(index))
     } else if response.double_clicked() {
         Some(Click::Result {
@@ -549,11 +576,11 @@ fn result_row(
         })
     } else {
         None
-    };
-    (click, response.rect)
+    }
 }
 
-/// The details pane: the highlighted entry in full and Install.
+/// The details pane: the highlighted entry in full and Install (or
+/// Uninstall when installed).
 fn details(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -605,9 +632,10 @@ fn details(
                         ui.add_space(space::LG);
                         let installed = row.is_some_and(|row| row.installed);
                         if installed {
-                            ui.add_enabled_ui(false, |ui| {
-                                button(ui, palette, ButtonKind::Outlined, None, INSTALLED)
-                            });
+                            if button(ui, palette, ButtonKind::Outlined, None, UNINSTALL).clicked()
+                            {
+                                click = Some(Click::Uninstall);
+                            }
                         } else {
                             let pressed = ui
                                 .add_enabled_ui(row.is_some(), |ui| {

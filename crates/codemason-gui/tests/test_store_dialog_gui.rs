@@ -17,9 +17,9 @@ use codemason_gui::dialogs::stores::frame::dialog_size;
 use codemason_gui::dialogs::stores::snapshot::StoreSnapshot;
 use codemason_gui::dialogs::stores::{
     CATEGORIES_LABEL, DETAILS_LABEL, INSTALL, PLUGIN_STORE_TITLE, REFRESH, REFRESH_FAILED,
-    REFRESHING, RESULTS_LABEL, RETRY, show_plugin_store,
+    REFRESHING, RESULTS_LABEL, RETRY, UNINSTALL, show_plugin_store,
 };
-use codemason_gui::dialogs::take_keys;
+use codemason_gui::dialogs::{take_keys, take_slash_commands};
 use codemason_plugins::{
     FetchLimits, StoreEndpoint, StoreEntry, StoreError, StoreIndex, StoreIndexFetcher, StoreKind,
 };
@@ -56,6 +56,7 @@ impl StoreIndexFetcher for StalledFetcher {
 struct Rig {
     app: App,
     keys: Vec<KeyInput>,
+    slashes: Vec<String>,
 }
 
 /// A store entry `id` with version `version`, marketplace `acme` and `tags`.
@@ -100,10 +101,12 @@ fn rig(size: egui::Vec2, app: App) -> Harness<'static, Rig> {
         |ui, rig: &mut Rig| {
             show_plugin_store(ui.ctx(), &mut rig.app);
             rig.keys.extend(take_keys(ui.ctx()));
+            rig.slashes.extend(take_slash_commands(ui.ctx()));
         },
         Rig {
             app,
             keys: Vec::new(),
+            slashes: Vec::new(),
         },
     );
     harness.run();
@@ -269,6 +272,75 @@ fn test_store_dialog_row_install_installs_that_row() {
         "an Enter was routed: {:?}",
         harness.state().keys
     );
+}
+
+#[test]
+fn test_store_dialog_installed_row_uninstall_queues_disable_then_remove() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut app = app_with(&rt, three());
+    if let Some(browser) = app.plugin_store.as_mut() {
+        browser.set_installed(std::iter::once("bravo".to_string()).collect());
+    }
+    let mut harness = rig(WIDE, app);
+    let list = list_rect(&harness);
+    let in_list = |label: &str, harness: &Harness<'static, Rig>| -> usize {
+        harness
+            .get_all_by_role_and_label(Role::Button, label)
+            .filter(|node| list.contains(node.rect().center()))
+            .count()
+    };
+    assert_eq!(in_list(INSTALL, &harness), 2, "Install on the two others");
+    assert_eq!(in_list(UNINSTALL, &harness), 1, "Uninstall on bravo");
+    harness
+        .get_all_by_role_and_label(Role::Button, UNINSTALL)
+        .find(|node| list.contains(node.rect().center()))
+        .expect("bravo's Uninstall")
+        .click();
+    harness.run();
+    let browser = harness.state().app.plugin_store.as_ref().expect("open");
+    assert_eq!(browser.cursor, 1);
+    assert_eq!(
+        harness.state().slashes,
+        ["/plugins disable bravo", "/plugins remove bravo"]
+    );
+    assert!(harness.state().keys.is_empty(), "no Enter was routed");
+    // The details pane follows the highlight onto the installed row.
+    assert_eq!(
+        harness
+            .get_all_by_role_and_label(Role::Button, UNINSTALL)
+            .count(),
+        2,
+        "the row's and the details pane's Uninstall"
+    );
+    finish(rt, harness);
+}
+
+#[test]
+fn test_store_dialog_draws_only_rows_in_view_and_follows_the_highlight() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let entries: Vec<StoreEntry> = (0..200)
+        .map(|i| entry(&format!("plugin-{i:03}"), "1.0.0", &[]))
+        .collect();
+    let mut harness = rig(WIDE, app_with(&rt, entries));
+    let list = list_rect(&harness);
+    let drawn = harness
+        .get_all_by_role_and_label(Role::Button, INSTALL)
+        .filter(|node| list.intersects(node.rect()))
+        .count();
+    assert!(drawn < 30, "only the rows in view are drawn, got {drawn}");
+    if let Some(browser) = harness.state_mut().app.plugin_store.as_mut() {
+        browser.cursor = 150;
+    }
+    harness.run();
+    let rows: Vec<egui::Rect> = harness
+        .query_all_by_label("plugin-150")
+        .map(|node| node.rect())
+        .collect();
+    assert!(
+        rows.iter().any(|row| list.contains(row.center())),
+        "the highlighted row is scrolled into view: {rows:?} in {list:?}"
+    );
+    finish(rt, harness);
 }
 
 #[test]

@@ -451,6 +451,40 @@ pub fn take_keys(ctx: &egui::Context) -> Vec<KeyInput> {
         .unwrap_or_default()
 }
 
+/// The egui memory slot of the queued slash commands.
+fn slash_id() -> Id {
+    Id::unique("codemason_dialog_slash")
+}
+
+/// Queue a slash command line, run as if typed: the shell runs the queue
+/// after drawing ([`take_slash_commands`]), in order, keeping the draft.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `line` - the command line, e.g. `/plugins remove <id>`.
+pub fn send_slash(ctx: &egui::Context, line: String) {
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<String>>(slash_id())
+            .push(line);
+    });
+    ctx.request_repaint();
+}
+
+/// Take the slash commands the dialogs queued this frame.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+///
+/// # Returns
+///
+/// The lines in the order they were queued; the queue is left empty.
+pub fn take_slash_commands(ctx: &egui::Context) -> Vec<String> {
+    ctx.data_mut(|d| d.remove_temp::<Vec<String>>(slash_id()))
+        .unwrap_or_default()
+}
+
 /// A TUI key press of `key` with no modifiers.
 pub(crate) const fn plain(key: Key) -> KeyInput {
     KeyInput {

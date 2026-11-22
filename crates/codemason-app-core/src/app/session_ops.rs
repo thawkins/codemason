@@ -2175,6 +2175,45 @@ impl App {
         self.spawn_plugin_store_install(kind, id, source);
     }
 
+    /// The slash commands that uninstall the highlighted plugin-store result:
+    /// `/plugins disable <id>` (a plugin must be disabled before it can be
+    /// removed; disabling a disabled plugin is a no-op) then
+    /// `/plugins remove <id>`.
+    ///
+    /// The caller runs them in order as typed slash commands; the `remove`
+    /// then re-derives the installed set ([`Self::plugin_store_removed`]). A
+    /// result that is not installed records a notice and yields no commands.
+    #[must_use]
+    pub fn plugin_store_uninstall_commands(&mut self) -> Vec<String> {
+        let Some(browser) = self.plugin_store.as_mut() else {
+            return Vec::new();
+        };
+        let Some(entry) = browser.selected() else {
+            browser.last_install = Some("no result highlighted".to_string());
+            return Vec::new();
+        };
+        let id = entry.id.clone();
+        if !browser.is_installed(&id) {
+            browser.last_install = Some(format!("plugin {id} is not installed"));
+            return Vec::new();
+        }
+        browser.last_install = Some(format!("uninstalling {id}..."));
+        vec![
+            format!("/plugins disable {id}"),
+            format!("/plugins remove {id}"),
+        ]
+    }
+
+    /// After `/plugins remove <id>` ran: re-derive the open plugin store's
+    /// installed set and note whether `id` is gone. A no-op when no plugin
+    /// store is open.
+    pub fn plugin_store_removed(&mut self, id: &str) {
+        self.refresh_plugin_store_installed();
+        if let Some(browser) = self.plugin_store.as_mut() {
+            browser.last_install = Some(uninstall_notice("plugin", id, browser.is_installed(id)));
+        }
+    }
+
     /// Start the install of `source` off the event loop (spec `pluginstores`
     /// T-009; FR-006, FR-011, FR-024, FR-025, FR-026).
     ///
@@ -2623,6 +2662,46 @@ impl App {
         let installed = self.derive_installed_connector_set();
         if let Some(browser) = self.connector_store.as_mut() {
             browser.set_installed(installed);
+        }
+    }
+
+    /// The slash commands that uninstall the highlighted connector-catalogue
+    /// result: `/connectors disable <id>` (a connector must be disabled before
+    /// it can be removed; disabling a disabled connector is a no-op) then
+    /// `/connectors remove <id>`.
+    ///
+    /// The caller runs them in order as typed slash commands; the `remove`
+    /// then re-derives the installed set ([`Self::connector_catalogue_removed`]).
+    /// A result that is not installed records a notice and yields no commands.
+    #[must_use]
+    pub fn connector_catalogue_uninstall_commands(&mut self) -> Vec<String> {
+        let Some(browser) = self.connector_store.as_mut() else {
+            return Vec::new();
+        };
+        let Some(entry) = browser.selected() else {
+            browser.last_install = Some("no result highlighted".to_string());
+            return Vec::new();
+        };
+        let id = entry.id.as_str().to_string();
+        if !browser.is_installed(&id) {
+            browser.last_install = Some(format!("connector {id} is not installed"));
+            return Vec::new();
+        }
+        browser.last_install = Some(format!("uninstalling {id}..."));
+        vec![
+            format!("/connectors disable {id}"),
+            format!("/connectors remove {id}"),
+        ]
+    }
+
+    /// After `/connectors remove <id>` ran: re-derive the open catalogue's
+    /// installed set and note whether `id` is gone. A no-op when no catalogue
+    /// is open.
+    pub fn connector_catalogue_removed(&mut self, id: &str) {
+        self.refresh_connector_catalogue_installed();
+        if let Some(browser) = self.connector_store.as_mut() {
+            browser.last_install =
+                Some(uninstall_notice("connector", id, browser.is_installed(id)));
         }
     }
 
@@ -6310,6 +6389,16 @@ pub fn emit_log_entry_to_tracing(level: LogLevel, message: &str) {
 /// keep their first occurrence. The outcome is an error only when no endpoint
 /// answered; otherwise the merged index is returned even if some endpoints
 /// failed. The returned list names the marketplaces whose fetch failed.
+/// The footer notice after uninstalling `what` `id`: whether it is gone from
+/// the store scan (`still_installed` false) or the removal failed.
+fn uninstall_notice(what: &str, id: &str, still_installed: bool) -> String {
+    if still_installed {
+        format!("could not uninstall {what} {id}; see the message window")
+    } else {
+        format!("uninstalled {what} {id}")
+    }
+}
+
 fn fetch_merged_plugin_index(
     fetcher: &dyn StoreIndexFetcher,
     kind: StoreKind,

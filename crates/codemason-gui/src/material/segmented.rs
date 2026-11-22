@@ -3,6 +3,8 @@
 //! [`segmented_buttons`] draws a row of 40-point segments inside one
 //! outlined, fully rounded border. The selected segment is filled with
 //! `secondary_container` and shows a check icon before its label.
+//! [`segmented_buttons_with`] can instead mark it by highlight alone
+//! ([`SegmentMark::Highlight`]): filled with `primary`, with no check icon.
 //!
 //! Dependencies: `egui`, and this crate's palette and icons.
 
@@ -27,7 +29,20 @@ const ICON_SIZE: f32 = 18.0;
 /// Gap between the check icon and the label, in points.
 const ICON_GAP: f32 = 8.0;
 
-/// Draw a single-select row of segmented buttons.
+/// How the selected segment is marked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SegmentMark {
+    /// Filled with `secondary_container`, with a check icon before the
+    /// label (the Material default).
+    #[default]
+    Check,
+    /// Filled with `primary` and labelled in `on_primary`, with no check
+    /// icon, so the selection reads from the highlight alone.
+    Highlight,
+}
+
+/// Draw a single-select row of segmented buttons, the selected one marked
+/// with a check ([`SegmentMark::Check`]).
 ///
 /// # Arguments
 ///
@@ -47,8 +62,40 @@ pub fn segmented_buttons(
     options: &[&str],
     selected: &mut usize,
 ) -> Response {
+    segmented_buttons_with(ui, palette, options, selected, SegmentMark::Check)
+}
+
+/// [`segmented_buttons`] with the selected segment marked as `mark` says.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in.
+/// * `palette` - the colours.
+/// * `options` - the segment labels, left to right.
+/// * `selected` - the index of the selected segment; a click on another
+///   segment sets it.
+/// * `mark` - how the selected segment is marked.
+///
+/// # Returns
+///
+/// The union of the segments' responses, marked changed when the selection
+/// changed.
+pub fn segmented_buttons_with(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    options: &[&str],
+    selected: &mut usize,
+    mark: SegmentMark,
+) -> Response {
     let m3 = &palette.m3;
-    let check_width = ICON_SIZE + ICON_GAP;
+    let check_width = match mark {
+        SegmentMark::Check => ICON_SIZE + ICON_GAP,
+        SegmentMark::Highlight => 0.0,
+    };
+    let (fill, on_fill) = match mark {
+        SegmentMark::Check => (m3.secondary_container, m3.on_secondary_container),
+        SegmentMark::Highlight => (m3.primary, m3.on_primary),
+    };
     let font = label_large(ui.ctx());
     let widths: Vec<f32> = options
         .iter()
@@ -84,15 +131,10 @@ pub fn segmented_buttons(
         let content = content_colour(
             ui,
             palette,
-            if on {
-                rgb(m3.on_secondary_container)
-            } else {
-                rgb(m3.on_surface)
-            },
+            if on { rgb(on_fill) } else { rgb(m3.on_surface) },
         );
         if on {
-            ui.painter()
-                .rect_filled(rect, segment_radius, rgb(m3.secondary_container));
+            ui.painter().rect_filled(rect, segment_radius, rgb(fill));
         }
         paint_state_layer(ui, &response, segment_radius, content);
         if index > 0 {
@@ -103,9 +145,10 @@ pub fn segmented_buttons(
             );
         }
         let text = text_galley(ui, label, font.clone(), content);
-        let content_width = text.size().x + if on { check_width } else { 0.0 };
+        let checked = on && mark == SegmentMark::Check;
+        let content_width = text.size().x + if checked { check_width } else { 0.0 };
         let mut cx = rect.center().x - content_width / 2.0;
-        if on {
+        if checked {
             let glyph = icon_galley(ui, Icon::Check, ICON_SIZE, content);
             let y = rect.center().y - glyph.size().y / 2.0;
             ui.painter().galley(egui::pos2(cx, y), glyph, content);

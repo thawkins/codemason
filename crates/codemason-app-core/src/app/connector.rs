@@ -71,6 +71,15 @@ pub(super) async fn handle_connectors_command(app: &mut crate::app::App, args: &
             app.marketplace_changed(StoreCacheKey::Connectors);
         }
     }
+    // A removal changes what is installed, so an open catalogue re-derives
+    // its installed rows (the browser's Uninstall runs this command).
+    if sub == "remove"
+        && let Some(id) = args
+            .strip_prefix(sub)
+            .and_then(|rest| rest.split_whitespace().next())
+    {
+        app.connector_catalogue_removed(id);
+    }
     result
 }
 

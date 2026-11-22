@@ -579,6 +579,8 @@ mod test_store_cache_fetch;
 mod test_store_cache_marketplace;
 #[path = "test_store_cache_open.rs"]
 mod test_store_cache_open;
+#[path = "test_store_uninstall.rs"]
+mod test_store_uninstall;
 #[path = "test_stream_metrics.rs"]
 mod test_stream_metrics;
 #[path = "test_styled.rs"]

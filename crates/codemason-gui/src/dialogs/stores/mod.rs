@@ -35,7 +35,7 @@ use codemason_app_core::input_event::Key;
 use codemason_connectors::CataloguePane;
 use codemason_plugins::StoreKind;
 
-use super::{plain, send_key};
+use super::{plain, send_key, send_slash};
 use snapshot::StoreSnapshot;
 
 /// Accessible label of the category navigator.
@@ -53,8 +53,12 @@ pub const DETAILS_LABEL: &str = "Details";
 /// The button that installs a result (Enter on the results).
 pub const INSTALL: &str = "Install";
 
-/// The disabled button an installed result shows instead of Install.
+/// The badge an installed result shows.
 pub const INSTALLED: &str = "Installed";
+
+/// The button an installed result shows instead of Install; it uninstalls
+/// the result.
+pub const UNINSTALL: &str = "Uninstall";
 
 /// The button that clears the search query.
 pub const CLEAR_SEARCH: &str = "Clear search";
@@ -107,6 +111,10 @@ pub enum Click {
     RowInstall(usize),
     /// The details pane's Install: install the highlighted result.
     Install,
+    /// A row's own Uninstall: move the highlight there and uninstall it.
+    RowUninstall(usize),
+    /// The details pane's Uninstall: uninstall the highlighted result.
+    Uninstall,
     /// Clear the search query.
     ClearSearch,
     /// Close the dialog.
@@ -189,6 +197,25 @@ fn apply_plugin(ctx: &egui::Context, app: &mut App, click: Click) {
                 send_key(ctx, plain(Key::Enter));
             }
         }
+        Click::RowUninstall(index) => {
+            if let Some(browser) = app.plugin_store.as_mut() {
+                browser.cursor = index;
+                browser.focus = StorePane::Results;
+            }
+            uninstall(ctx, app.plugin_store_uninstall_commands());
+        }
+        Click::Uninstall => uninstall(ctx, app.plugin_store_uninstall_commands()),
+    }
+    // The click changed state after this frame was drawn; draw it now
+    // rather than on the next input event.
+    ctx.request_repaint();
+}
+
+/// Queue `lines` (an uninstall's disable then remove commands) for the
+/// shell to run as typed slash commands.
+fn uninstall(ctx: &egui::Context, lines: Vec<String>) {
+    for line in lines {
+        send_slash(ctx, line);
     }
 }
 
@@ -263,5 +290,16 @@ fn apply_connector(ctx: &egui::Context, app: &mut App, click: Click) {
                 send_key(ctx, plain(Key::Enter));
             }
         }
+        Click::RowUninstall(index) => {
+            if let Some(browser) = app.connector_store.as_mut() {
+                browser.cursor = index;
+                browser.focus = CataloguePane::Results;
+            }
+            uninstall(ctx, app.connector_catalogue_uninstall_commands());
+        }
+        Click::Uninstall => uninstall(ctx, app.connector_catalogue_uninstall_commands()),
     }
+    // The click changed state after this frame was drawn; draw it now
+    // rather than on the next input event.
+    ctx.request_repaint();
 }
