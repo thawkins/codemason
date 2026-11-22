@@ -94,6 +94,7 @@ fn snapshot() -> ContextPartitionSnapshot {
         agents_md_tokens: 3,
         context_window_tokens: Some(1000),
         last_input_tokens: 42,
+        items: Default::default(),
     }
 }
 
@@ -205,14 +206,14 @@ fn state_context_partition_snapshot_maths() {
     assert_eq!(snap.total_percent(), Some(75.0));
 
     // Unknown window: every percentage helper is None.
-    let mut unknown = snap;
+    let mut unknown = snap.clone();
     unknown.context_window_tokens = None;
     assert_eq!(unknown.remaining_tokens(), None);
     assert_eq!(unknown.percent_of_window(10), None);
     assert_eq!(unknown.total_percent(), None);
 
     // Zero window: percent is None but remaining saturates at 0.
-    let mut zero = snap;
+    let mut zero = snap.clone();
     zero.context_window_tokens = Some(0);
     assert_eq!(zero.percent_of_window(10), None);
     assert_eq!(zero.remaining_tokens(), Some(0));

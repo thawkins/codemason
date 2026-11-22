@@ -1,27 +1,28 @@
-//! Frontend-neutral lines of the Context panel (toggled with `Alt+C`,
-//! spec `contextpanel`).
+//! Frontend-neutral view model of the Context panel (spec `contextpanel`).
 //!
-//! [`context_panel_lines`] builds what the removed terminal UI's
-//! `render_context_panel` drew, as [`StyledLine`]s a frontend paints: the
-//! model's context window, the tokens sent on the last turn, every context
-//! partition (the system prompt with its skills, memory and AGENTS.md
-//! breakdown, the tool catalog, the tool metadata and the history) with a
-//! percentage bar of the window (FR-005..FR-011), the history message count
-//! (FR-008), the total and the free headroom (FR-012), and the stream I/O
-//! byte counts. Ratios read `unknown` when the model advertises no window
-//! (FR-011).
+//! [`context_view`] turns a [`ContextPartitionSnapshot`] into what the panel
+//! shows: how much of the model's context window is used (FR-010/FR-012),
+//! the tokens sent on the last turn, one [`ContextRow`] per partition with
+//! its share of the window and the items inside it (FR-005..FR-009), the
+//! history message count (FR-008), the free headroom (FR-012) and the
+//! stream I/O byte counts. Ratios are `None` when the model advertises no
+//! window (FR-011).
 //!
-//! The lines are a UI-only artifact: building them reads the snapshot and
-//! never touches the conversation (FR-016).
+//! The rows do not overlap, so they stack into one usage bar: the system
+//! prompt row is the prompt without its skills, memory and instruction-file
+//! parts, which have rows of their own, and the tool catalog is split into
+//! built-in and MCP tools. The rows sum to
+//! [`ContextPartitionSnapshot::total_tokens`].
 //!
-//! Dependencies: [`crate::app::ContextPartitionSnapshot`] for the values and
-//! [`crate::styled`] for the line type.
+//! [`ContextView::text_lines`] is the panel's plain text, the copy source of
+//! its text selection.
+//!
+//! The view is a UI-only artifact: building it reads the snapshot and never
+//! touches the conversation (FR-016).
+//!
+//! Dependencies: [`crate::app::ContextPartitionSnapshot`] for the values.
 
-use crate::app::ContextPartitionSnapshot;
-use crate::styled::{StyledLine, StyledSpan, TextStyle, ThemeColor};
-
-/// Width of the label column every row's value lines up after.
-const LABEL_W: usize = 14;
+use crate::app::{ContextItem, ContextPartitionSnapshot};
 
 /// Compact a token estimate into a short form (`123`, `12.3k`, `1.2M`).
 ///
@@ -43,78 +44,199 @@ pub fn format_tokens(tokens: u64) -> String {
     }
 }
 
-/// An ASCII progress bar, e.g. `[#####.....]` for half of ten cells.
+/// Format a share of the window as `12.3%`, or `unknown` without a window.
 ///
 /// # Arguments
 ///
-/// * `progress` - the filled fraction, clamped to `0.0..=1.0`.
-/// * `width` - the number of cells between the brackets.
+/// * `percent` - the share, from [`ContextPartitionSnapshot::percent_of_window`].
 ///
 /// # Returns
 ///
-/// `[`, the filled cells as `#`, the empty cells as `.`, then `]`.
+/// The percentage with one decimal, or `unknown`.
 #[must_use]
-pub fn progress_bar(progress: f32, width: usize) -> String {
-    let filled = ((progress.clamp(0.0, 1.0) * width as f32) as usize).min(width);
-    format!(
-        "[{}{}]",
-        "#".repeat(filled),
-        ".".repeat(width.saturating_sub(filled))
-    )
+pub fn format_percent(percent: Option<f64>) -> String {
+    percent.map_or_else(|| "unknown".to_string(), |pct| format!("{pct:.1}%"))
 }
 
-/// The row styles, as the TUI colours them.
-struct Styles {
-    header: TextStyle,
-    label: TextStyle,
-    value: TextStyle,
-    sub: TextStyle,
-    dim: TextStyle,
-    warn: TextStyle,
+/// Which partition a [`ContextRow`] shows; a frontend keys its colours by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ContextCategory {
+    /// The system prompt, without the parts that have rows of their own.
+    SystemPrompt,
+    /// The skills listed in the system prompt.
+    Skills,
+    /// The memory entries injected into the system prompt.
+    Memory,
+    /// The instruction file (AGENTS.md, ...) in the system prompt.
+    Instructions,
+    /// The built-in tool definitions.
+    BuiltInTools,
+    /// The MCP tool definitions.
+    McpTools,
+    /// The provider's per-tool wire envelope.
+    ToolMetadata,
+    /// The conversation history.
+    History,
 }
 
-impl Styles {
-    /// The TUI's Context panel colours.
-    const fn new() -> Self {
-        Self {
-            header: TextStyle::new().fg(ThemeColor::Accent).bold(),
-            label: TextStyle::new().fg(ThemeColor::Text),
-            value: TextStyle::new().fg(ThemeColor::Info),
-            sub: TextStyle::new().fg(ThemeColor::Subtle),
-            dim: TextStyle::new().fg(ThemeColor::Muted),
-            warn: TextStyle::new().fg(ThemeColor::Warning),
-        }
-    }
-}
-
-/// A `label  NNN [bar] PP%` row, or `label  NNN unknown` when the
-/// window is unknown.
-fn partition_row(
-    snapshot: &ContextPartitionSnapshot,
-    label: &str,
-    tokens: u64,
-    label_style: TextStyle,
-    bar_width: usize,
-    styles: &Styles,
-) -> StyledLine {
-    let mut spans = vec![
-        StyledSpan::styled(format!("{label:<LABEL_W$}"), label_style),
-        StyledSpan::styled(format!("{:>8} ", format_tokens(tokens)), styles.value),
+impl ContextCategory {
+    /// Every category, in the order the panel lists the rows.
+    pub const ALL: [Self; 8] = [
+        Self::History,
+        Self::SystemPrompt,
+        Self::Skills,
+        Self::Memory,
+        Self::Instructions,
+        Self::BuiltInTools,
+        Self::McpTools,
+        Self::ToolMetadata,
     ];
-    match snapshot.percent_of_window(tokens) {
-        Some(pct) => {
-            spans.push(StyledSpan::styled(
-                progress_bar((pct / 100.0) as f32, bar_width),
-                styles.dim,
-            ));
-            spans.push(StyledSpan::styled(format!("{pct:4.0}%"), styles.value));
+
+    /// The row's label.
+    ///
+    /// # Returns
+    ///
+    /// A short title-case name, e.g. `"MCP tools"`.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SystemPrompt => "System prompt",
+            Self::Skills => "Skills",
+            Self::Memory => "Memory",
+            Self::Instructions => "Instruction files",
+            Self::BuiltInTools => "Built-in tools",
+            Self::McpTools => "MCP tools",
+            Self::ToolMetadata => "Tool metadata",
+            Self::History => "History",
         }
-        None => spans.push(StyledSpan::styled("unknown", styles.sub)),
     }
-    StyledLine::from(spans)
 }
 
-/// Build the Context panel's lines from `snapshot`.
+/// One partition of the Context panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextRow {
+    /// Which partition the row shows.
+    pub category: ContextCategory,
+    /// Token estimate of the partition.
+    pub tokens: u64,
+    /// Share of the context window, or `None` when the window is unknown.
+    pub percent: Option<f64>,
+    /// The items inside the partition, largest first; empty when the
+    /// partition has no item breakdown.
+    pub items: Vec<ContextItem>,
+}
+
+/// What the Context panel shows, built by [`context_view`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextView {
+    /// Tokens of every partition together.
+    pub used_tokens: u64,
+    /// The model's context window, or `None` when unknown.
+    pub window_tokens: Option<u64>,
+    /// Share of the window used, or `None` when the window is unknown.
+    pub used_percent: Option<f64>,
+    /// Tokens left in the window, or `None` when the window is unknown.
+    pub free_tokens: Option<u64>,
+    /// Share of the window left, or `None` when the window is unknown.
+    pub free_percent: Option<f64>,
+    /// Provider-reported input tokens of the last turn (zero before it).
+    pub sent_tokens: u64,
+    /// Messages in the conversation history.
+    pub message_count: usize,
+    /// The partitions, in [`ContextCategory::ALL`] order.
+    pub rows: Vec<ContextRow>,
+    /// Bytes streamed to the model this session.
+    pub stream_out_bytes: u64,
+    /// Bytes streamed from the model this session.
+    pub stream_in_bytes: u64,
+}
+
+impl ContextView {
+    /// The panel's text, one string per line, as the copy source of its
+    /// text selection.
+    ///
+    /// # Returns
+    ///
+    /// The header, the sent tokens, each row followed by its items
+    /// (indented), the message count, the free space and the stream
+    /// counters.
+    #[must_use]
+    pub fn text_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("Context window  {}", self.usage_text()),
+            format!("Sent to model  {}", format_tokens(self.sent_tokens)),
+        ];
+        for row in &self.rows {
+            lines.push(format!(
+                "{}  {}  {}",
+                row.category.label(),
+                format_tokens(row.tokens),
+                format_percent(row.percent)
+            ));
+            lines.extend(
+                row.items
+                    .iter()
+                    .map(|item| format!("  {}  {}", item.name, format_tokens(item.tokens))),
+            );
+            if row.category == ContextCategory::History {
+                lines.push(format!("  {}", self.messages_text()));
+            }
+        }
+        lines.push(format!(
+            "Free space  {}  {}",
+            self.free_tokens
+                .map_or_else(|| "unknown".to_string(), format_tokens),
+            format_percent(self.free_percent)
+        ));
+        lines.push(format!("Streamed  {}", self.streamed_text()));
+        lines
+    }
+
+    /// The usage summary, e.g. `31% used  311.5k / 1.0M`, or
+    /// `311.5k used  window unknown`.
+    ///
+    /// # Returns
+    ///
+    /// The header's text.
+    #[must_use]
+    pub fn usage_text(&self) -> String {
+        match (self.used_percent, self.window_tokens) {
+            (Some(pct), Some(window)) => format!(
+                "{pct:.0}% used  {} / {}",
+                format_tokens(self.used_tokens),
+                format_tokens(window)
+            ),
+            _ => format!("{} used  window unknown", format_tokens(self.used_tokens)),
+        }
+    }
+
+    /// The history message count, e.g. `3 messages`.
+    ///
+    /// # Returns
+    ///
+    /// The count with its unit.
+    #[must_use]
+    pub fn messages_text(&self) -> String {
+        format!("{} messages", self.message_count)
+    }
+
+    /// The stream counters, e.g. `1.0 KB up  2.0 KB down`.
+    ///
+    /// # Returns
+    ///
+    /// The bytes streamed each way, in kilobytes.
+    #[must_use]
+    pub fn streamed_text(&self) -> String {
+        let kb = |bytes: u64| format!("{:.1} KB", bytes as f64 / 1024.0);
+        format!(
+            "{} up  {} down",
+            kb(self.stream_out_bytes),
+            kb(self.stream_in_bytes)
+        )
+    }
+}
+
+/// Build the Context panel's view model from `snapshot`.
 ///
 /// # Arguments
 ///
@@ -122,118 +244,59 @@ fn partition_row(
 ///   `App::context_effective_snapshot`.
 /// * `stream_out_bytes` - bytes streamed to the model this session.
 /// * `stream_in_bytes` - bytes streamed from the model this session.
-/// * `bar_width` - cells in each percentage bar.
 ///
 /// # Returns
 ///
-/// The panel's rows, top to bottom. Token counts carry no unit: the first
-/// row states it once (`400.0k tokens`).
+/// The view; its rows sum to `snapshot.total_tokens()`.
 #[must_use]
-pub fn context_panel_lines(
+pub fn context_view(
     snapshot: &ContextPartitionSnapshot,
     stream_out_bytes: u64,
     stream_in_bytes: u64,
-    bar_width: usize,
-) -> Vec<StyledLine> {
-    let styles = Styles::new();
-    let mut lines = Vec::new();
-
-    // FR-010/FR-011: the window every percentage below is measured against.
-    let window_label = "Context window";
-    lines.push(StyledLine::from(vec![
-        StyledSpan::styled(format!("{window_label:<LABEL_W$}"), styles.label),
-        match snapshot.context_window_tokens {
-            Some(window) => StyledSpan::styled(
-                format!("{:>8} tokens", format_tokens(window as u64)),
-                styles.value,
-            ),
-            None => StyledSpan::styled(format!("{:>8}", "unknown"), styles.sub),
-        },
-    ]));
-
-    // The provider-reported input of the last turn; zero (dimmed, no bar)
-    // until the first turn completes.
-    let sent = snapshot.last_input_tokens;
-    let sent_label = "Sent to model";
-    lines.push(match snapshot.percent_of_window(sent) {
-        Some(_) if sent > 0 => {
-            partition_row(snapshot, sent_label, sent, styles.label, bar_width, &styles)
-        }
-        Some(_) => StyledLine::from(vec![
-            StyledSpan::styled(format!("{sent_label:<LABEL_W$}"), styles.sub),
-            StyledSpan::styled(format!("{:>8}", format_tokens(sent)), styles.sub),
-        ]),
-        None => StyledLine::from(vec![
-            StyledSpan::styled(format!("{sent_label:<LABEL_W$}"), styles.label),
-            StyledSpan::styled(format!("{:>8}", format_tokens(sent)), styles.value),
-        ]),
-    });
-
-    // FR-005..FR-009: the partitions; the indented rows break down the
-    // system prompt.
-    let rows: [(&str, u64, bool); 7] = [
-        ("System prompt", snapshot.system_prompt_tokens, false),
-        ("skills", snapshot.skills_tokens, true),
-        ("memory", snapshot.memory_tokens, true),
-        ("agents.md", snapshot.agents_md_tokens, true),
-        ("Tool catalog", snapshot.tool_catalog_tokens, false),
-        ("Tool metadata", snapshot.tool_metadata_tokens, false),
-        ("History", snapshot.history_tokens, false),
-    ];
-    for (label, tokens, sub) in rows {
-        let (label, style) = if sub {
-            (format!("  {label}"), styles.sub)
-        } else {
-            (label.to_string(), styles.label)
-        };
-        lines.push(partition_row(
-            snapshot, &label, tokens, style, bar_width, &styles,
-        ));
+) -> ContextView {
+    let items = &snapshot.items;
+    let mcp_tokens: u64 = items.mcp_tools.iter().map(|item| item.tokens).sum();
+    let prompt_parts = snapshot.skills_tokens + snapshot.memory_tokens + snapshot.agents_md_tokens;
+    let rows = ContextCategory::ALL
+        .into_iter()
+        .map(|category| {
+            let (tokens, items) = match category {
+                ContextCategory::SystemPrompt => (
+                    snapshot.system_prompt_tokens.saturating_sub(prompt_parts),
+                    Vec::new(),
+                ),
+                ContextCategory::Skills => (snapshot.skills_tokens, items.skills.clone()),
+                ContextCategory::Memory => (snapshot.memory_tokens, items.memories.clone()),
+                ContextCategory::Instructions => {
+                    (snapshot.agents_md_tokens, items.instruction_files.clone())
+                }
+                ContextCategory::BuiltInTools => (
+                    snapshot.tool_catalog_tokens.saturating_sub(mcp_tokens),
+                    items.built_in_tools.clone(),
+                ),
+                ContextCategory::McpTools => (mcp_tokens, items.mcp_tools.clone()),
+                ContextCategory::ToolMetadata => (snapshot.tool_metadata_tokens, Vec::new()),
+                ContextCategory::History => (snapshot.history_tokens, items.history.clone()),
+            };
+            ContextRow {
+                category,
+                tokens,
+                percent: snapshot.percent_of_window(tokens),
+                items,
+            }
+        })
+        .collect();
+    let free_tokens = snapshot.remaining_tokens();
+    ContextView {
+        used_tokens: snapshot.total_tokens(),
+        window_tokens: snapshot.context_window_tokens.map(|w| w as u64),
+        used_percent: snapshot.total_percent(),
+        free_tokens,
+        free_percent: free_tokens.and_then(|free| snapshot.percent_of_window(free)),
+        sent_tokens: snapshot.last_input_tokens,
+        message_count: snapshot.history_message_count,
+        rows,
+        stream_out_bytes,
+        stream_in_bytes,
     }
-
-    // FR-008: the message count beside the history partition.
-    lines.push(StyledLine::from(StyledSpan::styled(
-        format!("  {} messages", snapshot.history_message_count),
-        styles.sub,
-    )));
-    lines.push(StyledLine::default());
-
-    // FR-012: the total and the remaining headroom.
-    lines.push(partition_row(
-        snapshot,
-        "Total",
-        snapshot.total_tokens(),
-        styles.header,
-        bar_width,
-        &styles,
-    ));
-    lines.push(match snapshot.remaining_tokens() {
-        Some(remaining) => StyledLine::from(vec![
-            StyledSpan::styled(format!("{:<LABEL_W$}", "Free"), styles.label),
-            StyledSpan::styled(
-                format!("{:>8}", format_tokens(remaining)),
-                if remaining == 0 {
-                    styles.warn
-                } else {
-                    styles.value
-                },
-            ),
-        ]),
-        None => StyledLine::from(StyledSpan::styled(
-            format!("{:<LABEL_W$}{:>8}", "Free", "unknown"),
-            styles.sub,
-        )),
-    });
-
-    // The stream I/O counters, one line below.
-    lines.push(StyledLine::default());
-    let kb = |bytes: u64| format!("{:.1} KB", bytes as f64 / 1024.0);
-    lines.push(StyledLine::from(vec![
-        StyledSpan::styled(format!("{:<LABEL_W$}", "Streamed"), styles.sub),
-        StyledSpan::styled(
-            format!("{} up  {} down", kb(stream_out_bytes), kb(stream_in_bytes)),
-            styles.value,
-        ),
-    ]));
-    lines
 }

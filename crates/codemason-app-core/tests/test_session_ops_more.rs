@@ -40,6 +40,7 @@ fn snapshot(history_count: usize) -> ContextPartitionSnapshot {
         agents_md_tokens: 5,
         context_window_tokens: Some(200_000),
         last_input_tokens: 50_000,
+        items: Default::default(),
     }
 }
 

@@ -13,6 +13,7 @@ pub mod activity;
 pub mod app;
 pub mod branch_names;
 pub mod clipboard;
+pub mod context_items;
 pub mod context_panel;
 pub mod deck_progress;
 pub mod diff_view;

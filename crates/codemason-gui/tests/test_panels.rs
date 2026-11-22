@@ -408,38 +408,96 @@ fn test_context_panel_alt_c_shows_and_hides_the_pane() {
     let mut rig = rig(|_, app| app.show_log = true);
     rig.harness.run();
     focus_prompt(&mut rig.harness);
+    // The Context tab is pinned beside the sidebar, behind it.
     assert!(!context_shown(&rig.harness));
-    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
+    assert!(rig.harness.state().layout().contains(&PaneId::Context));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Sessions),
+        PanelState::Front
+    );
 
-    // Alt+C shows the Context pane, with its breakdown, in place of the
-    // other side panels app-core hides.
+    // Alt+C brings the Context tab, with its breakdown, to the front and
+    // leaves the other side panels alone.
     alt(&mut rig.harness, egui::Key::C, "c");
     rig.harness.run();
     let app = rig.harness.state().app();
     assert!(app.show_context_panel);
     assert_eq!(app.status, "context panel visible");
-    assert!(
-        !app.show_log,
-        "app-core hides the log for the Context panel"
-    );
+    assert!(app.show_log, "the log stays open");
     assert!(context_shown(&rig.harness));
-    assert!(rig.harness.state().layout().contains(&PaneId::Context));
-    assert!(!rig.harness.state().layout().contains(&PaneId::Log));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Context),
+        PanelState::Front
+    );
+    assert!(rig.harness.state().layout().contains(&PaneId::Log));
     rig.harness.get_by_label_contains("Context window");
     rig.harness.get_by_label_contains("System prompt");
     rig.harness.get_by_label_contains("0 messages");
 
+    // Alt+C again gives the front back to the sidebar; the tab stays.
     alt(&mut rig.harness, egui::Key::C, "c");
     rig.harness.run();
     assert!(!rig.harness.state().app().show_context_panel);
     assert!(!context_shown(&rig.harness));
-    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
+    assert!(rig.harness.state().layout().contains(&PaneId::Context));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Sessions),
+        PanelState::Front
+    );
     assert_eq!(rig.harness.state().app().session.input, "");
     assert!(rig.harness.state().app().session.messages.is_empty());
 }
 
 #[test]
-fn test_dock_closing_the_context_tab_clears_its_flag() {
+fn test_dock_clicking_the_context_tab_shows_the_panel() {
+    let mut rig = rig(|_, _| {});
+    rig.harness.run();
+    assert!(!context_shown(&rig.harness));
+    assert!(!rig.harness.state().app().show_context_panel);
+
+    // Picking the pinned tab brings the panel up and sets app-core's flag.
+    rig.harness
+        .get_by_role_and_label(Role::Tab, CONTEXT_LABEL)
+        .click();
+    rig.harness.run();
+    rig.harness.run();
+    assert!(rig.harness.state().app().show_context_panel);
+    assert!(context_shown(&rig.harness));
+
+    // Picking the sidebar's tab covers it and clears the flag.
+    let sessions = tab_title(rig.harness.state_mut().app_mut());
+    rig.harness
+        .get_by_role_and_label(Role::Tab, &sessions)
+        .click();
+    rig.harness.run();
+    rig.harness.run();
+    assert!(!rig.harness.state().app().show_context_panel);
+    assert!(!context_shown(&rig.harness));
+}
+
+#[test]
+fn test_context_tab_goes_with_the_hidden_sidebar_until_alt_c() {
+    let mut rig = rig(|_, app| app.sidebar.visible = false);
+    rig.harness.run();
+    focus_prompt(&mut rig.harness);
+    assert!(
+        !rig.harness.state().layout().contains(&PaneId::Context),
+        "a hidden sidebar takes the pinned tab with it"
+    );
+
+    alt(&mut rig.harness, egui::Key::C, "c");
+    rig.harness.run();
+    assert!(rig.harness.state().app().show_context_panel);
+    assert!(context_shown(&rig.harness));
+
+    alt(&mut rig.harness, egui::Key::C, "c");
+    rig.harness.run();
+    assert!(!rig.harness.state().app().show_context_panel);
+    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
+}
+
+#[test]
+fn test_dock_context_tab_cannot_be_closed() {
     let mut rig = rig(|_, app| app.show_context_panel = true);
     rig.harness.run();
     assert!(context_shown(&rig.harness));
@@ -448,15 +506,11 @@ fn test_dock_closing_the_context_tab_clears_its_flag() {
         .get_by_role_and_label(Role::Tab, CONTEXT_LABEL)
         .click_secondary();
     rig.harness.run();
-    rig.harness.get_by_label("Close Panel").click();
-    rig.harness.run();
-    rig.harness.run();
-
-    let app = rig.harness.state().app();
-    assert!(!app.show_context_panel);
-    assert_eq!(app.status, "context panel hidden", "app-core's toggle ran");
-    assert!(!rig.harness.state().layout().contains(&PaneId::Context));
-    assert!(!context_shown(&rig.harness));
+    assert!(
+        rig.harness.query_by_label("Close Panel").is_none(),
+        "the pinned tab offers no Close"
+    );
+    assert!(rig.harness.state().layout().contains(&PaneId::Context));
 }
 
 #[test]
@@ -656,9 +710,13 @@ fn test_dock_fresh_start_shows_panes_at_their_default_places() {
     assert_eq!(log.placement, Placement::Split(Zone::Right));
     assert_eq!(log.size, Some(SplitSize::Ratio(0.75)));
     let sessions = designed[1].as_ref().expect("sessions docked");
+    // The sidebar shares its group with the pinned Context tab, so it
+    // goes back in front of that tab.
     assert_eq!(
         sessions.placement,
-        Placement::Split(Zone::Left),
+        Placement::Tab {
+            before: Some(PaneId::Context)
+        },
         "{sessions:?}"
     );
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added: the Context pane shows a header with the share of the context window used and `used / window`, one stacked bar with a coloured segment per partition, and one colour-keyed row per partition with its tokens and share of the window. The rows no longer overlap (system prompt, skills, memory, instruction files, built-in tools, MCP tools, tool metadata, history), so they add up to the bar.
+- Added: each Context row opens on a click to list its items largest first: every tool (MCP tools as `server: tool`), skill, memory entry and the loaded instruction file, and the history by role with tool calls and results apart. `ContextPartitionSnapshot::items` carries the breakdown, built by the new `codemason_app_core::context_items`.
+- Added: `material::feedback::stacked_progress` and `swatch`, and `material::list::dense_item`, a compact legend row with an optional disclosure triangle and right-aligned value columns.
+
+### Changed
+
+- Changed: the Context pane is a pinned tab beside the Sessions tab in the left column. It cannot be closed, floated or moved; `Alt+C` or a click on the tab brings it to the front, and `Alt+C` again gives the front back to Sessions. Hiding the sidebar takes the tab with it, so the left column still collapses. Showing it no longer hides the Log, Profile, Tasks or Memory panes, and opening those no longer hides it. A saved layout with the pane elsewhere has it moved beside Sessions on load.
+- Changed: `codemason_app_core::context_panel` builds a structured `ContextView` (`context_view`) instead of styled text lines; `ContextView::text_lines` is the copy source of the panel's selection. `ContextPartitionSnapshot` is no longer `Copy`.
+
 ## [1.0.178] - 2026-11-21
 
 Theme editor hardening, and one copy of the scratch-directory plumbing.

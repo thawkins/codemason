@@ -1,9 +1,10 @@
-//! Tests for the Context panel's frontend-neutral lines
-//! (`codemason_app_core::context_panel`), the rows the removed terminal
-//! UI's `render_context_panel` drew and the GUI Context pane now draws.
+//! Tests for the Context panel's frontend-neutral view model
+//! (`codemason_app_core::context_panel`), which the GUI Context pane draws.
 
-use codemason_app_core::app::ContextPartitionSnapshot;
-use codemason_app_core::context_panel::{context_panel_lines, format_tokens, progress_bar};
+use codemason_app_core::app::{ContextItem, ContextItems, ContextPartitionSnapshot};
+use codemason_app_core::context_panel::{
+    ContextCategory, context_view, format_percent, format_tokens,
+};
 
 /// A snapshot with the given partitions and window.
 fn snapshot(window: Option<usize>) -> ContextPartitionSnapshot {
@@ -18,15 +19,19 @@ fn snapshot(window: Option<usize>) -> ContextPartitionSnapshot {
         agents_md_tokens: 0,
         context_window_tokens: window,
         last_input_tokens: 0,
+        items: ContextItems {
+            mcp_tools: vec![ContextItem {
+                name: "github: create_issue".to_string(),
+                tokens: 1_000,
+            }],
+            ..ContextItems::default()
+        },
     }
 }
 
-/// The plain text of every line.
-fn texts(snapshot: &ContextPartitionSnapshot, out: u64, inn: u64) -> Vec<String> {
-    context_panel_lines(snapshot, out, inn, 10)
-        .iter()
-        .map(codemason_app_core::styled::StyledLine::text)
-        .collect()
+/// Every line of the view's text, joined.
+fn text(snapshot: &ContextPartitionSnapshot, out: u64, inn: u64) -> String {
+    context_view(snapshot, out, inn).text_lines().join("\n")
 }
 
 #[test]
@@ -37,30 +42,58 @@ fn test_format_tokens_compacts_like_the_tui() {
 }
 
 #[test]
-fn test_progress_bar_is_ascii_and_bounded() {
-    assert_eq!(progress_bar(0.5, 10), "[#####.....]");
-    assert_eq!(progress_bar(2.0, 4), "[####]");
-    assert_eq!(progress_bar(-1.0, 4), "[....]");
+fn test_format_percent_reads_unknown_without_a_window() {
+    assert_eq!(format_percent(Some(6.14)), "6.1%");
+    assert_eq!(format_percent(None), "unknown");
 }
 
 #[test]
-fn test_lines_list_every_partition_with_percentages() {
-    let lines = texts(&snapshot(Some(128_000)), 0, 0);
-    let all = lines.join("\n");
+fn test_view_rows_do_not_overlap_and_sum_to_the_total() {
+    let snap = snapshot(Some(128_000));
+    let view = context_view(&snap, 0, 0);
+    let sum: u64 = view.rows.iter().map(|row| row.tokens).sum();
+    assert_eq!(sum, snap.total_tokens());
+    assert_eq!(view.used_tokens, snap.total_tokens());
+    let tokens = |category| {
+        view.rows
+            .iter()
+            .find(|row| row.category == category)
+            .map(|row| row.tokens)
+    };
+    assert_eq!(tokens(ContextCategory::SystemPrompt), Some(12_000 - 150));
+    assert_eq!(tokens(ContextCategory::McpTools), Some(1_000));
+    assert_eq!(tokens(ContextCategory::BuiltInTools), Some(4_000));
+    assert_eq!(view.rows.len(), ContextCategory::ALL.len());
+}
+
+#[test]
+fn test_view_reports_usage_and_free_space_of_a_known_window() {
+    let view = context_view(&snapshot(Some(100_000)), 0, 0);
+    assert_eq!(view.window_tokens, Some(100_000));
+    assert_eq!(view.free_tokens, Some(100_000 - 20_000));
+    assert_eq!(view.usage_text(), "20% used  20.0k / 100.0k");
+    let free = view.free_percent.unwrap_or_default();
+    assert!((free - 80.0).abs() < 1e-9, "{free}");
+}
+
+#[test]
+fn test_text_lists_every_partition_with_percentages() {
+    let all = text(&snapshot(Some(128_000)), 0, 0);
     for expected in [
         "Context window",
         "128.0k",
         "Sent to model",
         "System prompt",
-        "skills",
-        "memory",
-        "agents.md",
-        "Tool catalog",
+        "Skills",
+        "Memory",
+        "Instruction files",
+        "Built-in tools",
+        "MCP tools",
+        "  github: create_issue  1.0k",
         "Tool metadata",
         "History",
         "3 messages",
-        "Total",
-        "Free",
+        "Free space",
         "0.0 KB up  0.0 KB down",
     ] {
         assert!(all.contains(expected), "missing {expected:?} in:\n{all}");
@@ -70,13 +103,12 @@ fn test_lines_list_every_partition_with_percentages() {
 }
 
 #[test]
-fn test_lines_read_unknown_without_a_window() {
-    let all = texts(&snapshot(None), 2048, 1024).join("\n");
-    assert!(all.contains("Context window"), "{all}");
-    assert!(all.contains("unknown"), "FR-011 unknown ratios: {all}");
+fn test_text_reads_unknown_without_a_window() {
+    let all = text(&snapshot(None), 2048, 1024);
+    assert!(all.contains("window unknown"), "{all}");
     assert!(
         all.lines()
-            .any(|l| l.starts_with("Free") && l.trim_end().ends_with("unknown")),
+            .any(|l| l.starts_with("Free space") && l.trim_end().ends_with("unknown")),
         "{all}"
     );
     assert!(

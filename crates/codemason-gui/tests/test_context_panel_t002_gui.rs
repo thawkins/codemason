@@ -30,10 +30,14 @@ fn test_panel_lists_partitions_and_totals() {
     for expected in [
         "Context window",
         "System prompt",
-        "Tool catalog",
+        "Skills",
+        "Memory",
+        "Instruction files",
+        "Built-in tools",
+        "MCP tools",
         "Tool metadata",
         "History",
-        "Total",
+        "Free space",
     ] {
         assert!(
             rendered.contains(expected),

@@ -1648,7 +1648,6 @@ impl App {
                         self.show_tasks_panel = false;
                         self.show_memory = false;
                         self.show_telemetry = false;
-                        self.show_context_panel = false;
                         self.spool_log_window_history();
                     } else {
                         if self
@@ -1676,7 +1675,6 @@ impl App {
                     let enabled = !self.show_profile;
                     self.set_profile_panel_enabled(enabled);
                     if !enabled {
-                        self.show_context_panel = false;
                         if self
                             .text_selection
                             .as_ref()
@@ -1716,7 +1714,6 @@ impl App {
                         self.show_profile = false;
                         self.show_memory = false;
                         self.show_telemetry = false;
-                        self.show_context_panel = false;
                     } else {
                         // Leaving TODO mode: clear Todo-pane selection state.
                         if self
@@ -1756,7 +1753,6 @@ impl App {
                         self.show_profile = false;
                         self.show_tasks_panel = false;
                         self.show_telemetry = false;
-                        self.show_context_panel = false;
                         // Reset cursor to the first memory whenever the panel is opened.
                         self.memory_cursor = 0;
                         self.memory_scroll_offset = 0;
@@ -1842,36 +1838,10 @@ impl App {
                     }
                 }
                 InputAction::ToggleContextPanel => {
-                    // Toggle the Context side panel visibility (Alt+C). Mutually
-                    // exclusive with the other side panels so only one occupies the
-                    // side column. On hide, clear any active context-panel text
-                    // selection or context menu.
-                    self.show_context_panel = !self.show_context_panel;
-                    if self.show_context_panel {
-                        self.show_log = false;
-                        self.show_profile = false;
-                        self.show_tasks_panel = false;
-                        self.show_memory = false;
-                        self.show_telemetry = false;
-                        // T-013/FR-015: refresh the snapshot off the UI
-                        // thread as soon as the panel opens.
-                        self.schedule_context_snapshot_refresh();
-                    } else {
-                        if self
-                            .text_selection
-                            .as_ref()
-                            .is_some_and(|s| s.pane == SelectionPane::ContextPanel)
-                        {
-                            self.text_selection = None;
-                        }
-                        if self
-                            .context_menu
-                            .as_ref()
-                            .is_some_and(|m| m.pane == SelectionPane::ContextPanel)
-                        {
-                            self.context_menu = None;
-                        }
-                    }
+                    // Toggle the Context panel (Alt+C). The Context pane is a
+                    // pinned tab beside the sessions sidebar, so it leaves the
+                    // other side panels alone.
+                    self.set_context_panel_shown(!self.show_context_panel);
                     self.status = if self.show_context_panel {
                         "context panel visible".to_string()
                     } else {

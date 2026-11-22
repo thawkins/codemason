@@ -200,7 +200,7 @@ async fn test_poll_context_snapshot_drops_stale_after_compaction() {
             .context_snapshot_result
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(stale_snapshot);
+        *guard = Some(stale_snapshot.clone());
     }
     app.session.context_refresh_inflight = true;
     // Seed the cache with the same stale snapshot to prove the post-compaction
@@ -239,10 +239,10 @@ async fn test_poll_context_snapshot_drops_stale_after_compaction() {
     let mut fresh = None;
     for _ in 0..100 {
         app.poll_context_snapshot_refresh();
-        if let Some(snap) = app.session.context_snapshot_cache
+        if let Some(snap) = &app.session.context_snapshot_cache
             && snap.history_message_count == 1
         {
-            fresh = Some(snap);
+            fresh = Some(snap.clone());
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;

@@ -5,6 +5,9 @@
 //!   the arrow keys while focused.
 //! - [`linear_progress`] shows how far along a task is, or that it is
 //!   running when the progress is unknown.
+//! - [`stacked_progress`] shows how a whole is shared out, one coloured
+//!   segment per part, on the progress indicator's track; [`swatch`] is the
+//!   matching legend square.
 //! - [`plain_tooltip`] shows a short `inverse_surface` label under a
 //!   hovered widget.
 //! - [`snackbar`] shows a message with an optional action at the bottom
@@ -44,6 +47,19 @@ const INDETERMINATE_PERIOD: f64 = 1.5;
 
 /// Fraction of the track the indeterminate segment covers.
 const INDETERMINATE_WIDTH: f32 = 0.3;
+
+/// Height of a stacked progress indicator, in points: taller than
+/// [`TRACK_HEIGHT`] so narrow segments stay visible.
+pub const STACKED_TRACK_HEIGHT: f32 = 6.0;
+
+/// Gap between two segments of a stacked progress indicator, in points.
+const STACKED_GAP: f32 = 1.0;
+
+/// Side of a legend swatch, in points.
+pub const SWATCH_SIZE: f32 = 10.0;
+
+/// Corner radius of a legend swatch, in points.
+pub(crate) const SWATCH_RADIUS: u8 = 2;
 
 /// Distance of the snackbar from the bottom of the window, in points.
 const SNACKBAR_MARGIN: f32 = 16.0;
@@ -196,6 +212,74 @@ pub fn linear_progress(ui: &mut egui::Ui, palette: &Palette, progress: Option<f3
         ui.painter().rect_filled(segment, rounded, active);
     }
     response
+}
+
+/// Draw a stacked progress indicator: the track with one segment per part,
+/// left to right, each as wide as its fraction of the track.
+///
+/// Fractions are clamped to `0.0..=1.0` and the segments stop at the end of
+/// the track, so parts that add up to more than the whole are cut. Segments
+/// narrower than a point are skipped; the others are parted by a hairline.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; the indicator fills its available width.
+/// * `palette` - the colours (the track is `secondary_container`).
+/// * `segments` - `(fraction, colour)` of each part, in drawing order.
+/// * `label` - the accessible name, e.g. `31% used`.
+///
+/// # Returns
+///
+/// The indicator's response.
+pub fn stacked_progress(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    segments: &[(f32, egui::Color32)],
+    label: &str,
+) -> Response {
+    let size = Vec2::new(ui.available_width(), STACKED_TRACK_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, label));
+    let rounded = CornerRadius::same((STACKED_TRACK_HEIGHT / 2.0) as u8);
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, rounded, rgb(palette.m3.secondary_container));
+    let mut left = rect.left();
+    for &(fraction, colour) in segments {
+        let width = (fraction.clamp(0.0, 1.0) * rect.width()).min(rect.right() - left);
+        if width < 1.0 {
+            continue;
+        }
+        let segment = Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2((left + width - STACKED_GAP).max(left + 1.0), rect.bottom()),
+        );
+        painter.rect_filled(segment, CornerRadius::ZERO, colour);
+        left += width;
+    }
+    response
+}
+
+/// Draw a legend swatch: a small rounded square of `colour`, centred on
+/// the line.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in.
+/// * `colour` - the swatch's colour.
+///
+/// # Returns
+///
+/// The swatch's response.
+pub fn swatch(ui: &mut egui::Ui, colour: egui::Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(SWATCH_SIZE), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(SWATCH_RADIUS), colour);
+    response
+}
+
+/// The rectangle of a legend swatch whose top-left corner is `min`.
+pub(crate) fn swatch_rect(min: egui::Pos2) -> Rect {
+    Rect::from_min_size(min, Vec2::splat(SWATCH_SIZE))
 }
 
 /// Show a plain tooltip under `response` while it is hovered.

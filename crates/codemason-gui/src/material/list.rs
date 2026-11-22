@@ -5,10 +5,15 @@
 //! is filled with `secondary_container`; hovering or pressing one draws the
 //! state layer.
 //!
+//! [`dense_item`] draws a compact legend row for breakdowns: an optional
+//! disclosure triangle, an optional colour swatch, a headline and trailing
+//! value columns aligned at the right edge. An expandable row is clickable.
+//!
 //! Dependencies: `egui`, and this crate's palette and metrics.
 
-use egui::{CornerRadius, Response, Role, Sense, Vec2, WidgetInfo};
+use egui::{Color32, CornerRadius, Response, Role, Sense, Shape, Stroke, Vec2, WidgetInfo};
 
+use super::feedback::{SWATCH_RADIUS, SWATCH_SIZE, swatch_rect};
 use super::{content_colour, paint_state_layer, text_galley};
 use crate::metrics::{radius, text_size};
 use crate::palette::{Palette, rgb};
@@ -24,6 +29,29 @@ const PADDING: f32 = 16.0;
 
 /// Smallest gap between the text and the trailing text, in points.
 const TRAILING_GAP: f32 = 16.0;
+
+/// Height of a [`dense_item`], in points.
+pub const DENSE_HEIGHT: f32 = 22.0;
+
+/// Width of each trailing value column of a [`dense_item`], in points.
+pub const DENSE_COLUMN: f32 = 52.0;
+
+/// Width of the disclosure triangle's slot in a [`dense_item`], in points.
+const DISCLOSURE_SLOT: f32 = 14.0;
+
+/// Gap between a [`dense_item`]'s leading parts, in points.
+const DENSE_GAP: f32 = 6.0;
+
+/// Whether a [`dense_item`] opens to show rows under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disclosure {
+    /// The row has nothing under it; it is not clickable.
+    None,
+    /// The row has rows under it, hidden; a click shows them.
+    Collapsed,
+    /// The row has rows under it, shown; a click hides them.
+    Expanded,
+}
 
 /// Draw a list item.
 ///
@@ -115,6 +143,107 @@ pub fn list_item(
             rect.center().y - trail.size().y / 2.0,
         );
         ui.painter().galley(pos, trail, variant);
+    }
+    response
+}
+
+/// Draw a dense legend row.
+///
+/// The row reads, left to right: `indent`, the disclosure triangle (its
+/// slot is kept for [`Disclosure::None`] too, so headlines line up), the
+/// `swatch` square when given, the headline (cut at the columns) and the
+/// `trailing` values, each right-aligned in a [`DENSE_COLUMN`]-wide column
+/// at the right edge. The accessible name is the headline followed by the
+/// values.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; the row fills its available width.
+/// * `palette` - the colours.
+/// * `indent` - space before the row's content, in points.
+/// * `disclosure` - whether the row opens; an openable row is clickable.
+/// * `swatch` - the colour of the leading swatch, if any.
+/// * `headline` - the row's text.
+/// * `trailing` - the value columns, left to right.
+///
+/// # Returns
+///
+/// The row's response; `clicked()` reports a click on an openable row.
+pub fn dense_item(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    indent: f32,
+    disclosure: Disclosure,
+    swatch: Option<Color32>,
+    headline: &str,
+    trailing: &[&str],
+) -> Response {
+    let m3 = &palette.m3;
+    let sense = match disclosure {
+        Disclosure::None => Sense::hover(),
+        Disclosure::Collapsed | Disclosure::Expanded => Sense::click(),
+    };
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), DENSE_HEIGHT), sense);
+    let name: String = std::iter::once(headline)
+        .chain(trailing.iter().copied())
+        .collect::<Vec<_>>()
+        .join("  ");
+    response.widget_info(|| WidgetInfo::labeled(Role::ListItem, ui.is_enabled(), &name));
+    if disclosure != Disclosure::None {
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_expanded(disclosure == Disclosure::Expanded);
+        });
+    }
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let content = content_colour(ui, palette, rgb(m3.on_surface));
+    let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
+    if disclosure != Disclosure::None {
+        paint_state_layer(ui, &response, CornerRadius::same(radius::XS), content);
+    }
+    let centre_y = rect.center().y;
+    let mut x = rect.left() + indent;
+    let painter = ui.painter();
+    let size = 4.0;
+    let tip = egui::pos2(x + DISCLOSURE_SLOT / 2.0, centre_y);
+    let points = match disclosure {
+        Disclosure::None => Vec::new(),
+        Disclosure::Collapsed => vec![
+            tip + Vec2::new(-size / 2.0, -size),
+            tip + Vec2::new(size, 0.0),
+            tip + Vec2::new(-size / 2.0, size),
+        ],
+        Disclosure::Expanded => vec![
+            tip + Vec2::new(-size, -size / 2.0),
+            tip + Vec2::new(size, -size / 2.0),
+            tip + Vec2::new(0.0, size),
+        ],
+    };
+    if !points.is_empty() {
+        painter.add(Shape::convex_polygon(points, variant, Stroke::NONE));
+    }
+    x += DISCLOSURE_SLOT;
+    if let Some(colour) = swatch {
+        let square = swatch_rect(egui::pos2(x, centre_y - SWATCH_SIZE / 2.0));
+        painter.rect_filled(square, CornerRadius::same(SWATCH_RADIUS), colour);
+        x += SWATCH_SIZE + DENSE_GAP;
+    }
+    let columns_left = DENSE_COLUMN.mul_add(-(trailing.len() as f32), rect.right());
+    let font = egui::FontId::proportional(text_size::SMALL + 1.0);
+    let head = text_galley(ui, headline, font.clone(), content);
+    let clip = rect.with_max_x((columns_left - DENSE_GAP).max(x));
+    painter.with_clip_rect(clip).galley(
+        egui::pos2(x, centre_y - head.size().y / 2.0),
+        head,
+        content,
+    );
+    for (index, value) in trailing.iter().enumerate() {
+        let galley = text_galley(ui, value, font.clone(), variant);
+        let right = DENSE_COLUMN.mul_add((index + 1) as f32, columns_left);
+        let pos = egui::pos2(right - galley.size().x, centre_y - galley.size().y / 2.0);
+        painter.galley(pos, galley, variant);
     }
     response
 }

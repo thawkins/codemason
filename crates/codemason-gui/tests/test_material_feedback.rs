@@ -6,7 +6,10 @@
 mod support_material;
 
 use codemason_gui::material::elevation_shadow;
-use codemason_gui::material::feedback::{TRACK_HEIGHT, linear_progress, slider, snackbar};
+use codemason_gui::material::feedback::{
+    STACKED_TRACK_HEIGHT, SWATCH_SIZE, TRACK_HEIGHT, linear_progress, slider, snackbar,
+    stacked_progress, swatch,
+};
 use egui_kittest::kittest::Queryable;
 
 #[test]
@@ -47,6 +50,27 @@ fn test_material_feedback_linear_progress_is_a_thin_track() {
             assert!((response.rect.height() - TRACK_HEIGHT).abs() < 0.5);
         });
     drop(harness);
+}
+
+#[test]
+fn test_material_feedback_stacked_progress_is_labelled_and_fills_the_width() {
+    let palette = support_material::palette();
+    let harness = support_material::builder()
+        .with_size(egui::vec2(300.0, 40.0))
+        .build_ui(move |ui| {
+            let width = ui.available_width();
+            let segments = [
+                (0.25, egui::Color32::RED),
+                (0.0005, egui::Color32::GREEN),
+                (2.0, egui::Color32::BLUE),
+            ];
+            let response = stacked_progress(ui, &palette, &segments, "31% used");
+            assert!((response.rect.height() - STACKED_TRACK_HEIGHT).abs() < 0.5);
+            assert!((response.rect.width() - width).abs() < 0.5);
+            let square = swatch(ui, egui::Color32::RED);
+            assert!((square.rect.width() - SWATCH_SIZE).abs() < 0.5);
+        });
+    harness.get_by_label("31% used");
 }
 
 #[test]

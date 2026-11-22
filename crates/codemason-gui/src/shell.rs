@@ -117,6 +117,9 @@ pub struct Shell {
     layout_dirty: bool,
     /// The panes app-core sent the keyboard to last frame.
     key_panes: BTreeSet<PaneId>,
+    /// `App::show_context_panel` as last synced with the Context tab, so a
+    /// change app-core made (`Alt+C`) is told from a tab the user picked.
+    context_shown: bool,
     /// Toggle chords that close panes closed from the dock's chrome, run
     /// through `App::handle_key` after drawing.
     close_keys: Vec<KeyInput>,
@@ -193,6 +196,7 @@ impl Shell {
             layout_file: None,
             layout_dirty: false,
             key_panes: BTreeSet::new(),
+            context_shown: false,
             close_keys: Vec::new(),
             theme: ThemeApplier::default(),
             files: FileDialogs::new(),
@@ -642,6 +646,37 @@ impl Shell {
             Err(err) => tracing::warn!(%err, "dock visibility sync failed"),
         }
         self.front_key_panes(ctx);
+        self.sync_context_tab(ctx);
+    }
+
+    /// Keep the pinned Context tab and `App::show_context_panel` in step:
+    /// when app-core changed the flag (`Alt+C`), bring the tab to the front
+    /// or give the front back to the sessions sidebar; otherwise the flag
+    /// follows whether the user put the tab in front, so the snapshot is
+    /// refreshed only while the pane is seen.
+    fn sync_context_tab(&mut self, ctx: &egui::Context) {
+        let front = self.layout.panel_state(&PaneId::Context) == PanelState::Front;
+        let wanted = self.app.show_context_panel;
+        if wanted != self.context_shown {
+            let pane = match (wanted, front) {
+                (true, false) => Some(PaneId::Context),
+                (false, true) => Some(PaneId::Sessions),
+                (true, true) | (false, false) => None,
+            };
+            if let Some(pane) = pane {
+                match dock::bring_to_front(&mut self.layout, pane) {
+                    Ok(true) => {
+                        self.layout_dirty = true;
+                        ctx.request_repaint();
+                    }
+                    Ok(false) => {}
+                    Err(err) => tracing::debug!(?pane, %err, "Context tab not synced"),
+                }
+            }
+        } else if front != wanted {
+            self.app.set_context_panel_shown(front);
+        }
+        self.context_shown = self.app.show_context_panel;
     }
 
     /// Bring a pane app-core has just started sending the keyboard to to

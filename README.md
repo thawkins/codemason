@@ -166,9 +166,10 @@ Start with [GUI-QUICKSTART.md](GUI-QUICKSTART.md) to run it, or
   message input queue (`Alt+Q`
   menu / `/queue`) that keeps the prompt editable while the agent executes; side
   panes for memory (`Alt+M` | `Cmd+Shift+M`), the log, the profiler, tasks
-  (`Alt+I` | `Cmd+Shift+I`), the context panel (`Alt+C`, what the next request
-  sends to the model: the window, each prompt partition with its share, the
-  total and the free headroom), agents and teams. The window opens maximized the
+  (`Alt+I` | `Cmd+Shift+I`), the context panel (a pinned tab beside the
+  sessions sidebar, `Alt+C`: what the next request sends to the model, as a
+  stacked usage bar and one row per partition that opens to list its tools,
+  skills, memories and messages), agents and teams. The window opens maximized the
   first time, then remembers its size, position and layout. It follows the
   system's dark or light setting; `/theme` opens a picker over seven built-in
   themes (dark, light, high contrast, Catppuccin Mocha, Gruvbox, Nord, Tokyo

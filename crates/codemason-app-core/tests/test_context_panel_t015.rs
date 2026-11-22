@@ -32,6 +32,7 @@ fn snapshot(
         agents_md_tokens: agents_md,
         context_window_tokens: window,
         last_input_tokens: 0,
+        items: Default::default(),
     }
 }
 
