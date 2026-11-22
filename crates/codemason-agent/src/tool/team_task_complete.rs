@@ -9,6 +9,23 @@ use crate::team::find_team_dir;
 /// Marks a task as completed by the calling agent.
 pub struct TeamTaskCompleteTool;
 
+/// Largest `result` text stored with a completion, in bytes. Longer text is
+/// cut at a character boundary and the tool output says so.
+pub const MAX_TASK_RESULT_BYTES: usize = 16 * 1024;
+
+/// Cut `text` to at most [`MAX_TASK_RESULT_BYTES`] at a character boundary.
+/// Returns the kept text and whether anything was cut.
+#[must_use]
+pub fn cap_task_result(text: &str) -> (&str, bool) {
+    if text.len() <= MAX_TASK_RESULT_BYTES {
+        return (text, false);
+    }
+    (
+        &text[..text.floor_char_boundary(MAX_TASK_RESULT_BYTES)],
+        true,
+    )
+}
+
 #[async_trait::async_trait]
 impl Tool for TeamTaskCompleteTool {
     fn name(&self) -> &'static str {
@@ -47,9 +64,14 @@ impl Tool for TeamTaskCompleteTool {
              \\\n\\\n\
              WARNING: DO NOT confuse with `agent_complete` (a different tool used OUTSIDE teams to \
              signal the end of the autonomous loop, which takes `summary` as its only parameter). \
-             This tool takes `team_name` + `task_id` - NOT `summary`. \
+             This tool takes `team_name` + `task_id` (+ optional `result`) - NOT `summary`. \
              \\\n\\\n\
-             Example: team_task_complete(team_name: \"audit-team\", task_id: \"task-001\")"
+             RESULT: pass an optional 'result' (string) - a short account of what you \
+             found or changed. Tasks that depend on this one receive it in their prompt. \
+             Text over 16 KiB is cut. \
+             \\n\\n\
+             Example: team_task_complete(team_name: \"audit-team\", task_id: \"task-001\", \
+             result: \"Found 3 auth handlers in src/auth/; login.rs lacks rate limiting.\")"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -63,6 +85,10 @@ impl Tool for TeamTaskCompleteTool {
                 "task_id": {
                     "type": "string",
                     "description": "REQUIRED. ID of the task to mark as completed (e.g. 'task-001'). This must be a task ID you claimed via `team_task_claim`."
+                },
+                "result": {
+                    "type": "string",
+                    "description": "Optional. Short account of what you found or changed. Dependent tasks receive it in their prompt. Cut at 16 KiB."
                 }
             },
             "required": ["team_name", "task_id"],
@@ -83,6 +109,14 @@ impl Tool for TeamTaskCompleteTool {
             .get("task_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required parameter: task_id"))?;
+
+        let (result, result_truncated) = match input.get("result").and_then(|v| v.as_str()) {
+            Some(text) => {
+                let (kept, cut) = cap_task_result(text);
+                (Some(kept), cut)
+            }
+            None => (None, false),
+        };
 
         let team_dir = find_team_dir(&ctx.working_dir, team_name)
             .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
@@ -129,7 +163,7 @@ impl Tool for TeamTaskCompleteTool {
         // `TaskCompleted` hook - and the hook's verdict reaches the completing
         // agent here as a tool result, whichever path produced it.
         let (task_id_out, title, completed_at, feedback) =
-            match complete_task_through_manager(ctx, &team_dir, task_id, &agent_id).await {
+            match complete_task_through_manager(ctx, &team_dir, task_id, &agent_id, result).await {
                 Ok(done) => done,
                 Err(e) => {
                     // Return a tool output explaining why completion failed, rather than an error.
@@ -264,20 +298,28 @@ impl Tool for TeamTaskCompleteTool {
                 );
             }
         }
+        let mut content = format!(
+            "Task '{}' marked as completed by '{}'.\nTitle: {}",
+            task_id_out,
+            agent_id,
+            title.clone().unwrap_or_default()
+        );
+        if result_truncated {
+            content.push_str(&format!(
+                "\nNote: the result was longer than {MAX_TASK_RESULT_BYTES} bytes and was cut."
+            ));
+        }
         Ok(ToolOutput {
-            content: format!(
-                "Task '{}' marked as completed by '{}'.\nTitle: {}",
-                task_id_out,
-                agent_id,
-                title.clone().unwrap_or_default()
-            ),
+            content,
             metadata: Some(json!({
                 "team_name": team_name,
                 "task_id": task_id_out,
                 "title": title,
                 "completed_by": agent_id,
                 "completed_at": completed_at,
-                "completed": true
+                "completed": true,
+                "result_recorded": result.is_some(),
+                "result_truncated": result_truncated
             })),
         })
     }

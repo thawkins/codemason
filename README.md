@@ -669,7 +669,9 @@ per-project state lives in `.codemason/`. Start with
   scrollable panel of the queued entries where `Enter` moves the highlighted entry
   one step toward the front and `Del` removes it
 - **Teams & Swarms** — multi-agent coordination with named teammates, shared task lists,
-  mailbox messaging, and swarm decomposition for parallel work (`/swarm <prompt>`)
+  mailbox messaging, and swarm decomposition for parallel work (`/swarm <prompt>`);
+  dependent subtasks receive their predecessors' results, and a finished swarm's
+  results are combined into one answer
 
 - **Autopilot mode** — autonomous operation with configurable iteration limits and
   permission auto-approval (`/autopilot on [--max-tokens N] [--max-time N]`), or a

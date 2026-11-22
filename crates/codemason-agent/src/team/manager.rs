@@ -3524,6 +3524,22 @@ impl TeamManager {
         task_id: &str,
         agent_id: &str,
     ) -> Result<(Task, HookOutcome)> {
+        self.complete_task_with_result(task_id, agent_id, None)
+            .await
+    }
+
+    /// [`Self::complete_task`], additionally recording `result` on the task in
+    /// the same locked write. `None` leaves any stored result unchanged.
+    ///
+    /// # Errors
+    ///
+    /// The same refusals as [`Self::complete_task`].
+    pub async fn complete_task_with_result(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+        result: Option<&str>,
+    ) -> Result<(Task, HookOutcome)> {
         let is_lead = agent_id == "lead";
         let mut completed_out: Option<Task> = None;
         // The refusal is returned from inside the closure so the write lock is
@@ -3531,7 +3547,7 @@ impl TeamManager {
         // `tasks.json` byte-identical (FR-002, FR-004).
         self.try_apply_to_task_list(|list| {
             let task = crate::team::task::complete_task_in_list(list, task_id, agent_id, is_lead)?;
-            completed_out = Some(task);
+            completed_out = Some(crate::team::task::record_task_result(list, task, result));
             Ok(())
         })
         .inspect_err(|e| {
@@ -4042,6 +4058,7 @@ impl TeamManagerInterface for TeamManager {
         team_dir: &std::path::Path,
         task_id: &str,
         agent_id: &str,
+        result: Option<&str>,
     ) -> Result<(String, Option<String>, Option<String>, Option<String>)> {
         if team_dir != self.team_dir {
             anyhow::bail!(
@@ -4052,7 +4069,8 @@ impl TeamManagerInterface for TeamManager {
                 team_dir.display()
             );
         }
-        let (task, outcome) = Self::complete_task(self, task_id, agent_id).await?;
+        let (task, outcome) =
+            Self::complete_task_with_result(self, task_id, agent_id, result).await?;
         let feedback = match outcome {
             HookOutcome::Feedback(feedback) => Some(feedback),
             HookOutcome::Allow => None,

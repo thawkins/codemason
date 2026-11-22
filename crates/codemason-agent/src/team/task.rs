@@ -149,6 +149,11 @@ pub struct Task {
     /// completion idempotent.
     #[serde(default)]
     pub completed_by: Option<String>,
+    /// Short account of what the completing agent found or changed, given
+    /// with the completion. Dependent swarm subtasks receive it in their
+    /// prompts. Omitted from `tasks.json` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
 }
 
 impl Task {
@@ -191,6 +196,7 @@ impl Task {
             claimed_at: None,
             completed_at: None,
             completed_by: None,
+            result: None,
         }
     }
 
@@ -890,6 +896,19 @@ fn completion_ownership_refusal(task_id: &str, owner: &str, agent_id: &str) -> S
          Ask the lead to reassign it with `team_assign_task`, or claim it yourself once \
          it is released with `team_task_claim`"
     )
+}
+
+/// Store `result` on the just-completed `task` in `list` and return the
+/// updated copy. `None` leaves the task (and any earlier result) unchanged, so
+/// a completion without a result never erases one.
+pub fn record_task_result(list: &mut TaskList, mut task: Task, result: Option<&str>) -> Task {
+    if let Some(text) = result {
+        if let Some(stored) = list.get_mut(&task.id) {
+            stored.result = Some(text.to_owned());
+        }
+        task.result = Some(text.to_owned());
+    }
+    task
 }
 
 /// Apply a completion to `list` under the FR-001 ownership rule.
@@ -1884,6 +1903,28 @@ impl TaskStore {
     ///
     /// [`TeamManager::complete_task`]: crate::team::manager::TeamManager::complete_task
     pub async fn complete(&self, task_id: &str, agent_id: &str) -> Result<(Task, HookOutcome)> {
+        self.complete_with_result(task_id, agent_id, None).await
+    }
+
+    /// [`TaskStore::complete`], additionally recording `result` on the task in
+    /// the same locked write (see [`record_task_result`]).
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id` - ID of the task to complete.
+    /// * `agent_id` - the completing agent (`"lead"` is exempt from ownership).
+    /// * `result` - optional account of the work; `None` leaves any stored
+    ///   result unchanged.
+    ///
+    /// # Errors
+    ///
+    /// The same refusals as [`TaskStore::complete`].
+    pub async fn complete_with_result(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+        result: Option<&str>,
+    ) -> Result<(Task, HookOutcome)> {
         let lock = self.acquire_lock(true)?;
 
         let raw = if self.path.exists() {
@@ -1898,7 +1939,9 @@ impl TaskStore {
         // manager path does. `complete_task_in_list` still holds the lead to the
         // legal-transition model.
         let is_lead = agent_id == "lead";
-        let completed = match complete_task_in_list(&mut list, task_id, agent_id, is_lead) {
+        let completed = match complete_task_in_list(&mut list, task_id, agent_id, is_lead)
+            .map(|task| record_task_result(&mut list, task, result))
+        {
             Ok(task) => task,
             Err(e) => {
                 drop(lock);

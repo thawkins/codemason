@@ -329,6 +329,9 @@ pub trait TeamManagerInterface: Send + Sync {
     /// configured. The values cross the trait as plain data because the trait is
     /// defined in a module that must not depend on the team config types.
     ///
+    /// `result`, when given, is stored on the task in the same locked write
+    /// as the completion; `None` leaves any stored result unchanged.
+    ///
     /// The verdict is returned even though the completion has already been
     /// committed: FR-018 makes the task done and the verdict the caller's to
     /// deliver, so a tool reports it rather than pretending the completion
@@ -344,6 +347,7 @@ pub trait TeamManagerInterface: Send + Sync {
         _team_dir: &std::path::Path,
         _task_id: &str,
         _agent_id: &str,
+        _result: Option<&str>,
     ) -> anyhow::Result<(String, Option<String>, Option<String>, Option<String>)> {
         anyhow::bail!(
             "this team manager cannot complete a task; the runtime has no completion path"
@@ -377,16 +381,19 @@ pub(crate) async fn complete_task_through_manager(
     team_dir: &std::path::Path,
     task_id: &str,
     agent_id: &str,
+    result: Option<&str>,
 ) -> anyhow::Result<(String, Option<String>, Option<String>, Option<String>)> {
     if let Some(manager) = ctx.team_manager.as_ref() {
-        return manager.complete_task_in(team_dir, task_id, agent_id).await;
+        return manager
+            .complete_task_in(team_dir, task_id, agent_id, result)
+            .await;
     }
     tracing::debug!(
         task_id = %task_id,
         "no TeamManager in context; completing through the task store"
     );
     let (task, outcome) = crate::team::TaskStore::open(team_dir)?
-        .complete(task_id, agent_id)
+        .complete_with_result(task_id, agent_id, result)
         .await?;
     let feedback = match outcome {
         crate::team::HookOutcome::Feedback(feedback) => Some(feedback),
