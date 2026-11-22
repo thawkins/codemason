@@ -6,6 +6,7 @@
 
 - Added: an in-memory store index cache in `codemason-app-core`, prefetched at GUI startup for the Codex plugin, Claude plugin and Claude connector indexes; `--refresh` and the footer Refresh button re-fetch it, and marketplace add/remove refetches the affected index.
 - Added: material `badge`, `drawer_item_with_count` and `avatar_list_item` components in `codemason_gui::material`.
+- Added: an Addons group on the ribbon's Agent tab with Plugins (`/plugins claude`) and Connectors (`/connectors claude`) buttons, and their `extension` and `hub` icons in the bundled Material Symbols subset.
 
 ### Changed
 

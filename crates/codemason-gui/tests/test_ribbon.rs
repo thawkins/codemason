@@ -11,6 +11,7 @@ use codemason_app_core::log_channel::tui_log_channel;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
 use codemason_gui::dock::panel_command;
+use codemason_gui::icons::Icon;
 use codemason_gui::keys::{command_key_input, default_keymap};
 use codemason_gui::platform::menu::MenuAction;
 use codemason_gui::ribbon::{HOME_TAB, QUICK_ACCESS, RibbonAction, RibbonItem, TABS};
@@ -272,6 +273,39 @@ fn test_ribbon_agent_tab_has_provider_and_resume() {
     assert_eq!(
         last.action,
         RibbonAction::Menu(MenuAction::Slash("/resume"))
+    );
+}
+
+#[test]
+fn test_ribbon_agent_tab_has_addons_group() {
+    let agent = TABS
+        .iter()
+        .find(|tab| tab.label == "Agent")
+        .expect("Agent tab");
+    let addons = agent
+        .groups
+        .iter()
+        .find(|g| g.label == "Addons")
+        .expect("Addons group");
+    let items: Vec<(&str, Icon, RibbonAction)> = addons
+        .items
+        .iter()
+        .map(|i| (i.label, i.icon, i.action))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            (
+                "Plugins",
+                Icon::Plugins,
+                RibbonAction::Menu(MenuAction::Slash("/plugins claude"))
+            ),
+            (
+                "Connectors",
+                Icon::Connectors,
+                RibbonAction::Menu(MenuAction::Slash("/connectors claude"))
+            ),
+        ]
     );
 }
 
