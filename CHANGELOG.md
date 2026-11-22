@@ -18,6 +18,7 @@
 - Fixed: plugin `url` sources that carry a `path` now install that subdirectory, and a `ref` pins the checkout, in both the Claude and Codex stores (previously the whole repository at `HEAD`).
 - Fixed: the Claude connector catalogue follows the directory feed's `next_cursor` pages (all ~1200 connectors instead of the first 100), and a connector with only a UUID id and a display name that is not a valid id (`Health Data Avatar (HDA)`) is named by its slugified display name instead of being skipped.
 - Fixed: Claude marketplace `git-subdir` entries that name their repository in GitHub `owner/repo` shorthand (188 entries in `anthropics/claude-plugins-community`) are now installable instead of being skipped as malformed.
+- Changed: README.md opens with a CodeMason hero header (the `assets/branding` primary lockup, dark or light to match the reader's theme) and a GUI-first project description; the `ragent-tui` screenshots in `assets/screens/` are replaced by seven desktop GUI screenshots, and the ragent lineage moves to a short Origins section.
 - Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.
 
 ## [1.0.178] - 2026-11-21
