@@ -38,7 +38,8 @@ impl codemason_research::SessionObserver for TuiResearchObserver {
 
 /// One-shot LLM helper for the `/swarm` decomposition call: builds a client
 /// from the session's active provider, sends the system+user message pair, and
-/// collects the streaming `TextDelta` events into a single `String`.
+/// collects the streaming `TextDelta` events into a single `String`. A
+/// `StreamEvent::Error` fails the call; `StreamEvent::Finish` ends it.
 pub(crate) struct CodemasonCompleter {
     pub(crate) registry: Arc<codemason_agent::provider::ProviderRegistry>,
     pub(crate) storage: Arc<codemason_agent::storage::Storage>,
@@ -89,8 +90,23 @@ impl CodemasonCompleter {
         let mut stream = client.chat(request).await.context("starting LLM stream")?;
         let mut result = String::new();
         while let Some(event) = stream.next().await {
-            if let StreamEvent::TextDelta { text } = event {
-                result.push_str(&text);
+            match event {
+                StreamEvent::TextDelta { text } => result.push_str(&text),
+                StreamEvent::Error { message } => {
+                    anyhow::bail!("LLM stream error: {message}")
+                }
+                StreamEvent::Finish { .. } => break,
+                // Reasoning, tool-call, usage and rate-limit events carry no
+                // answer text for a one-shot completion.
+                StreamEvent::ReasoningStart
+                | StreamEvent::ReasoningDelta { .. }
+                | StreamEvent::ReasoningEnd
+                | StreamEvent::ReasoningSignature { .. }
+                | StreamEvent::ToolCallStart { .. }
+                | StreamEvent::ToolCallDelta { .. }
+                | StreamEvent::ToolCallEnd { .. }
+                | StreamEvent::Usage { .. }
+                | StreamEvent::RateLimit { .. } => {}
             }
         }
         Ok(result)
