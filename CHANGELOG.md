@@ -13,6 +13,7 @@
 
 - Changed: the GUI plugin browser is a wide three-pane Plugin Store dialog with a Codex | Claude switcher, and connectors open in a separate Connectors dialog with sign-in badges, requested scopes, credential name and MCP servers.
 - Changed: the store dialogs draw only the result rows in view, so large indexes no longer lag; the Codex | Claude switcher marks the selected store by highlight instead of a check mark.
+- Changed: the store dialogs' filter rail is 20% wider; the Categories and Marketplaces headings are 20% larger and drawn dark on light; the Marketplaces section is fixed at half the rail's height and each section scrolls on its own.
 
 ## [1.0.178] - 2026-11-21
 

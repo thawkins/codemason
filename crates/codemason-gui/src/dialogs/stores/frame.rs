@@ -46,7 +46,13 @@ pub const MIN_SIZE: Vec2 = Vec2::new(960.0, 600.0);
 pub const SIZE_FRACTION: f32 = 0.85;
 
 /// Width of the filter rail, in points.
-pub const RAIL_WIDTH: f32 = 180.0;
+pub const RAIL_WIDTH: f32 = 216.0;
+
+/// Text size of a rail section's heading (Label Small, 20% larger).
+pub const RAIL_HEADING_SIZE: f32 = text_size::SMALL * 1.2;
+
+/// Share of the rail's height the marketplace section takes.
+pub const MARKETPLACE_SHARE: f32 = 0.5;
 
 /// Width of the details pane, in points (less in a narrow dialog).
 pub const DETAILS_WIDTH: f32 = 300.0;
@@ -331,76 +337,114 @@ fn focus_outline(ui: &egui::Ui, palette: &Palette, rect: Rect) {
     );
 }
 
-/// The filter rail: the category and marketplace sections.
+/// The filter rail: the category section over the marketplace section,
+/// the marketplaces fixed at [`MARKETPLACE_SHARE`] of the height, each
+/// scrolling on its own.
 fn rail(ui: &mut egui::Ui, palette: &Palette, id: &str, snap: &StoreSnapshot) -> Option<Click> {
-    let mut click = None;
-    ScrollArea::vertical()
-        .id_salt((id, "store_rail"))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            if let Some(row) = filter_section(
-                ui,
-                palette,
-                CATEGORIES_LABEL,
-                &snap.categories,
-                snap.category_cursor,
-                snap.focus == Pane::Categories,
-            ) {
-                click = Some(Click::Category(row));
-            }
-            ui.add_space(GAP);
-            if let Some(row) = filter_section(
-                ui,
-                palette,
-                MARKETPLACES_LABEL,
-                &snap.marketplaces,
-                snap.marketplace_cursor,
-                snap.focus == Pane::Marketplaces,
-            ) {
-                click = Some(Click::Marketplace(row));
-            }
-        });
-    click
+    let full = ui.max_rect();
+    let split = full.height().mul_add(-MARKETPLACE_SHARE, full.max.y);
+    let top = Rect::from_min_max(full.min, egui::pos2(full.max.x, split));
+    let bottom = Rect::from_min_max(egui::pos2(full.min.x, split), full.max);
+    let categories = filter_section(
+        ui,
+        palette,
+        (id, "store_rail_categories"),
+        top,
+        CATEGORIES_LABEL,
+        &snap.categories,
+        snap.category_cursor,
+        snap.focus == Pane::Categories,
+    );
+    let marketplaces = filter_section(
+        ui,
+        palette,
+        (id, "store_rail_marketplaces"),
+        bottom,
+        MARKETPLACES_LABEL,
+        &snap.marketplaces,
+        snap.marketplace_cursor,
+        snap.focus == Pane::Marketplaces,
+    );
+    ui.advance_cursor_after_rect(full);
+    marketplaces
+        .map(Click::Marketplace)
+        .or(categories.map(Click::Category))
 }
 
-/// One rail section: its heading and a drawer item per row, as a list
-/// labelled `label`; returns the clicked row.
+/// One rail section drawn in `rect`: a reversed heading band over its own
+/// scroll area of drawer items, as a list labelled `label`; returns the
+/// clicked row.
+#[allow(clippy::too_many_arguments)] // The section's parts, passed down once.
 fn filter_section(
     ui: &mut egui::Ui,
     palette: &Palette,
+    salt: (&str, &str),
+    rect: Rect,
     label: &str,
     rows: &[FilterRow],
     cursor: usize,
     focused: bool,
 ) -> Option<usize> {
-    let inner = ui.scope(|ui| {
-        ui.add_space(space::XS);
-        ui.horizontal(|ui| {
-            ui.add_space(space::LG);
-            let heading = ui.label(
-                RichText::new(label)
-                    .size(text_size::SMALL)
-                    .color(rgb(palette.m3.on_surface_variant)),
-            );
-            plain_tooltip(heading, palette, PANES_TOOLTIP);
-        });
-        ui.add_space(space::XS);
+    let mut section = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    section.set_clip_rect(rect.intersect(ui.clip_rect()));
+    section.spacing_mut().item_spacing.y = 0.0;
+    let inner = section.scope(|ui| {
+        section_heading(ui, palette, label);
         let mut picked = None;
-        for (i, row) in rows.iter().enumerate() {
-            if drawer_item_with_count(ui, palette, &row.label, row.count, i == cursor).clicked() {
-                picked = Some(i);
-            }
-        }
+        ScrollArea::vertical()
+            .id_salt(salt)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add_space(space::XS);
+                for (i, row) in rows.iter().enumerate() {
+                    if drawer_item_with_count(ui, palette, &row.label, row.count, i == cursor)
+                        .clicked()
+                    {
+                        picked = Some(i);
+                    }
+                }
+            });
         picked
     });
     inner
         .response
         .widget_info(|| WidgetInfo::labeled(Role::List, true, label));
     if focused {
-        focus_outline(ui, palette, inner.response.rect);
+        focus_outline(ui, palette, rect);
     }
     inner.inner
+}
+
+/// A rail section's heading: `label` in reversed colours (the surface
+/// colour on an on-surface band) at [`RAIL_HEADING_SIZE`], full width.
+fn section_heading(ui: &mut egui::Ui, palette: &Palette, label: &str) {
+    let m3 = &palette.m3;
+    let height = space::SM.mul_add(2.0, RAIL_HEADING_SIZE);
+    let (band, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
+    ui.painter().rect_filled(
+        band,
+        CornerRadius {
+            nw: radius::MD,
+            ne: radius::MD,
+            sw: 0,
+            se: 0,
+        },
+        rgb(m3.on_surface),
+    );
+    ui.painter().text(
+        egui::pos2(band.min.x + space::LG, band.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(RAIL_HEADING_SIZE),
+        rgb(m3.surface),
+    );
+    plain_tooltip(response, palette, PANES_TOOLTIP);
 }
 
 /// The result list, or the status that takes its place.

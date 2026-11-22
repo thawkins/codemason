@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use codemason_app_core::app::{App, PluginStoreBrowser, StoreCacheKey, StorePane};
 use codemason_app_core::input_event::{Key, KeyInput};
-use codemason_gui::dialogs::stores::frame::dialog_size;
+use codemason_gui::dialogs::stores::frame::{RAIL_WIDTH, dialog_size};
 use codemason_gui::dialogs::stores::snapshot::StoreSnapshot;
 use codemason_gui::dialogs::stores::{
-    CATEGORIES_LABEL, DETAILS_LABEL, INSTALL, PLUGIN_STORE_TITLE, REFRESH, REFRESH_FAILED,
-    REFRESHING, RESULTS_LABEL, RETRY, UNINSTALL, show_plugin_store,
+    CATEGORIES_LABEL, DETAILS_LABEL, INSTALL, MARKETPLACES_LABEL, PLUGIN_STORE_TITLE, REFRESH,
+    REFRESH_FAILED, REFRESHING, RESULTS_LABEL, RETRY, UNINSTALL, show_plugin_store,
 };
 use codemason_gui::dialogs::{take_keys, take_slash_commands};
 use codemason_plugins::{
@@ -339,6 +339,50 @@ fn test_store_dialog_draws_only_rows_in_view_and_follows_the_highlight() {
     assert!(
         rows.iter().any(|row| list.contains(row.center())),
         "the highlighted row is scrolled into view: {rows:?} in {list:?}"
+    );
+    finish(rt, harness);
+}
+
+#[test]
+fn test_store_dialog_rail_splits_in_half_and_scrolls_each_section() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let entries: Vec<StoreEntry> = (0..60)
+        .map(|i| StoreEntry {
+            category: Some(format!("cat-{i:02}")),
+            ..entry(&format!("plugin-{i:02}"), "1.0.0", &[])
+        })
+        .collect();
+    let harness = rig(WIDE, app_with(&rt, entries));
+    let categories = harness
+        .get_by_role_and_label(Role::List, CATEGORIES_LABEL)
+        .rect();
+    let marketplaces = harness
+        .get_by_role_and_label(Role::List, MARKETPLACES_LABEL)
+        .rect();
+    assert!(
+        (categories.width() - RAIL_WIDTH).abs() < 1.0,
+        "rail width {} is {RAIL_WIDTH}",
+        categories.width()
+    );
+    assert!(
+        (marketplaces.min.y - categories.max.y).abs() < 1.0,
+        "marketplaces {marketplaces:?} start where categories {categories:?} end"
+    );
+    assert!(
+        (marketplaces.height() - categories.height()).abs() < 1.0,
+        "marketplaces take half the rail: {marketplaces:?} vs {categories:?}"
+    );
+    // Sixty categories overflow their half; the last is scrolled out of
+    // view rather than pushing the marketplaces down.
+    let first = harness.get_by_label("cat-00 (1)").rect();
+    assert!(
+        categories.contains(first.center()),
+        "{first:?} in {categories:?}"
+    );
+    let last = harness.query_by_label("cat-59 (1)").map(|node| node.rect());
+    assert!(
+        last.is_none_or(|rect| !categories.contains(rect.center())),
+        "the last category {last:?} scrolls inside {categories:?}"
     );
     finish(rt, harness);
 }
