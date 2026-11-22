@@ -845,22 +845,20 @@ impl App {
     /// one answer to the swarm's goal, on the runtime. The answer lands in
     /// `swarm_synthesis_result`, tagged with `team_name`, for
     /// [`App::poll_pending_swarm`] to show. The call goes through
-    /// [`codemason_agent::send_one_shot`], so a provider stream error is a
-    /// failure rather than an empty or partial answer. The job is kept in
+    /// `CodemasonCompleter`, the same path (and key resolution) as the
+    /// decomposition call, which fails on a provider stream error rather than
+    /// returning an empty or partial answer. The job is kept in
     /// `swarm_synthesis`, so cancelling the swarm aborts it.
     ///
     /// Returns `false` (and starts nothing) when no model is selected, the
     /// task list cannot be read, or there is no runtime to run the call on.
     fn spawn_swarm_synthesis(&mut self, team_name: &str) -> bool {
-        let Some(model_ref) = self
+        let Some((provider_id, model_id)) = self
             .session
             .selected_model
             .as_deref()
             .and_then(|s| s.split_once('/'))
-            .map(|(p, m)| codemason_agent::agent::ModelRef {
-                provider_id: p.to_string(),
-                model_id: m.to_string(),
-            })
+            .map(|(p, m)| (p.to_string(), m.to_string()))
         else {
             return false;
         };
@@ -877,21 +875,19 @@ impl App {
             .map(|s| s.prompt.clone())
             .unwrap_or_default();
         let user = team::build_synthesis_user_prompt(&goal, &tasks.tasks);
-        let registry = std::sync::Arc::clone(&self.provider_registry);
-        let storage = std::sync::Arc::clone(&self.storage);
+        let completer = crate::research_adapter::CodemasonCompleter {
+            registry: std::sync::Arc::clone(&self.provider_registry),
+            storage: std::sync::Arc::clone(&self.storage),
+            provider_id,
+            model_id,
+        };
         let slot = std::sync::Arc::clone(&self.session.swarm_synthesis_result);
         let tag = team_name.to_string();
         let handle = runtime.spawn(async move {
-            let outcome = codemason_agent::send_one_shot(
-                registry,
-                Some(storage),
-                model_ref,
-                Some(team::SYNTHESIS_SYSTEM_PROMPT.to_string()),
-                user,
-                None,
-            )
-            .await
-            .map_err(|e| e.to_string());
+            let outcome = completer
+                .complete(team::SYNTHESIS_SYSTEM_PROMPT, &user)
+                .await
+                .map_err(|e| e.to_string());
             if let Ok(mut guard) = slot.lock() {
                 *guard = Some((tag, outcome));
             }
