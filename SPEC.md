@@ -1,7 +1,7 @@
 <div style="page-break-after: always; text-align: center; padding-top: 15em;">
 
 <h1 style="font-size: 3em; margin-bottom: 0.2em;">codemason</h1>
-<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.180</p>
+<h2 style="font-size: 1.5em; font-weight: normal; color: #555; margin-top: 0;">Technical Specification</h2>        <p style="margin-top: 4em; font-size: 1.1em;">        <strong>Version:</strong> 1.0.181</p>
         <p style="font-size: 1.1em;">
           <strong>Date:</strong> 2026-11-13
       </p>
@@ -4213,7 +4213,7 @@ at the write boundary rather than silently forwarded.
 | `team_approve_plan` | Lead approve/reject plan |
 | `team_task_create` | Add task |
 | `team_task_claim` | Claim task |
-| `team_task_complete` | Complete task (owner or lead only) |
+| `team_task_complete` | Complete task (owner or lead only); optional `result` is stored and handed to dependent tasks |
 | `team_task_cancel` | Cancel a pending/in-progress task (lead only) |
 | `team_assign_task` | Lead assigns task |
 | `team_idle` | Signal idle |

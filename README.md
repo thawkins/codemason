@@ -118,7 +118,8 @@ per-project state lives in `.codemason/`. Start with
   and turn Auto-fix on)
 - **GitHub** (11) and **GitLab** (19) — issues, PRs/MRs, pipelines, jobs, and CI/CD
 - **Teams** (20) — the full team lifecycle, shared tasks (create, list, claim,
-  complete, assign and lead-only `team_task_cancel`), mailbox messaging, and
+  complete with an optional `result` handed to dependent tasks, assign and
+  lead-only `team_task_cancel`), mailbox messaging, and
   coordination surface. Team quality-gate hooks fire from the runtime, so a
   `TaskCompleted` hook's veto reaches the completing agent as a tool result
   (`hook_rejected` plus the hook's `feedback`) whichever path completed the
@@ -1081,7 +1082,7 @@ Key optimisations include:
 
 ## Project Status
 
-**v1.0.180** — The core architecture, tool system, GUI, HTTP server, memory system,
+**v1.0.181** — The core architecture, tool system, GUI, HTTP server, memory system,
 teams/swarm coordination, spec
 management, skills system, research system, plugin and connector systems, pluggable
 execution backends, ACP integration, the automation service, and multi-layered

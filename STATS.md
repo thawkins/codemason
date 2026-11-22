@@ -1,6 +1,34 @@
 # Project Statistics
 
-**Version:** 1.0.180
+**Version:** 1.0.181
+
+> **Git-fixture isolation and `/release` message (1.0.181).** No crate or tool is
+> added or removed, and no library code changes. Three `git()` test helpers
+> (`crates/codemason-agent/tests/test_autofix_add_tool.rs`,
+> `crates/codemason-tools-extended/tests/test_project_scaffold_remote.rs`,
+> `crates/codemason-tools-extended/tests/test_project_scaffold_gitlab_remote.rs`)
+> remove `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT` from the child environment so
+> the local bare-repository fixtures are readable when a harness exports
+> `safe.bareRepository=explicit`; that recovered nine previously failing tests
+> without changing any assertion. `/release` now composes a release message of at
+> most 256 characters from the changes being released when none is supplied. The
+> tree is unchanged at **2,268** crate files, **831,210** crate lines, **1,276**
+> crate test files and **16,322** crate tests (**2,292 / 840,087 / 1,286 /
+> 16,409** with the root package; `cargo nextest list --workspace` runs
+> **16,387**).
+
+> **Documentation pass on the 1.0.180 release tree.** No code changes: the
+> tree is the release commit `7fbb9b5`, re-measured and unchanged at **2,268**
+> crate files, **831,210** crate lines, **1,276** crate test files and
+> **16,322** crate tests (**2,292 / 840,087 / 1,286 / 16,409** with the root
+> package; `cargo nextest list --workspace` runs **16,387**). `cargo check
+> --workspace`, `cargo audit` (1,027 dependencies, no vulnerabilities) and
+> `cargo fmt --check` all exit 0. Two how-tos were brought up to the shipped
+> behaviour: `slashcommands/swarm.md` gains the dependency-result, synthesis and
+> `auto_claim_tasks`-off sections, and `tools/teams.md` gains
+> `team_task_complete`'s `result` argument. All **24** top-level, **89**
+> slash-command and **23** tool-category how-to PDFs were regenerated with
+> pandoc/xelatex at A4 (0 conversion failures).
 
 > **Compaction-summary pruning (1.0.180).** No crate is added. `/compact
 > prune [--all] [--dry-run]` deletes the compaction summaries a long-lived
@@ -535,7 +563,7 @@
 | Research output formats | 6 (`report`, `executive-summary`, `comparison-table`, `source-bibliography`, `imrad`, `newsletter`) |
 | Documentation | 24 top-level how-tos, 23 files in `docs/howtos/tools/` (22 per-category tool how-tos + `INDEX.md`, + generated PDFs), 89 files in `docs/howtos/slashcommands/` (88 command pages + `INDEX.md`, + generated PDFs) |
 | Authors | 1 |
-| Version | 1.0.180 |
+| Version | 1.0.181 |
 
 The registry stands at **152 tools across 21 families** at `1.0.171`: the
 `autofix_status` and `autofix_add` tools took it from 150 to 152 (`system` 2 -> 3,

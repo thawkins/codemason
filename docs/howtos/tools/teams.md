@@ -138,10 +138,17 @@ The same facts appear in the result metadata (`pending_plans`,
 | `depends_on` | array | no | `team_task_create` | Task IDs that must complete before this task can be claimed |
 | `task_id` | string | yes | `team_task_complete`, `team_assign_task` | Task identifier |
 | `to` | string | yes | `team_assign_task` | Teammate to assign to |
+| `result` | string | no | `team_task_complete` | Short account of what was found or changed (cut at 16 KiB), stored on the task and handed to dependent tasks |
 
 `team_task_claim` takes no extra arguments: the teammate claims the next
 available task from the shared list. `team_task_complete` takes
 `team_name` + `task_id` (not `summary`).
+
+**`result` is how a task hands its findings to the next one.** The text is
+stored on the task in `tasks.json`, and a task that depends on it receives it
+in a `Results from dependencies` section of its prompt when it is claimed or
+unblocked (up to 4 KiB per predecessor). Passing a `result` is optional, but a
+`depends_on` edge without one gives the dependent task no findings at all.
 
 **`team_task_complete` requires ownership.** A completion is accepted only from
 the task's assigned agent or the lead. A task assigned to another teammate is

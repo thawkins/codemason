@@ -39,6 +39,12 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        // A harness may export command-line-scope config, including
+        // `safe.bareRepository=explicit`, which refuses to read the local bare
+        // repositories these fixtures push to and inspect. Drop it so the test
+        // sees the same config on every machine.
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
         .output()
         .expect("git runs");
     assert!(

@@ -89,10 +89,17 @@ The cache is also invalidated automatically after agent file edits; manual
 
 ## Related
 
-- `Alt+C` - toggle the **Context pane**, the live breakdown of what the next
-  request sends to the model (the context window, each prompt partition with
-  its share, the total and the free headroom). It is a pane, not a
-  subcommand: `/context` manages the cache, `Alt+C` shows the result. See
-  `GUI-QUICKSTART.md` section 13a.
+- `Alt+C` - bring the **Context pane** to the front, or give the front back to
+  Sessions. It is a pane, not a subcommand: `/context` manages the cache,
+  `Alt+C` shows the result. The pane is a pinned tab beside **Sessions** that
+  cannot be closed, floated or moved, and it shows what the next request sends
+  to the model: a header with the share of the context window used and
+  `used / window`, one stacked bar with a coloured segment per partition, and
+  one row per partition (**History**, system prompt, Skills, Memory,
+  Instruction files, Built-in tools, MCP tools, Tool metadata) with its tokens
+  and share. A row opens on a click to list its items largest first, and the
+  history partition is costed as the request actually carries it, so the pane
+  can no longer report more tokens than the window. See `GUI-QUICKSTART.md`
+  section 13a.
 - `/undo` - remove the last turn pair from the conversation
 - `/reload` - reload configuration, agents, MCP, and skills

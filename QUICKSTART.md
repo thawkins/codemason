@@ -2173,7 +2173,7 @@ Type `/` in the input to open an autocomplete menu:
 | `/codeindex communities` | Run community detection and list communities |
 | `/codeindex godnodes [n]` | Show top-N most-connected symbols |
 | `/codeindex help` | Show code index help |
-| `/context refresh` \| `/context help` | Manage the prompt context cache (`refresh` recomputes file tree, git status and README); `Alt+C` toggles the live context-window panel |
+| `/context refresh` \| `/context help` | Manage the prompt context cache (`refresh` recomputes file tree, git status and README); `Alt+C` brings the pinned context-window tab to the front |
 | `/cron add \|remove\|enable\|disable\|list\|detail\|log\|help` | Schedule and manage recurring agent runs |
 | `/spec create <name> <title> [--from-research <name>]` | Create a new spec (SPEC.md + PLAN.md + TESTPLAN.md) |
 | `/spec specify <name> <feature> [--from-research <name>]` | Generate SPEC.md only (EARS spec with clarification markers) |

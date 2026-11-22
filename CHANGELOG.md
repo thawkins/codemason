@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [1.0.181] - 2026-11-22
+
+Git test fixtures isolate from inherited command-line config, the swarm, Context
+and teams how-tos were brought up to shipped behaviour with every how-to PDF
+regenerated, and `/release` composes a release message when none is supplied.
+
+### Fixed
+
+- Fixed: nine git-remote tests failed on a harness that exports command-line-scope config, because `GIT_CONFIG_PARAMETERS='safe.bareRepository=explicit'` refuses to read the local bare repositories the fixtures push to (`fatal: cannot use bare repository ...`). The `git()` helpers in `crates/codemason-agent/tests/test_autofix_add_tool.rs`, `crates/codemason-tools-extended/tests/test_project_scaffold_remote.rs` and `crates/codemason-tools-extended/tests/test_project_scaffold_gitlab_remote.rs` now remove `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` from the child environment (the latter two also pin `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to `/dev/null`), so each fixture sees the same config on every machine. Command-line scope outranks system, global and local config, so the two `GIT_CONFIG_*` reads were not enough on their own.
+
+### Changed
+
+- Changed: the `/release` skill composes the release message itself when the invocation supplies none, instead of committing the bare `Version: <new-version>` subject. It reads `git log <last-tag>..HEAD --oneline` (the tag from `git describe --tags --abbrev=0`, falling back to `git log -20 --oneline`) and the `## [Unreleased]` section of `CHANGELOG.md`, then summarises them into one line of at most 256 characters, dropping the least important items rather than truncating a word. A supplied message is still used verbatim. The skill also names the release message in its report step, which is how this entry was produced.
+
+### Documentation
+
+- Updated: `docs/howtos/slashcommands/swarm.md` documents what a swarm now does after decomposition - a `depends_on` subtask is held until its predecessors complete and is then spawned with a `Results from dependencies` section carrying up to 4 KiB of each predecessor's `team_task_complete` result; the swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its own teammate, so an idle teammate never takes a subtask with only its id; a finished swarm synthesises one `Swarm Result` answer from the goal and each task's status and result, ending with the status table alone when no model is selected and reporting `Swarm Error` / `Synthesis Failed` on a failed call, and cancelling aborts an in-flight synthesis.
+- Updated: `docs/howtos/tools/teams.md` documents `team_task_complete`'s optional `result` argument (cut at 16 KiB), that it is stored on the task in `tasks.json`, and that dependent tasks receive it in a `Results from dependencies` prompt section (up to 4 KiB per predecessor); its swarm walkthrough now describes the `auto_claim_tasks`-off pre-assignment and the synthesis step instead of teammates claiming tasks.
+- Updated: `docs/howtos/teams.md` and `docs/howtos/slashcommands/context.md` follow the shipped behaviour - the swarm walkthrough no longer says teammates claim tasks as they become available, and the Context pane reference describes the pinned tab, the stacked bar and the per-partition rows that open to list their items.
+- Regenerated: every how-to PDF through pandoc/xelatex at A4 - 24 pages in `docs/howtos/pdf/`, 89 in `docs/howtos/slashcommands/pdf/` and 23 in `docs/howtos/tools/pdf/`.
+
 ## [1.0.180] - 2026-11-22
 
 A redesigned Context pane, compaction-summary pruning, and swarm result handling.
