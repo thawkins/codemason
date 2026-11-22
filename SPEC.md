@@ -4412,16 +4412,27 @@ agent combines the outputs into a final answer.
 
 ### 15.3 Decomposition Format
 
-Swarm decomposition returns a JSON or Markdown list of subtasks:
+Swarm decomposition returns a JSON list of subtasks (`SwarmDecomposition`);
+`agent_type` and `model` are optional:
 
 ```json
 {
   "tasks": [
-    { "id": "1", "agent": "explore", "prompt": "Find all auth-related files" },
-    { "id": "2", "agent": "code-review", "prompt": "Review auth logic for issues" }
+    { "id": "s1", "title": "Find auth files", "description": "Find all auth-related files",
+      "depends_on": [], "agent_type": "explore" },
+    { "id": "s2", "title": "Review auth", "description": "Review auth logic for issues",
+      "depends_on": ["s1"] }
   ]
 }
 ```
+
+A teammate completes its task with `team_task_complete`, passing an optional
+`result` (a short account of what it found or changed, cut at 16 KiB). The
+result is stored on the task in `tasks.json`. When a blocked subtask is
+unblocked, its prompt is rebuilt with a "Results from dependencies" section
+holding each predecessor's result (up to 4 KiB each); a predecessor with no
+result is marked so the teammate inspects its changes directly. The
+completion report shows the first line of each task's result.
 
 ### 15.4 Swarm State
 

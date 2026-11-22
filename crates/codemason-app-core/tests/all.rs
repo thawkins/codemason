@@ -597,6 +597,8 @@ mod test_svg_attachments;
 mod test_swarm_more;
 #[path = "test_swarm_offload.rs"]
 mod test_swarm_offload;
+#[path = "test_swarm_result_handoff.rs"]
+mod test_swarm_result_handoff;
 #[path = "test_syntax_highlight.rs"]
 mod test_syntax_highlight;
 #[path = "test_tasks_panel.rs"]

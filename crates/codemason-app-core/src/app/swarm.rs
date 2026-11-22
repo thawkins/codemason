@@ -166,22 +166,9 @@ impl App {
                 MemberStatus::Spawning
             };
 
-            // Build a rich prompt with task context
-            let prompt = format!(
-                "## Swarm Task: {}\n\n\
-                **Task ID:** {}\n\
-                **Title:** {}\n\n\
-                {}\n\n\
-                You are part of a swarm team. Complete this specific task.\n\n\
-                IMPORTANT: Your VERY FIRST action must be a tool call. \
-                Call `team_read_messages` with team_name set to the team name from your context. \
-                Do NOT respond with text first - call the tool immediately.\n\n\
-                After reading messages, do the work described above using tool calls \
-                (glob, read, bash, etc.). \
-                When done, call `team_task_complete` to mark task \"{}\" as completed.\
-                Focus only on your assigned task - other teammates are handling other parts.",
-                subtask.title, subtask.id, subtask.title, subtask.description, subtask.id
-            );
+            // Dependent subtasks get this prompt replaced on unblock, once
+            // their predecessors' results exist (see `poll_swarm_unblock`).
+            let prompt = team::build_swarm_task_prompt(subtask, &[]);
 
             // Record member in config
             {
@@ -440,17 +427,13 @@ impl App {
             .filter_map(|m| m.name.strip_prefix("swarm-").map(|s| s.to_string()))
             .collect();
 
-        // Also check TaskStore for explicitly completed tasks
+        // Also check TaskStore for explicitly completed tasks. The list is kept
+        // so an unblocked member's prompt can carry its predecessors' results.
         let working_dir = self.swarm_working_dir();
-        let task_completed_ids: std::collections::HashSet<String> = self
-            .load_swarm_tasks(&team_name)
-            .map(|tl| {
-                tl.tasks
-                    .iter()
-                    .filter(|t| t.status == team::TaskStatus::Completed)
-                    .map(|t| t.id.clone())
-                    .collect()
-            })
+        let task_list = self.load_swarm_tasks(&team_name);
+        let task_completed_ids: std::collections::HashSet<String> = task_list
+            .as_ref()
+            .map(|tl| tl.completed_ids())
             .unwrap_or_default();
 
         let all_completed: std::collections::HashSet<String> = completed_task_ids
@@ -497,6 +480,10 @@ impl App {
 
         // Transition unblocked members from Blocked -> Spawning
         for (member_name, agent_id, task_id) in &unblocked {
+            let prompt = decomp_tasks
+                .iter()
+                .find(|t| t.id == *task_id)
+                .map(|subtask| team::swarm_prompt_with_results(subtask, task_list.as_ref()));
             // Update local state
             if let Some(m) = self
                 .session
@@ -505,8 +492,12 @@ impl App {
                 .find(|m| m.agent_id == *agent_id)
             {
                 m.status = MemberStatus::Spawning;
+                if let Some(prompt) = &prompt {
+                    m.spawn_prompt = Some(prompt.clone());
+                }
             }
-            // Update persisted config
+            // Update persisted config. The manager reads `spawn_prompt` when it
+            // spawns the member, so the predecessor results land in its prompt.
             if let Some(team_dir) = team::find_team_dir(&working_dir, &team_name) {
                 // A failed save leaves the persisted member stuck at Blocked
                 // while the in-memory copy moved on - surface it so the swarm
@@ -514,6 +505,9 @@ impl App {
                 if let Err(e) = team::TeamStore::update(&team_dir, |config| {
                     if let Some(m) = config.member_by_id_mut(agent_id) {
                         m.status = MemberStatus::Spawning;
+                        if let Some(prompt) = &prompt {
+                            m.spawn_prompt = Some(prompt.clone());
+                        }
                     }
                     Ok(())
                 }) {
@@ -758,18 +752,27 @@ impl App {
         // Include task table if we have tasks
         if total > 0 {
             if let Some(tl) = self.load_swarm_tasks(team_name) {
-                output.push_str("| ID | Title | Status |\n|----|-------|--------|\n");
+                output.push_str(
+                    "| ID | Title | Status | Result |\n|----|-------|--------|--------|\n",
+                );
                 for task in &tl.tasks {
                     let icon = match task.status {
                         team::TaskStatus::Completed => "[ok]",
                         team::TaskStatus::Cancelled => "[err]",
                         _ => "[warn]",
                     };
+                    // First line only: the full result stays in `tasks.json`.
+                    let result = task
+                        .result
+                        .as_deref()
+                        .and_then(|r| r.lines().find(|l| !l.trim().is_empty()))
+                        .unwrap_or("-");
                     output.push_str(&format!(
-                        "| {} | {} | {} |\n",
+                        "| {} | {} | {} | {} |\n",
                         task.id,
                         codemason_types::mdtable::cell(&task.title),
-                        icon
+                        icon,
+                        codemason_types::mdtable::cell(result)
                     ));
                 }
                 output.push('\n');

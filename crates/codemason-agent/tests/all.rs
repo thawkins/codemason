@@ -667,6 +667,8 @@ mod test_team_cancel;
 
 #[path = "test_team_task_cancel_tool.rs"]
 mod test_team_task_cancel_tool;
+#[path = "test_team_task_result.rs"]
+mod test_team_task_result;
 #[path = "test_team_task_store.rs"]
 mod test_team_task_store;
 

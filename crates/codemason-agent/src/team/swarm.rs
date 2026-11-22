@@ -180,3 +180,92 @@ fn remove_trailing_commas(s: &str) -> String {
     }
     result
 }
+
+// -- Teammate prompt ------------------------------------------------------------
+
+/// Largest share of one predecessor's result copied into a dependent
+/// subtask's prompt, in bytes. The full text stays in `tasks.json`.
+pub const MAX_PREDECESSOR_RESULT_BYTES: usize = 4 * 1024;
+
+/// Build the spawn prompt for the swarm teammate that works on `subtask`.
+///
+/// `predecessors` are the completed team tasks `subtask` depends on. Each one
+/// appears under "Results from dependencies" with its stored
+/// [`Task::result`](crate::team::Task::result), cut to
+/// [`MAX_PREDECESSOR_RESULT_BYTES`]; a predecessor that recorded no result is
+/// marked so the teammate inspects its changes directly. With no predecessors
+/// the section is left out.
+///
+/// The prompt also asks the teammate to pass a `result` to
+/// `team_task_complete`, so its own dependents receive it in turn.
+#[must_use]
+pub fn build_swarm_task_prompt(
+    subtask: &SwarmSubtask,
+    predecessors: &[&crate::team::Task],
+) -> String {
+    let mut prompt = format!(
+        "## Swarm Task: {title}\n\n\
+         **Task ID:** {id}\n\
+         **Title:** {title}\n\n\
+         {description}\n\n",
+        title = subtask.title,
+        id = subtask.id,
+        description = subtask.description,
+    );
+
+    if !predecessors.is_empty() {
+        prompt.push_str("## Results from dependencies\n\n");
+        for task in predecessors {
+            prompt.push_str(&format!("### {} - {}\n\n", task.id, task.title));
+            match task.result.as_deref() {
+                Some(result) if result.len() > MAX_PREDECESSOR_RESULT_BYTES => {
+                    let cut = result.floor_char_boundary(MAX_PREDECESSOR_RESULT_BYTES);
+                    prompt.push_str(&result[..cut]);
+                    prompt.push_str("\n\n(result cut; read the files it names for more)\n\n");
+                }
+                Some(result) => {
+                    prompt.push_str(result);
+                    prompt.push_str("\n\n");
+                }
+                None => prompt.push_str(
+                    "(no result recorded - inspect this task's file changes directly)\n\n",
+                ),
+            }
+        }
+    }
+
+    prompt.push_str(&format!(
+        "You are part of a swarm team. Complete this specific task.\n\n\
+         IMPORTANT: Your VERY FIRST action must be a tool call. \
+         Call `team_read_messages` with team_name set to the team name from your context. \
+         Do NOT respond with text first - call the tool immediately.\n\n\
+         After reading messages, do the work described above using tool calls \
+         (glob, read, bash, etc.). \
+         When done, call `team_task_complete` to mark task \"{id}\" as completed, and pass \
+         `result`: a short account of what you found or changed (files, findings, decisions). \
+         Tasks that depend on yours receive it. \
+         Focus only on your assigned task - other teammates are handling other parts.",
+        id = subtask.id,
+    ));
+    prompt
+}
+
+/// The spawn prompt for `subtask`, carrying the stored results of the tasks
+/// it depends on from `task_list` (see [`build_swarm_task_prompt`]). A
+/// dependency missing from the list, or no list at all, is left out.
+#[must_use]
+pub fn swarm_prompt_with_results(
+    subtask: &SwarmSubtask,
+    task_list: Option<&crate::team::TaskList>,
+) -> String {
+    let predecessors: Vec<&crate::team::Task> = task_list
+        .map(|tl| {
+            subtask
+                .depends_on
+                .iter()
+                .filter_map(|dep| tl.tasks.iter().find(|t| t.id == *dep))
+                .collect()
+        })
+        .unwrap_or_default();
+    build_swarm_task_prompt(subtask, &predecessors)
+}
