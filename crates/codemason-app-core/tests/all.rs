@@ -171,6 +171,8 @@ mod test_codeindex_toggle_safety;
 mod test_command_catalog;
 #[path = "test_compaction_result.rs"]
 mod test_compaction_result;
+#[path = "test_completer_stream_error.rs"]
+mod test_completer_stream_error;
 #[path = "test_compression_indicator.rs"]
 mod test_compression_indicator;
 #[path = "test_config_write.rs"]
