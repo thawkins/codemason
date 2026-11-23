@@ -2390,8 +2390,10 @@ binding runs; the warning names both ids). An action moved off its default
 chord no longer runs on that chord: the router drops the raw press that
 app-core would still map to it. Every other key is forwarded to
 `App::handle_key`; an Alt+character chord with no binding is ignored and never
-typed, `Esc` stops a running agent (the `Alt+X` binding was removed), and `Tab`
-completes the slash-command menu.
+typed, `Esc` stops a running agent only when typed into the focused prompt or
+chosen as the **Stop** command (`App::esc_stops_turn`; an Esc pressed elsewhere
+or sent by a dialog to close itself leaves the turn running; the `Alt+X`
+binding was removed), and `Tab` completes the slash-command menu.
 
 **Command palette.** `palette.show` opens `App::palette`
 (`crates/codemason-app-core/src/palette.rs`), which lists every catalog action

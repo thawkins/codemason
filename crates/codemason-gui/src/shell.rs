@@ -454,6 +454,8 @@ impl Shell {
         for command in clicks {
             match menu::menu_action(&command) {
                 Some(MenuAction::Key(key)) => {
+                    // A chosen command: its Esc is the Stop command.
+                    self.app.esc_stops_turn = true;
                     sources.runtime.block_on(self.app.handle_key(key));
                 }
                 Some(MenuAction::Slash(line)) => {
@@ -776,6 +778,8 @@ impl Shell {
         };
         match menu_action {
             MenuAction::Key(key) => {
+                // A chosen command: the ribbon's Stop is an Esc.
+                self.app.esc_stops_turn = true;
                 sources.runtime.block_on(self.app.handle_key(key));
             }
             MenuAction::Slash(line) => {
@@ -1205,6 +1209,11 @@ impl Shell {
         if !moves_focus {
             ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
         }
+        // Esc stops a running turn only when typed into the focused prompt.
+        // egui drops the focus on Esc before the prompt is prepared, so an
+        // Esc typed there arrives with the prompt focused last frame.
+        self.app.esc_stops_turn = matches!(focus, Focus::Prompt { .. })
+            || ctx.memory(|m| m.had_focus_last_frame(crate::panels::prompt::prompt_id()));
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
@@ -1251,6 +1260,8 @@ impl Shell {
         if keys.is_empty() && lines.is_empty() {
             return;
         }
+        // A dialog sends Esc to close itself, never to stop the turn.
+        self.app.esc_stops_turn = false;
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
         }
@@ -1346,6 +1357,7 @@ fn m3_dock_style(style: &mut DockStyle, palette: &Palette) {
 /// The Messages pane: the transcript, whose right-click opens the context
 /// menu.
 fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, palette: &Palette) {
+    dialogs::context_menu::install(ui.ctx());
     research_ui(ui, app, palette);
     if crate::panels::empty_state::is_empty_session(app) {
         crate::panels::empty_state::empty_state_ui(ui, app, palette);

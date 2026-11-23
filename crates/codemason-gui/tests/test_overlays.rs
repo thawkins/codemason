@@ -635,3 +635,120 @@ fn test_output_view_scrolled_up_keeps_its_offset_as_a_stored_session_grows() {
     assert_eq!(output_offsets(&harness).map(|(offset, _)| offset), scrolled);
     assert!(harness.query_by_label("stored line 80").is_none());
 }
+
+/// A rig with a running turn on `messages`; returns its cancel flag too.
+fn running_turn_rig(
+    messages: Vec<Message>,
+) -> (
+    tokio::runtime::Runtime,
+    UnboundedSender<Event>,
+    Harness<'static, Shell>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let turn_flag = std::sync::Arc::clone(&flag);
+    let (rt, events, harness) = rig(move |app| {
+        app.session.messages = messages;
+        app.session.is_processing = true;
+        app.session.cancel_flag = Some(turn_flag);
+    });
+    (rt, events, harness, flag)
+}
+
+/// Whether the running turn was asked to stop.
+fn cancelled(flag: &std::sync::atomic::AtomicBool) -> bool {
+    flag.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn test_esc_stops_the_turn_only_from_the_focused_prompt() {
+    let (_rt, _events, mut harness, flag) = running_turn_rig(Vec::new());
+    harness.run();
+    // Nothing focused: Esc is not aimed at the turn.
+    type_key(&mut harness, egui::Key::Escape, None);
+    assert!(!cancelled(&flag), "Esc outside the prompt stops nothing");
+
+    harness.get_by_label(PROMPT_LABEL).click();
+    harness.run();
+    type_key(&mut harness, egui::Key::Escape, None);
+    assert!(cancelled(&flag), "Esc in the focused prompt stops the turn");
+}
+
+#[test]
+fn test_ribbon_stop_stops_the_turn_without_prompt_focus() {
+    let (_rt, _events, mut harness, flag) = running_turn_rig(Vec::new());
+    harness.run();
+    // The quick access toolbar and the ribbon both carry Stop.
+    harness
+        .get_all_by_label("Stop")
+        .next()
+        .expect("a Stop command")
+        .click();
+    harness.run();
+    assert!(cancelled(&flag), "the Stop command stops the turn");
+}
+
+/// Drag the primary button across `from..to`, as a text selection.
+fn drag_select(harness: &mut Harness<'static, Shell>, from: egui::Pos2, to: egui::Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(from));
+    harness.run();
+    harness.input_mut().events.push(button(from, true));
+    harness.run();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(to));
+    harness.run();
+    harness.input_mut().events.push(button(to, false));
+    harness.run();
+}
+
+#[test]
+fn test_transcript_copy_keeps_the_selection_and_the_turn() {
+    let (_rt, _events, mut harness, flag) =
+        running_turn_rig(vec![Message::user_text(SESSION, "copy this notice")]);
+    harness.run();
+    let rect = harness.get_by_label("copy this notice").rect();
+    drag_select(
+        &mut harness,
+        egui::pos2(rect.left() + 1.0, rect.center().y),
+        egui::pos2(rect.right() - 1.0, rect.center().y),
+    );
+
+    harness.get_by_label("copy this notice").click_secondary();
+    harness.run();
+    let items = harness
+        .state()
+        .app()
+        .context_menu
+        .as_ref()
+        .map(|m| m.items.clone())
+        .expect("menu open");
+    assert!(items[0].1, "Copy is enabled with a transcript selection");
+
+    harness.get_by_label("Copy").click();
+    harness.step();
+    let copied: Vec<String> = harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|cmd| match cmd {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    harness.run();
+    assert_eq!(copied, ["copy this notice"]);
+    assert!(harness.state().app().context_menu.is_none());
+    assert!(!cancelled(&flag), "closing the menu must not stop the turn");
+}

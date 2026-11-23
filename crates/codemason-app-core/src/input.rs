@@ -821,7 +821,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // edit or submit it: the editor's result replaces it. Esc still stops a
     // running agent; the confirmation dialogs above keep their keys.
     if app.external_editor_open {
-        return (key.key == Key::Esc && app.session.is_processing)
+        return (key.key == Key::Esc && app.session.is_processing && app.esc_stops_turn)
             .then_some(InputAction::CancelAgent);
     }
 
@@ -1265,7 +1265,9 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         Key::PageUp => Some(InputAction::ScrollUp),
         Key::PageDown => Some(InputAction::ScrollDown),
         Key::Tab | Key::BackTab => Some(InputAction::SwitchAgent),
-        Key::Esc if app.session.is_processing => Some(InputAction::CancelAgent),
+        Key::Esc if app.session.is_processing && app.esc_stops_turn => {
+            Some(InputAction::CancelAgent)
+        }
         _ => None,
     }
 }

@@ -488,12 +488,12 @@ async fn test_transcript_menu_quotes_the_message_in_reply() {
         .context_menu
         .clone()
         .expect("menu open");
-    // A press on selectable text places an egui selection there, so Copy is
-    // enabled too (it copies nothing while that selection is empty).
+    // Nothing was selected before the right-click, so there is nothing to
+    // copy.
     assert_eq!(
         menu.items,
         [
-            (ContextAction::Copy, true),
+            (ContextAction::Copy, false),
             (ContextAction::CopyMarkdown, true),
             (ContextAction::QuoteReply, true),
         ]
