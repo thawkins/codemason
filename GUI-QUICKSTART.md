@@ -429,7 +429,8 @@ shortcuts do not act behind it. On macOS the menu bar also carries About, Quit
 - **Right-click** in the prompt — opens a context menu with **Copy**, **Cut**
   and **Paste**.
 - **Drag over transcript text** to select it, then `Ctrl+C` | `Cmd+C`.
-- **Right-click** a message — **Copy** (the selected text), **Copy as
+- **Right-click** a message — **Copy** (the text you selected before the
+  right-click; disabled when nothing is selected), **Copy as
   Markdown** (the whole message's source) or **Quote in reply** (puts the
   message in the prompt as a `>` quote).
 - **Code blocks** have **Copy**, **Wrap** and **Insert** buttons; Insert puts
@@ -836,7 +837,9 @@ See [`docs/howtos/slashcommands/plugins.md`](docs/howtos/slashcommands/plugins.m
 ## 8. Stopping the agent with the Escape key
 
 While codemason is actively streaming a response or running tools, press
-**`Escape`** to cancel the current operation.
+**`Escape`** in the focused prompt, or click **Stop** in the ribbon, to cancel
+the current operation. `Escape` pressed anywhere else (or used to close a menu
+or dialog) leaves the turn running.
 
 - The LLM stream stops immediately.
 - In-progress tool calls are abandoned.

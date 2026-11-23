@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed: a right-click **Copy** in the GUI transcript cancelled the running turn. The GUI closes its context menu by sending Esc. The menu's pane has no terminal area in the GUI, so `App::prune_stale_selection` dropped the menu as stale and the Esc fell through to `CancelAgent`. An Esc that finds a context menu open now only closes it (`crates/codemason-app-core/src/app/input_handler.rs`).
+- Fixed: right-click **Copy** on the GUI transcript copied nothing, because egui restarts its label selection on the right-click that opens the menu. A `TranscriptSelection` egui plugin keeps the last settled transcript selection, and the menu snapshots it when it opens. Copy is disabled when nothing was selected (`crates/codemason-gui/src/dialogs/context_menu.rs`).
+
+### Changed
+
+- Changed: in the GUI, Esc stops a running turn only when typed into the focused prompt (or chosen as the ribbon/toolbar **Stop** command). An Esc pressed elsewhere, or sent by a dialog to close itself, no longer cancels the turn. New `App::esc_stops_turn` flag, set by the GUI for each key it forwards and always `true` in the TUI.
+
 ## [1.0.181] - 2026-11-22
 
 Git test fixtures isolate from inherited command-line config, the swarm, Context
