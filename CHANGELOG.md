@@ -11,6 +11,30 @@
 
 - Changed: in the GUI, Esc stops a running turn only when typed into the focused prompt (or chosen as the ribbon/toolbar **Stop** command). An Esc pressed elsewhere, or sent by a dialog to close itself, no longer cancels the turn. New `App::esc_stops_turn` flag, set by the GUI for each key it forwards and always `true` in the TUI.
 
+## [1.0.182] - 2026-11-23
+
+The agent loop recovers from stalled turns, the project Properties dialog is
+drawn with Material components, an `MCP Servers` ribbon button opens server
+discovery, and `cookie` moves to a patched release.
+
+### Added
+
+- Added: an `MCP Servers` button at the end of the Agent tab's Addons ribbon group, running `/mcp discover` to open the MCP Server Discovery dialog. It carries a new `Icon::Mcp` (`dns`, U+E875) in the bundled Material Symbols subset, whose rebuild command in `crates/codemason-gui/assets/fonts/MaterialSymbols-LICENSE.txt` and `THIRD-PARTY-NOTICES.txt` gained that code point.
+
+### Changed
+
+- Changed: the project `Properties` dialog (project row context menu in the sessions panel) is drawn with the Material components like the provider and model dialogs - a `surface_container_high` dialog with its headline, Description/Backend/Model as outlined fields showing the values app-core holds (the focused one drawn focused), the open choice list as Material list items in place of the TUI's `> `/monospace grid and selectable labels, an `on_surface_variant` keyboard hint, and right-aligned Save (filled) and Cancel (text) buttons. Typing still reaches the fields through the key router and Save/Cancel still send Enter/Esc, so app-core's editing rules are unchanged.
+
+### Fixed
+
+- Fixed: the agent loop ended a turn on any reply that carried no tool call, so after tool work some models (deepseek-v4.1-flash on Ollama Cloud, mostly while following a multi-step skill) stopped on a short note announcing the next action and the user had to type "continue". `session::stall_guard` now detects a short reply whose last sentence announces the model's own next step, or a truncated reply, and feeds a continue message at most twice per turn; a detected stall shows a `Stall detected.` notice with the finish reason and token counts.
+- Fixed: a model's reply language is pinned by a `[Reply in <language>.]` reminder appended to the newest user message of each request (the request only, never the stored history), because DeepSeek drifted into Chinese in long sessions despite the system-prompt rule.
+- Fixed: the activity log now records a `model_step` event per model response carrying the finish reason, token counts, text and reasoning sizes, tool-call count and elapsed time, `/alog list` gained a `Model steps` column, and the schema version is 2.
+
+### Security
+
+- Updated: `cookie` 0.18.2 to 0.18.3 through `cookie_store` and `reqwest`, clearing RUSTSEC-2026-0594 (private cookie nonces could repeat in a process that forks; severity 6.5). `cargo audit` and `cargo deny check` are clean again.
+
 ## [1.0.181] - 2026-11-22
 
 Git test fixtures isolate from inherited command-line config, the swarm, Context

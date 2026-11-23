@@ -122,11 +122,13 @@ pub enum Icon {
     Plugins,
     /// The connector catalogue (`hub`).
     Connectors,
+    /// MCP servers (`dns`).
+    Mcp,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -173,6 +175,7 @@ impl Icon {
         Self::Resume,
         Self::Plugins,
         Self::Connectors,
+        Self::Mcp,
     ];
 
     /// The icon's character in the Material Symbols font.
@@ -225,6 +228,7 @@ impl Icon {
             Self::Resume => "\u{e037}",
             Self::Plugins => "\u{e87b}",
             Self::Connectors => "\u{e9f4}",
+            Self::Mcp => "\u{e875}",
         }
     }
 
@@ -278,6 +282,7 @@ impl Icon {
             Self::Resume => "|>",
             Self::Plugins => "plg",
             Self::Connectors => "con",
+            Self::Mcp => "mcp",
         }
     }
 }

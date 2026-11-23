@@ -32,7 +32,9 @@ use codemason_gui::dialogs::loop_setup::{LOOP_TITLE, START};
 use codemason_gui::dialogs::pickers::{
     APPLY_THEME, CANCEL_THEME, CONFIG_SAVES_TITLE, HISTORY_TITLE, SELECT_ENTRY, THEME_TITLE,
 };
-use codemason_gui::dialogs::properties::properties_title;
+use codemason_gui::dialogs::properties::{
+    BACKEND_LABEL, CANCEL, CHOICES_LABEL, DESCRIPTION_LABEL, MODEL_LABEL, SAVE, properties_title,
+};
 use codemason_gui::dialogs::question::{ANSWER_LABEL, QUESTION_TITLE, SELECT_OPTION};
 use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
 use codemason_gui::dialogs::{ActiveDialog, active};
@@ -41,7 +43,7 @@ use codemason_gui::panels::prompt::PROMPT_LABEL;
 use craft_keymap::Platform;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// The session the tests' questions belong to.
@@ -521,6 +523,122 @@ fn test_properties_dialog_typing_paste_and_esc() {
 
     type_key(&mut harness, egui::Key::Escape, None);
     assert!(harness.state().app().sidebar.properties.is_none());
+}
+
+#[test]
+fn test_properties_dialog_draws_material_fields_with_their_values() {
+    let (_rt, _events, mut harness) = rig(|app| app.sidebar.properties = Some(properties()));
+    harness.run();
+    assert!(dialog_shown(&harness, &properties_title("demo")));
+    assert_eq!(
+        harness.get_by_label(DESCRIPTION_LABEL).value().as_deref(),
+        Some(""),
+        "the description is an outlined field"
+    );
+    assert_eq!(
+        harness.get_by_label(BACKEND_LABEL).value().as_deref(),
+        Some("Global (local)")
+    );
+    assert_eq!(
+        harness.get_by_label(MODEL_LABEL).value().as_deref(),
+        Some("Global (none)")
+    );
+    // The description is the focused field, so typing reaches it.
+    type_key(&mut harness, egui::Key::X, Some("x"));
+    assert_eq!(
+        harness.get_by_label(DESCRIPTION_LABEL).value().as_deref(),
+        Some("x"),
+        "the focused field shows what was typed"
+    );
+}
+
+#[test]
+fn test_properties_dialog_choice_list_is_a_material_list_and_click_picks() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.sidebar.properties = Some(ProjectProperties {
+            backends: vec![
+                Choice {
+                    label: "Global (local)".to_string(),
+                    value: None,
+                    enabled: true,
+                },
+                Choice {
+                    label: "remote (not configured)".to_string(),
+                    value: Some("remote".to_string()),
+                    enabled: false,
+                },
+            ],
+            ..properties()
+        });
+    });
+    harness.run();
+    // No list until Space opens the focused (description) field's list; the
+    // backend's opens once Tab moves there.
+    assert!(
+        harness
+            .query_by_role_and_label(Role::List, CHOICES_LABEL)
+            .is_none()
+    );
+    type_key(&mut harness, egui::Key::Tab, None);
+    type_key(&mut harness, egui::Key::Space, Some(" "));
+    let list = harness
+        .query_by_role_and_label(Role::List, CHOICES_LABEL)
+        .expect("the open choice list is a Material list");
+    assert!(list.rect().width() > 0.0);
+
+    // The disabled entry is drawn but does nothing; the enabled one picks.
+    let disabled = harness.get_by_label("remote (not configured)");
+    assert!(
+        disabled.accesskit_node().is_disabled(),
+        "a backend that cannot run is greyed"
+    );
+    disabled.click();
+    harness.run();
+    assert_eq!(
+        harness
+            .state()
+            .app()
+            .sidebar
+            .properties
+            .as_ref()
+            .map(|p| p.backend),
+        Some(0),
+        "a disabled entry does not pick"
+    );
+    harness.get_by_label("Global (local)").click();
+    harness.run();
+    let app = harness.state().app();
+    assert_eq!(
+        app.sidebar.properties.as_ref().map(|p| p.backend),
+        Some(0),
+        "picking Global keeps the stored choice"
+    );
+}
+
+#[test]
+fn test_properties_dialog_material_buttons_save_and_cancel() {
+    let (_rt, _events, mut harness) = rig(|app| app.sidebar.properties = Some(properties()));
+    harness.run();
+    type_key(&mut harness, egui::Key::X, Some("x"));
+    harness.get_by_label(CANCEL).click();
+    harness.run();
+    assert!(
+        harness.state().app().sidebar.properties.is_none(),
+        "Cancel sends Esc"
+    );
+
+    let (_rt, _events, mut harness) = rig(|app| app.sidebar.properties = Some(properties()));
+    harness.run();
+    harness.get_by_label(SAVE).click();
+    harness.run();
+    // Save sends Enter, which is app-core's own save and close.
+    let app = harness.state().app();
+    assert!(app.sidebar.properties.is_none(), "Save sends Enter");
+    assert!(
+        app.status.starts_with("demo: backend "),
+        "the status names what was saved: {}",
+        app.status
+    );
 }
 
 /// A session menu over the multi-selection with one item.

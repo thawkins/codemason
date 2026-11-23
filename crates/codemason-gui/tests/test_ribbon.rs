@@ -305,6 +305,11 @@ fn test_ribbon_agent_tab_has_addons_group() {
                 Icon::Connectors,
                 RibbonAction::Menu(MenuAction::Slash("/connectors claude"))
             ),
+            (
+                "MCP Servers",
+                Icon::Mcp,
+                RibbonAction::Menu(MenuAction::Slash("/mcp discover"))
+            ),
         ]
     );
 }
