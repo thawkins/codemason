@@ -781,7 +781,25 @@ fn test_transcript_selection_survives_the_right_click() {
         egui::pos2(rect.left() + 1.0, rect.center().y),
         egui::pos2(rect.right() - 1.0, rect.center().y),
     );
-    harness.get_by_label("keep me selected").click_secondary();
+    // Hold the right button in the middle of the selection for a few
+    // frames, as a real right-click does, then release it.
+    let mid = rect.center();
+    let right = |pressed| egui::Event::PointerButton {
+        pos: mid,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(mid));
+    harness.run();
+    harness.input_mut().events.push(right(true));
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness.input_mut().events.push(right(false));
     harness.run();
     assert!(harness.state().app().context_menu.is_some(), "menu open");
 
