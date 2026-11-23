@@ -243,6 +243,7 @@ pub const TABS: &[RibbonTab] = &[
                 items: &[
                     slash("Plugins", Icon::Plugins, "/plugins claude"),
                     slash("Connectors", Icon::Connectors, "/connectors claude"),
+                    slash("MCP Servers", Icon::Mcp, "/mcp discover"),
                 ],
             },
         ],
