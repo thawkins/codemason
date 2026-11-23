@@ -752,3 +752,80 @@ fn test_transcript_copy_keeps_the_selection_and_the_turn() {
     assert!(harness.state().app().context_menu.is_none());
     assert!(!cancelled(&flag), "closing the menu must not stop the turn");
 }
+
+/// The CopyText commands of the last frame.
+fn copied_text(harness: &Harness<'static, Shell>) -> Vec<String> {
+    harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|cmd| match cmd {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A right-click does not clear the transcript selection: it is still
+/// egui's selection while the menu is open (an egui Copy copies it), and
+/// Esc then closes the menu and clears it.
+#[test]
+fn test_transcript_selection_survives_the_right_click() {
+    let (_rt, _events, mut harness, _flag) =
+        running_turn_rig(vec![Message::user_text(SESSION, "keep me selected")]);
+    harness.run();
+    let rect = harness.get_by_label("keep me selected").rect();
+    drag_select(
+        &mut harness,
+        egui::pos2(rect.left() + 1.0, rect.center().y),
+        egui::pos2(rect.right() - 1.0, rect.center().y),
+    );
+    harness.get_by_label("keep me selected").click_secondary();
+    harness.run();
+    assert!(harness.state().app().context_menu.is_some(), "menu open");
+
+    harness.input_mut().events.push(egui::Event::Copy);
+    harness.step();
+    assert_eq!(copied_text(&harness), ["keep me selected"]);
+    harness.run();
+
+    type_key(&mut harness, egui::Key::Escape, None);
+    assert!(harness.state().app().context_menu.is_none());
+    harness.input_mut().events.push(egui::Event::Copy);
+    harness.step();
+    assert!(
+        copied_text(&harness).is_empty(),
+        "Esc cleared the selection"
+    );
+}
+
+/// A right-click on the prompt keeps its selection shown: the editor keeps
+/// the focus (egui paints a selection only while focused) and the range
+/// while its context menu is open.
+#[test]
+fn test_prompt_selection_stays_shown_under_its_context_menu() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.session.input = "hello world".to_string();
+        app.session.input_cursor = 11;
+    });
+    harness.run();
+    harness.get_by_label(PROMPT_LABEL).click();
+    harness.run();
+    select_in_prompt(&mut harness, 6, 11);
+    harness.run();
+    harness.get_by_label(PROMPT_LABEL).click_secondary();
+    harness.run();
+    assert!(harness.state().app().context_menu.is_some(), "menu open");
+    assert!(
+        harness.ctx.memory(|m| m.has_focus(prompt_id())),
+        "the prompt keeps the focus under its menu"
+    );
+    let range = egui::TextEdit::load_state(&harness.ctx, prompt_id())
+        .and_then(|state| state.cursor.char_range())
+        .map(|range| {
+            let r = range.as_sorted_char_range();
+            r.start.0..r.end.0
+        });
+    assert_eq!(range, Some(6..11), "the selection is kept");
+}

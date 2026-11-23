@@ -1358,6 +1358,7 @@ fn m3_dock_style(style: &mut DockStyle, palette: &Palette) {
 /// menu.
 fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, palette: &Palette) {
     dialogs::context_menu::install(ui.ctx());
+    dialogs::context_menu::clear_selection_after_menu(ui.ctx(), app);
     research_ui(ui, app, palette);
     if crate::panels::empty_state::is_empty_session(app) {
         crate::panels::empty_state::empty_state_ui(ui, app, palette);
