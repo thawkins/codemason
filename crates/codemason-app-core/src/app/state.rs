@@ -3846,6 +3846,13 @@ pub struct App {
     /// Whether the prompt is out in an external editor (`/editor`); the
     /// prompt is locked meanwhile.
     pub external_editor_open: bool,
+    /// Whether an Esc that reaches the input handler may stop a running
+    /// turn. Always `true` in the TUI, where the prompt owns the keyboard.
+    /// The GUI sets it for each key it forwards: `true` only for an Esc
+    /// typed into the focused prompt or chosen as the Stop command, so an
+    /// Esc pressed elsewhere or sent by a dialog to close itself never
+    /// cancels the turn.
+    pub esc_stops_turn: bool,
     /// The session whose prompt is out in the external editor (`None` for a
     /// view with no session yet), so the result goes back to that session
     /// even when another one is focused by then.

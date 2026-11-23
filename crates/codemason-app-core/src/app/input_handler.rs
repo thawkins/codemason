@@ -1263,8 +1263,13 @@ impl App {
         let before_cursor = self.session.input_cursor;
         // Self-heal any selection/menu anchored on a panel that a recent
         // toggle dismissed (the render pass may have zeroed its area since
-        // the last input cycle).
-        self.prune_stale_selection();
+        // the last input cycle). An Esc that finds a menu open was aimed at
+        // closing it - the GUI closes its context menu by sending Esc, and it
+        // never sets the terminal pane areas - so it ends here instead of
+        // falling through to halting a running turn.
+        if self.prune_stale_selection() && key.key == Key::Esc {
+            return;
+        }
         // Dismiss the transient run-cost banner on any keypress (FR-012).
         // Non-character keys (Esc, arrows, Enter, modifier-only, etc.) are
         // consumed solely to clear the banner.  A plain printable character,

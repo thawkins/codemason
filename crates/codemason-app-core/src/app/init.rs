@@ -426,6 +426,7 @@ impl App {
             bg_tasks: Vec::new(),
             show_shortcuts: false,
             external_editor_open: false,
+            esc_stops_turn: true,
             external_editor_owner: None,
             shortcuts_panel_enabled: true,
             quit_armed: false,

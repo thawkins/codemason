@@ -10,12 +10,14 @@
 //! selection in it, and Copy as Markdown and Quote in reply when the menu
 //! opened over a message; app-core runs those two itself.
 //!
-//! Copy on the transcript copies egui's label selection. egui drops that
-//! selection at the end of a frame in which the pointer is pressed off the
-//! text, so the item asks egui to copy in the same frame it is chosen. egui
-//! also places an empty selection wherever a press lands on text and does
-//! not say whether a selection is empty, so a right-click on text enables
-//! Copy, which then copies nothing.
+//! Copy on the transcript copies the text the user last selected there.
+//! egui restarts its label selection on any press, the right-click that
+//! opens this menu included, so by the time the menu is open the selection
+//! is gone. [`TranscriptSelection`] keeps the last settled label selection
+//! (egui reports it with `OutputCommand::TextSelectionSettled`) until a
+//! primary press starts a new one. The menu snapshots that text when it
+//! opens (the press that picks Copy starts a new selection) and Copy copies
+//! the snapshot; with none kept, Copy is disabled.
 //!
 //! While it is open app-core owns the keyboard (the menu is an input lock):
 //! Up/Down move the highlight past disabled items and Esc closes, through
@@ -117,18 +119,95 @@ pub fn open_transcript(ctx: &egui::Context, app: &mut App, message: Option<Strin
         d.insert_temp(anchor_id(), at);
         d.remove::<egui::text_edit::TextEditState>(saved_state_id());
     });
-    let has_selection = ctx
-        .with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.has_selection())
-        .unwrap_or(false);
+    // Snapshot the text now: the press that picks Copy starts a new
+    // selection before its click lands.
+    let text = selected_transcript_text(ctx);
+    let has_selection = text.is_some();
+    ctx.data_mut(|d| d.insert_temp(copy_text_id(), text));
     app.open_transcript_context_menu(has_selection, message);
 }
 
-/// Copy the transcript's selected text now: hand egui a Copy event this
-/// frame, after the prompt has read its input, and close the menu.
+/// The egui memory slot of the transcript text Copy copies.
+fn copy_text_id() -> Id {
+    Id::unique("codemason_context_menu_copy_text")
+}
+
+/// Copy the transcript text snapshotted when the menu opened and close the
+/// menu.
 fn copy_transcript_selection(ctx: &egui::Context) {
-    ctx.memory_mut(|m| m.surrender_focus(prompt_id()));
-    ctx.input_mut(|input| input.events.push(egui::Event::Copy));
+    let text = ctx.data_mut(|d| d.remove_temp::<Option<String>>(copy_text_id()));
+    if let Some(text) = text.flatten() {
+        ctx.copy_text(text);
+    }
     send_key(ctx, plain(Key::Esc));
+}
+
+/// Keeps the transcript's last settled text selection across the
+/// right-click that opens the menu (see the module docs).
+///
+/// Registered after egui's `LabelSelectionState`, so its end-of-pass hook
+/// sees the selection egui reported in the same pass.
+#[derive(Debug, Default)]
+pub struct TranscriptSelection {
+    /// The selected text, until a primary press starts a new selection.
+    text: Option<String>,
+}
+
+impl egui::plugin::Plugin for TranscriptSelection {
+    fn debug_name(&self) -> &'static str {
+        "codemason_transcript_selection"
+    }
+
+    fn on_end_pass(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx();
+        if ctx.input(|i| i.pointer.primary_pressed()) {
+            self.text = None;
+        }
+        // The prompt's TextEdit reports its selection the same way; keep
+        // only a report made while a label (transcript) selection exists.
+        let label_selected = ctx
+            .with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.has_selection())
+            .unwrap_or(false);
+        if !label_selected {
+            return;
+        }
+        let settled = ctx.output(|o| {
+            o.commands.iter().rev().find_map(|cmd| match cmd {
+                egui::OutputCommand::TextSelectionSettled(text) => Some(text.clone()),
+                _ => None,
+            })
+        });
+        if let Some(text) = settled {
+            self.text = Some(text);
+        }
+    }
+}
+
+/// Register [`TranscriptSelection`] on `ctx`; later calls do nothing.
+///
+/// # Arguments
+///
+/// * `ctx` - the window's context.
+pub fn install(ctx: &egui::Context) {
+    if ctx.with_plugin::<TranscriptSelection, _>(|_| ()).is_none() {
+        ctx.add_plugin(TranscriptSelection::default());
+    }
+}
+
+/// The transcript text the user last selected, if any.
+///
+/// # Arguments
+///
+/// * `ctx` - the window's context.
+///
+/// # Returns
+///
+/// The kept selection, or `None` when there is none or the plugin is not
+/// installed.
+#[must_use]
+pub fn selected_transcript_text(ctx: &egui::Context) -> Option<String> {
+    ctx.with_plugin::<TranscriptSelection, _>(|s| s.text.clone())
+        .flatten()
 }
 
 /// Close the menu through app-core (Esc) and queue `action` for the next

@@ -3895,7 +3895,12 @@ impl App {
     /// state may still reference that pane - left stale, the next
     /// [`Self::assert_ui_invariants`] call would panic. This self-heals
     /// that state whenever input arrives.
-    pub(crate) fn prune_stale_selection(&mut self) {
+    ///
+    /// # Returns
+    ///
+    /// `true` when an open context menu was dropped, so the caller can treat
+    /// the key that triggered the prune as aimed at that menu.
+    pub(crate) fn prune_stale_selection(&mut self) -> bool {
         if let Some(sel) = &self.text_selection {
             if self.pane_area(sel.pane).area() == 0 {
                 self.text_selection = None;
@@ -3904,8 +3909,10 @@ impl App {
         if let Some(menu) = &self.context_menu {
             if self.pane_area(menu.pane).area() == 0 {
                 self.context_menu = None;
+                return true;
             }
         }
+        false
     }
 
     pub(crate) fn assert_ui_invariants(&self) {
