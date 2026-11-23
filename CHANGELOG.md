@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed: holding the right mouse button inside a transcript selection cut the selection off at the pointer, because egui's label selection treats a press of any button held on a label as a drag. `TranscriptSelection` now removes a right-press on the transcript (and its release) from egui's input in `Plugin::input_hook` and hands the click to the shell (`take_transcript_right_click`), so egui's selection never sees it. This replaces the save-and-restore of the selection around the press, which covered only the press frame (`crates/codemason-gui/src/dialogs/context_menu.rs`).
+
 - Fixed: a right-click in the GUI cleared the text selection before the context menu could act on it, which made select-then-right-click feel wrong. The transcript selection now stays highlighted while its menu is open: `TranscriptSelection` saves egui's label selection when a right-press arrives (`Plugin::input_hook`) and puts it back at the end of that frame, and `clear_selection_after_menu` clears it once the menu closes (an item, Esc or a click elsewhere). The prompt keeps its selection shown under its own Cut/Copy/Paste menu by staying interactive, because egui drops a non-interactive editor's focus and paints a selection only while focused (`crates/codemason-gui/src/dialogs/context_menu.rs`, `crates/codemason-gui/src/panels/prompt.rs`).
 
 - Fixed: a right-click **Copy** in the GUI transcript cancelled the running turn. The GUI closes its context menu by sending Esc. The menu's pane has no terminal area in the GUI, so `App::prune_stale_selection` dropped the menu as stale and the Esc fell through to `CancelAgent`. An Esc that finds a context menu open now only closes it (`crates/codemason-app-core/src/app/input_handler.rs`).

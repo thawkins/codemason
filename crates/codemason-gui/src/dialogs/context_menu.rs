@@ -12,11 +12,13 @@
 //!
 //! Copy on the transcript copies the text the user last selected there.
 //! egui restarts its label selection on any press, the right-click that
-//! opens this menu included. [`TranscriptSelection`] undoes that for a
-//! right-press: it saves egui's label selection when the press arrives and
-//! puts it back at the end of that frame, so the selection stays highlighted
-//! while the menu is open and clears only when an item is chosen, Esc is
-//! pressed or the user clicks elsewhere. It also keeps the last settled
+//! opens this menu included, and while a button is held on a label it moves
+//! the selection's end to the pointer. So [`TranscriptSelection`] takes a
+//! right-press on the transcript (and its release) out of egui's input
+//! before egui sees it, and reports the click to the shell
+//! ([`take_transcript_right_click`]) to open the menu: the selection stays
+//! highlighted, whole, while the menu is open, and clears only when an item
+//! is chosen, Esc is pressed or the user clicks elsewhere. It also keeps the last settled
 //! selection's text (egui reports it with `OutputCommand::TextSelectionSettled`)
 //! until a primary press starts a new one. The menu snapshots that text when
 //! it opens (the press that picks Copy starts a new selection) and Copy
@@ -155,23 +157,23 @@ fn copy_transcript_selection(ctx: &egui::Context) {
 pub struct TranscriptSelection {
     /// The selected text, until a primary press starts a new selection.
     text: Option<String>,
-    /// egui's label selection from before this frame's right-press, put
-    /// back at the end of the frame.
-    restore: Option<egui::text_selection::LabelSelectionState>,
+    /// Where the transcript was drawn last frame: its layer and visible
+    /// rect ([`set_transcript_area`]).
+    area: Option<(egui::LayerId, egui::Rect)>,
+    /// A right-press on the transcript was taken from egui and its release
+    /// has not come yet.
+    holding: bool,
+    /// A right-click on the transcript completed, for the shell to take.
+    clicked: bool,
 }
 
-/// Whether `raw` holds a press of the secondary (right) mouse button.
-fn has_secondary_press(raw: &egui::RawInput) -> bool {
-    raw.events.iter().any(|event| {
-        matches!(
-            event,
-            egui::Event::PointerButton {
-                button: egui::PointerButton::Secondary,
-                pressed: true,
-                ..
-            }
-        )
-    })
+impl TranscriptSelection {
+    /// Whether a press at `pos` lands on the transcript: inside its rect and
+    /// on its layer, not on a window or popup drawn over it.
+    fn over_transcript(&self, ctx: &egui::Context, pos: egui::Pos2) -> bool {
+        self.area
+            .is_some_and(|(layer, rect)| rect.contains(pos) && ctx.layer_id_at(pos) == Some(layer))
+    }
 }
 
 impl egui::plugin::Plugin for TranscriptSelection {
@@ -180,21 +182,34 @@ impl egui::plugin::Plugin for TranscriptSelection {
     }
 
     fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
-        // A right-press must not move the selection: save it before egui
-        // reacts to the press this frame.
-        if has_secondary_press(input) {
-            self.restore =
-                ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.clone());
-        }
+        // egui's label selection reacts to a press of any button, so a
+        // right-press on the transcript never reaches it.
+        input.events.retain(|event| {
+            let egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            if *pressed && self.over_transcript(ctx, *pos) {
+                self.holding = true;
+                return false;
+            }
+            if !*pressed && self.holding {
+                self.holding = false;
+                self.clicked = true;
+                ctx.request_repaint();
+                return false;
+            }
+            true
+        });
     }
 
     fn on_end_pass(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx();
-        if let Some(saved) = self.restore.take() {
-            ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| *s = saved);
-            // The restored selection is drawn from the next frame.
-            ctx.request_repaint();
-        }
         if ctx.input(|i| i.pointer.primary_pressed()) {
             self.text = None;
         }
@@ -216,6 +231,33 @@ impl egui::plugin::Plugin for TranscriptSelection {
             self.text = Some(text);
         }
     }
+}
+
+/// Record where the transcript was drawn this frame, for the next frame's
+/// right-press check.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `layer` - the transcript's layer.
+/// * `rect` - its visible rect.
+pub fn set_transcript_area(ctx: &egui::Context, layer: egui::LayerId, rect: egui::Rect) {
+    ctx.with_plugin::<TranscriptSelection, _>(|s| s.area = Some((layer, rect)));
+}
+
+/// Take the right-click on the transcript that [`TranscriptSelection`] kept
+/// from egui, if one completed.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+///
+/// # Returns
+///
+/// `true` once per completed right-click.
+pub fn take_transcript_right_click(ctx: &egui::Context) -> bool {
+    ctx.with_plugin::<TranscriptSelection, _>(|s| std::mem::take(&mut s.clicked))
+        .unwrap_or(false)
 }
 
 /// The egui memory slot of the pane whose menu was open last frame.

@@ -1365,10 +1365,19 @@ fn messages_body(ui: &mut egui::Ui, app: &mut App, messages: &mut MessagesView, 
     }
     let transcript = messages.show(ui, app, palette);
     messages.apply_actions(ui.ctx(), app);
+    dialogs::context_menu::set_transcript_area(
+        ui.ctx(),
+        transcript.layer_id,
+        transcript.interact_rect,
+    );
+    // A right-click on the transcript is kept from egui (it would move the
+    // text selection) and handed over here.
+    let kept_click = dialogs::context_menu::take_transcript_right_click(ui.ctx());
     let right_click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
     // `contains_pointer`, not `hovered`: the transcript's selectable text
     // sits on top of its hover-only node.
-    if right_click && transcript.contains_pointer() && !dialogs::locks_prompt(app) {
+    if (kept_click || (right_click && transcript.contains_pointer())) && !dialogs::locks_prompt(app)
+    {
         let message = messages.message_at_pointer().map(str::to_string);
         dialogs::context_menu::open_transcript(ui.ctx(), app, message);
     }
