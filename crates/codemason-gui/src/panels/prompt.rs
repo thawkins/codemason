@@ -553,7 +553,15 @@ fn keep_selection_through_right_click(
 pub fn prompt_ui(ui: &mut egui::Ui, app: &mut App) {
     let id = prompt_id();
     push_app_cursor(ui.ctx(), id, app.session.input_cursor);
-    let editable = !crate::dialogs::locks_prompt(app);
+    // The prompt's own context menu locks it (app-core takes every key),
+    // but the editor stays interactive under it: egui drops the focus of a
+    // non-interactive editor and paints a selection only while focused, so
+    // the selection the menu acts on would vanish the moment the menu opens.
+    let own_menu_open = app
+        .context_menu
+        .as_ref()
+        .is_some_and(|menu| menu.pane == SelectionPane::Input);
+    let editable = !crate::dialogs::locks_prompt(app) || own_menu_open;
     let queued = app.session.input_queue.len();
     // egui's editor moves its cursor on any button press and drag, so a
     // right-click would drop the selection the context menu's Cut and Copy

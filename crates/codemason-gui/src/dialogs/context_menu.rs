@@ -12,12 +12,16 @@
 //!
 //! Copy on the transcript copies the text the user last selected there.
 //! egui restarts its label selection on any press, the right-click that
-//! opens this menu included, so by the time the menu is open the selection
-//! is gone. [`TranscriptSelection`] keeps the last settled label selection
-//! (egui reports it with `OutputCommand::TextSelectionSettled`) until a
-//! primary press starts a new one. The menu snapshots that text when it
-//! opens (the press that picks Copy starts a new selection) and Copy copies
-//! the snapshot; with none kept, Copy is disabled.
+//! opens this menu included. [`TranscriptSelection`] undoes that for a
+//! right-press: it saves egui's label selection when the press arrives and
+//! puts it back at the end of that frame, so the selection stays highlighted
+//! while the menu is open and clears only when an item is chosen, Esc is
+//! pressed or the user clicks elsewhere. It also keeps the last settled
+//! selection's text (egui reports it with `OutputCommand::TextSelectionSettled`)
+//! until a primary press starts a new one. The menu snapshots that text when
+//! it opens (the press that picks Copy starts a new selection) and Copy
+//! copies the snapshot; with none kept, Copy is disabled. Once the menu
+//! closes, [`clear_selection_after_menu`] clears the selection.
 //!
 //! While it is open app-core owns the keyboard (the menu is an input lock):
 //! Up/Down move the highlight past disabled items and Esc closes, through
@@ -142,15 +146,32 @@ fn copy_transcript_selection(ctx: &egui::Context) {
     send_key(ctx, plain(Key::Esc));
 }
 
-/// Keeps the transcript's last settled text selection across the
-/// right-click that opens the menu (see the module docs).
+/// Keeps the transcript's text selection across the right-click that opens
+/// the menu (see the module docs).
 ///
 /// Registered after egui's `LabelSelectionState`, so its end-of-pass hook
-/// sees the selection egui reported in the same pass.
+/// runs after egui's and sees the selection egui reported in the same pass.
 #[derive(Debug, Default)]
 pub struct TranscriptSelection {
     /// The selected text, until a primary press starts a new selection.
     text: Option<String>,
+    /// egui's label selection from before this frame's right-press, put
+    /// back at the end of the frame.
+    restore: Option<egui::text_selection::LabelSelectionState>,
+}
+
+/// Whether `raw` holds a press of the secondary (right) mouse button.
+fn has_secondary_press(raw: &egui::RawInput) -> bool {
+    raw.events.iter().any(|event| {
+        matches!(
+            event,
+            egui::Event::PointerButton {
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                ..
+            }
+        )
+    })
 }
 
 impl egui::plugin::Plugin for TranscriptSelection {
@@ -158,8 +179,22 @@ impl egui::plugin::Plugin for TranscriptSelection {
         "codemason_transcript_selection"
     }
 
+    fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        // A right-press must not move the selection: save it before egui
+        // reacts to the press this frame.
+        if has_secondary_press(input) {
+            self.restore =
+                ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.clone());
+        }
+    }
+
     fn on_end_pass(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx();
+        if let Some(saved) = self.restore.take() {
+            ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| *s = saved);
+            // The restored selection is drawn from the next frame.
+            ctx.request_repaint();
+        }
         if ctx.input(|i| i.pointer.primary_pressed()) {
             self.text = None;
         }
@@ -180,6 +215,40 @@ impl egui::plugin::Plugin for TranscriptSelection {
         if let Some(text) = settled {
             self.text = Some(text);
         }
+    }
+}
+
+/// The egui memory slot of the pane whose menu was open last frame.
+fn open_pane_id() -> Id {
+    Id::unique("codemason_context_menu_open_pane")
+}
+
+/// Clear the transcript selection once its menu has closed, by an item, Esc
+/// or a click elsewhere: the selection outlives the right-click (see
+/// [`TranscriptSelection`]) only until the menu is done with it. Esc reaches
+/// app-core, not egui, while the menu is open, so egui never clears it on
+/// its own.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose `context_menu` is watched.
+pub fn clear_selection_after_menu(ctx: &egui::Context, app: &App) {
+    let open = app.context_menu.as_ref().map(|menu| menu.pane);
+    let was_open = ctx.data_mut(|d| {
+        let was = d.get_temp::<SelectionPane>(open_pane_id());
+        match open {
+            Some(pane) => {
+                d.insert_temp(open_pane_id(), pane);
+            }
+            None => {
+                d.remove::<SelectionPane>(open_pane_id());
+            }
+        }
+        was
+    });
+    if open.is_none() && was_open == Some(SelectionPane::Messages) {
+        ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|s| s.clear_selection());
     }
 }
 
