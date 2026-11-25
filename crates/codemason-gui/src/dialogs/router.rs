@@ -54,7 +54,7 @@ const WIDTH: f32 = 560.0;
 /// Tallest the model list grows before it scrolls, in points.
 const LIST_HEIGHT: f32 = 240.0;
 
-/// Width of the outline marking the keyboard-highlighted chip or row.
+/// Width of the outline marking the keyboard-highlighted chip.
 const HIGHLIGHT_WIDTH: f32 = 2.0;
 
 /// Corner radius of a chip, which the highlight outline follows.
@@ -70,11 +70,8 @@ fn last_highlight_id() -> egui::Id {
     egui::Id::unique("codemason_router_last_highlight")
 }
 
-/// Outline `rect` in `secondary`: the keyboard highlight.
-///
-/// The list's selected fill (`secondary_container`) can match the dialog
-/// surface (`surface_container_high`), so the highlight is an outline,
-/// which reads on any theme.
+/// Outline `rect` in `secondary`: the keyboard highlight on a chip, which
+/// has no highlighted state of its own.
 fn outline(ui: &egui::Ui, palette: &Palette, rect: egui::Rect, radius: u8) {
     ui.painter().rect_stroke(
         rect,
@@ -278,7 +275,7 @@ fn providers_section(
 
 /// One model row: the list item (model, with its provider as supporting
 /// text) and its move up, move down and remove buttons. The selected row
-/// is outlined, and scrolled into view when `moved`.
+/// is scrolled into view when `moved`.
 #[allow(clippy::too_many_arguments)] // one row's data, each used once
 fn model_row(
     ui: &mut egui::Ui,
@@ -334,11 +331,8 @@ fn model_row(
             None,
             selected,
         );
-        if selected {
-            outline(ui, palette, item.rect, crate::metrics::radius::SM);
-            if moved {
-                item.scroll_to_me(None);
-            }
+        if selected && moved {
+            item.scroll_to_me(None);
         }
         if item.clicked() && action.is_none() {
             action = Some(Action::at(Focus::Model(index), None));

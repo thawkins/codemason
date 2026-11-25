@@ -590,8 +590,10 @@ impl ThemeTokens {
     /// from the other tokens: `accent` is `primary`, `text.muted` is
     /// `secondary`, `markdown.link` is `tertiary`, `state.error` is `error`,
     /// the `bg` ladder gives the surface containers and the borders give the
-    /// outlines. Containers are their colour mixed 20% into `bg.base`, and
-    /// content on a solid fill is white or black, whichever contrasts more.
+    /// outlines. Containers are their colour mixed 20% into `bg.base`, except
+    /// `secondary_container`, the accent mixed 20% into `bg.raised2`, so a
+    /// selected row stands apart from `surface_container_high`. Content
+    /// on a solid fill is white or black, whichever contrasts more.
     /// The inverse surface is `text.base` with `bg.base` on it, and its
     /// action colour is the accent mixed into `bg.base`, as much of it as
     /// still reads at [`AA_CONTRAST`] on the inverse surface.
@@ -609,7 +611,7 @@ impl ThemeTokens {
             on_primary_container: self.text.base,
             secondary: self.text.muted,
             on_secondary: base,
-            secondary_container: self.bg.raised2,
+            secondary_container: mix(self.bg.raised2, self.accent, 0.2),
             on_secondary_container: self.text.base,
             tertiary: self.markdown.link,
             on_tertiary: on_colour(self.markdown.link),

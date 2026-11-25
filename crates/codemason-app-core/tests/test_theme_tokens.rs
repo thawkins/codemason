@@ -251,6 +251,25 @@ fn test_document_themes_carry_their_own_m3_roles() {
     }
 }
 
+/// A selected list row (`secondary_container`) must not share its colour with
+/// the dialog surface it sits on (`surface_container_high`), or the selection
+/// is invisible in a Material dialog.
+#[test]
+fn test_secondary_container_differs_from_dialog_surface() {
+    let themes = ThemeCatalog::builtin();
+    for name in themes.names() {
+        let roles = themes.get(name).expect("listed theme").roles();
+        assert_ne!(
+            roles.secondary_container, roles.surface_container_high,
+            "{name}"
+        );
+        assert_ne!(
+            roles.secondary_container, roles.surface_container_highest,
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn test_roles_are_derived_for_themes_without_an_m3_block() {
     let theme = ThemeCatalog::builtin().get(LIGHT_THEME).expect("built-in");
