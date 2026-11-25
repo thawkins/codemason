@@ -83,7 +83,7 @@ for it):
   transcript, Stop and Resume.
 - A ribbon carries the commands. Its tabs are File (open a project, a new
   project folder, Quit), Home (sessions, undo and redo, copy, stop, compact),
-  Insert (attach images, templates), Agent (provider, model, agent, loop, resume), View (the Log,
+  Insert (attach images, templates), Agent (provider, model, agent, loop, swarm, resume), View (the Log,
   Profile, Tasks and Memory panels, theme), Review (cost, stats, doctor) and
   Help (About). Every button runs a command codemason already has
   and is labelled with its name. The Log, Profile, Tasks and Memory buttons

@@ -434,6 +434,7 @@ impl Shell {
         let modal = dialogs::locks_prompt(&self.app)
             || self.close.is_asking()
             || dialogs::about::is_open(ctx)
+            || dialogs::swarm::is_open(ctx)
             || dialogs::diff_view::is_open(ctx);
         let Some((native, layout)) = self.native_menu.as_mut() else {
             return;
@@ -462,6 +463,7 @@ impl Shell {
                     run_slash_keeping_draft(&mut self.app, &sources.runtime, line);
                 }
                 Some(MenuAction::About) => dialogs::about::open(ctx),
+                Some(MenuAction::Swarm) => dialogs::swarm::open(ctx),
                 None => tracing::debug!(?command, "menu command without an action"),
             }
             ctx.request_repaint();
@@ -581,6 +583,12 @@ impl Shell {
         dialogs::image_view::show(ui.ctx(), &palette);
         dialogs::diff_view::show(ui.ctx(), &mut self.app, &palette);
         dialogs::about::show(ui.ctx(), &palette);
+        if let Some(line) = dialogs::swarm::show(ui.ctx(), &palette) {
+            match self.sources.as_ref() {
+                Some(sources) => run_slash_keeping_draft(&mut self.app, &sources.runtime, &line),
+                None => tracing::debug!("swarm prompt not run: no runtime"),
+            }
+        }
         self.close.show(ui.ctx(), &mut self.app);
         if matches!(self.frame, craft_window::policy::Frame::Integrated(_)) {
             crate::title_bar::resize_edges(ui.ctx());
@@ -770,6 +778,10 @@ impl Shell {
                 dialogs::about::open(ctx);
                 return;
             }
+            RibbonAction::Menu(MenuAction::Swarm) => {
+                dialogs::swarm::open(ctx);
+                return;
+            }
             RibbonAction::Menu(menu_action) => Some(menu_action),
         };
         let (Some(menu_action), Some(sources)) = (key, self.sources.as_ref()) else {
@@ -787,6 +799,7 @@ impl Shell {
             }
             // Opened above, before the runtime is needed.
             MenuAction::About => dialogs::about::open(ctx),
+            MenuAction::Swarm => dialogs::swarm::open(ctx),
         }
         ctx.request_repaint();
     }
@@ -1070,10 +1083,11 @@ impl Shell {
         clipboard::attach_pasted_images(ui.ctx(), &mut self.app);
         let focus = self.prompt.prepare(ui.ctx(), &mut self.app);
         dialogs::prepare(ui.ctx(), &mut self.app);
-        // While the quit confirmation, the About dialog or the diff overlay
+        // While the quit confirmation, the About or Swarm dialog or the diff overlay
         // is up, keys stay with it (Esc closes the dialog, not the turn).
         if !self.close.is_asking()
             && !dialogs::about::is_open(ui.ctx())
+            && !dialogs::swarm::is_open(ui.ctx())
             && !dialogs::diff_view::is_open(ui.ctx())
         {
             self.route_keys(ui.ctx(), focus);

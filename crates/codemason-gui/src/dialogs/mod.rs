@@ -58,6 +58,7 @@ pub mod router;
 pub mod session_menu;
 pub mod shortcuts;
 pub mod stores;
+pub mod swarm;
 pub mod theme_editor;
 pub mod which_key;
 

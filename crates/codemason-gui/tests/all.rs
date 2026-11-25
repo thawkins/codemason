@@ -309,6 +309,8 @@ mod test_sessions_sidebar_gui;
 mod test_setup_selector_scroll_gui;
 #[path = "test_slash_commands_gui.rs"]
 mod test_slash_commands_gui;
+#[path = "test_swarm_gui.rs"]
+mod test_swarm_gui;
 #[path = "test_tasks_panel_gui.rs"]
 mod test_tasks_panel_gui;
 #[path = "test_teams_tui_gui.rs"]
