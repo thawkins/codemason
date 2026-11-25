@@ -847,7 +847,8 @@ Use `team_spawn` with a role-specific prompt:
 ### Swarms
 
 `/swarm <goal>` splits a goal into subtasks and runs one teammate per subtask
-(`/swarm status`, `/swarm cancel`, `/swarm help`).
+(`/swarm status`, `/swarm cancel`, `/swarm help`). In the GUI, **Agent > Swarm**
+asks for the goal in a dialog and runs `/swarm <goal>` on **Ok**.
 
 - A teammate finishes with `team_task_complete` and an optional `result`; a
   subtask that depends on it starts with that result in its prompt.
