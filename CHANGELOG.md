@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Changed: the GUI's Model Router setup (`/provider` -> Model Router) is now a Material dialog instead of the terminal-style text lines. Providers are filter chips that toggle cluster membership; the four tiers are segmented buttons labelled with their model counts; the active tier's models are list items in fallback order with move up, move down and remove buttons; an "Add from <provider>" chip opens the model picker for the active tier; Save and Cancel are dialog actions. Clicks drive the same app-core key handling, so the keyboard shortcuts are unchanged. The keyboard highlight is an outline, because the list's selected fill matches the dialog surface in the current theme. The router save confirmation is a Material dialog too (`crates/codemason-gui/src/dialogs/router.rs`, `crates/codemason-gui/src/dialogs/confirm.rs`).
 - Changed: in the GUI, Esc stops a running turn only when typed into the focused prompt (or chosen as the ribbon/toolbar **Stop** command). An Esc pressed elsewhere, or sent by a dialog to close itself, no longer cancels the turn. New `App::esc_stops_turn` flag, set by the GUI for each key it forwards and always `true` in the TUI.
 
 ## [1.0.182] - 2026-11-23
