@@ -79,8 +79,8 @@ fn test_ribbon_commands_are_ones_the_window_has() {
                     item.label
                 );
             }
-            RibbonAction::Menu(MenuAction::Key(_) | MenuAction::About) | RibbonAction::Files(_) => {
-            }
+            RibbonAction::Menu(MenuAction::Key(_) | MenuAction::About | MenuAction::Swarm)
+            | RibbonAction::Files(_) => {}
         }
     }
     assert_eq!(TABS[HOME_TAB].label, "Home");

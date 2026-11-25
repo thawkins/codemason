@@ -47,6 +47,8 @@ pub enum MenuAction {
     Slash(&'static str),
     /// Open the About dialog ([`crate::dialogs::about`]).
     About,
+    /// Open the Swarm prompt dialog ([`crate::dialogs::swarm`]).
+    Swarm,
 }
 
 /// The app's menus, before the platform layout: About, and a View menu with

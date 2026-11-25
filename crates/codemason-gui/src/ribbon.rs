@@ -235,6 +235,11 @@ pub const TABS: &[RibbonTab] = &[
                 label: "Run",
                 items: &[
                     slash("Loop", Icon::Loop, "/loop"),
+                    RibbonItem {
+                        label: "Swarm",
+                        icon: Icon::Agent,
+                        action: RibbonAction::Menu(MenuAction::Swarm),
+                    },
                     slash("Resume", Icon::Resume, "/resume"),
                 ],
             },
