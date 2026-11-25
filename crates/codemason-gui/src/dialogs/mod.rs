@@ -54,6 +54,7 @@ pub mod progress;
 pub mod properties;
 pub mod provider;
 pub mod question;
+pub mod router;
 pub mod session_menu;
 pub mod shortcuts;
 pub mod stores;
@@ -98,6 +99,9 @@ pub enum ActiveDialog {
     /// The model lists of the provider setup flow
     /// (`ProviderSetupStep::SelectModel` and `SelectRouterModel`).
     ModelPicker,
+    /// The Model Router setup of the provider setup flow
+    /// (`ProviderSetupStep::SetupRouter`).
+    Router,
     /// The `/mcp discover` dialog (`App::mcp_discover`).
     McpDiscover,
     /// The `/plugins list` dialog (`App::plugins_list`).
@@ -206,6 +210,7 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
             ProviderSetupStep::SelectModel { .. } | ProviderSetupStep::SelectRouterModel { .. } => {
                 ActiveDialog::ModelPicker
             }
+            ProviderSetupStep::SetupRouter { .. } => ActiveDialog::Router,
             _ => ActiveDialog::Provider,
         });
     }
@@ -346,6 +351,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         Some(ActiveDialog::Shortcuts) => shortcuts::show(ctx, app),
         Some(ActiveDialog::Provider) => provider::show(ctx, app),
         Some(ActiveDialog::ModelPicker) => model_picker::show(ctx, app),
+        Some(ActiveDialog::Router) => router::show(ctx, app),
         Some(ActiveDialog::McpDiscover) => lists::show_mcp_discover(ctx, app),
         Some(ActiveDialog::PluginsList) => lists::show_plugins_list(ctx, app),
         Some(ActiveDialog::LoopSetup) => loop_setup::show(ctx, app),
@@ -397,6 +403,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
             | ActiveDialog::ThemePicker
             | ActiveDialog::HistoryPicker
             | ActiveDialog::RouterSave
+            | ActiveDialog::Router
             | ActiveDialog::PluginStore
             | ActiveDialog::BackendPanel
             | ActiveDialog::McpDiscover
