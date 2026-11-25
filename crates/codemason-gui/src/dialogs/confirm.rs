@@ -62,6 +62,9 @@ pub const CANCEL: &str = "Cancel";
 /// Title of the router save confirmation (the TUI's heading).
 pub const ROUTER_SAVE_TITLE: &str = "Save Router Configuration";
 
+/// Width of the router save confirmation's content, in points.
+const ROUTER_SAVE_WIDTH: f32 = 400.0;
+
 /// The button that saves the router configuration (Enter).
 pub const SAVE: &str = "Save";
 
@@ -234,16 +237,26 @@ pub fn show_router_save(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     };
     let total: usize = draft.tiers.values().map(|t| t.models.len()).sum();
-    modal(
+    let palette = crate::palette::palette_for(app, ctx);
+    super::material_modal(
         ctx,
+        &palette,
         "codemason_router_save_dialog",
         ROUTER_SAVE_TITLE,
+        ROUTER_SAVE_WIDTH,
         |ui| {
-            ui.label("This will overwrite your current Model Router cluster in codemason.json.");
-            ui.label(format!("Tier entries to save: {total}"));
-            ui.add_space(crate::metrics::space::SM);
-            key_buttons(ui, &[(SAVE, ENTER), (CANCEL, ESC)]);
-            ui.weak("Enter save  Esc cancel");
+            crate::material::dialog::dialog_body(
+                ui,
+                &palette,
+                &format!(
+                    "This replaces the Model Router cluster in codemason.json with \
+                     {total} tier {}.",
+                    if total == 1 { "entry" } else { "entries" }
+                ),
+            );
+            super::material_hint(ui, &palette, "Enter save  Esc cancel");
+            ui.add_space(crate::metrics::space::LG);
+            super::material_actions(ui, &palette, &[(SAVE, ENTER), (CANCEL, ESC)], true);
         },
     );
     true

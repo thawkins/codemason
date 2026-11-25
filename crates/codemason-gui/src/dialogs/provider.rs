@@ -1,5 +1,5 @@
 //! The provider setup dialog (`/provider`, `/model`, `/agent`, `/gitlab`,
-//! `/telemetry` and the router setup), over `App::provider_setup`.
+//! `/telemetry`), over `App::provider_setup`.
 //!
 //! app-core runs the whole flow as a key-driven state machine
 //! (`handle_provider_setup_key` in `input.rs`): Up and Down move a list's
@@ -19,7 +19,8 @@
 //! - Cancel sends Esc, and every other button sends the key the TUI names
 //!   for it.
 //!
-//! The model lists of the flow are drawn by [`super::model_picker`].
+//! The model lists of the flow are drawn by [`super::model_picker`] and the
+//! Model Router setup by [`super::router`].
 //!
 //! Dependencies: `codemason-app-core`, `codemason-config` (telemetry
 //! protocol), `codemason-types` (thinking levels) and `egui`.
@@ -412,60 +413,13 @@ fn view(step: &ProviderSetupStep) -> StepView {
             view.error = error.clone();
             view
         }
-        ProviderSetupStep::SetupRouter {
-            providers,
-            selected_provider_ids,
-            selected_provider_index,
-            draft_config,
-            active_bucket,
-            active_bucket_index,
-            left_pane_focused,
-            error,
-        } => {
-            let mut view = StepView::new(
-                "Model router setup",
-                "Esc cancel | Tab switch pane | Up/Down move | Space toggle provider | \
-                 Enter assign | Ctrl+S save | Ctrl+Up/Down reorder | Del remove",
-            );
-            view.lines.push(if *left_pane_focused {
-                "Providers (focused):".to_string()
-            } else {
-                "Providers:".to_string()
-            });
-            view.lines
-                .extend(providers.iter().enumerate().map(|(i, provider)| {
-                    let mark = if selected_provider_ids.contains(&provider.id) {
-                        "[x]"
-                    } else {
-                        "[ ]"
-                    };
-                    let cursor = if i == *selected_provider_index {
-                        ">"
-                    } else {
-                        " "
-                    };
-                    format!("{cursor} {mark} {}", provider.name)
-                }));
-            let bucket = active_bucket.to_string();
-            view.lines.push(if *left_pane_focused {
-                format!("Bucket {bucket}:")
-            } else {
-                format!("Bucket {bucket} (focused):")
-            });
-            if let Some(tier) = draft_config.tiers.get(&bucket) {
-                view.lines
-                    .extend(tier.models.iter().enumerate().map(|(i, entry)| {
-                        let cursor = if i == *active_bucket_index { ">" } else { " " };
-                        format!("{cursor} {}/{}", entry.provider_id, entry.model)
-                    }));
-            }
-            view.buttons = vec![(CANCEL, plain(Key::Esc))];
-            view.error = error.clone();
-            view
-        }
         // Drawn by the model picker; listed so a new step is not missed.
         ProviderSetupStep::SelectModel { .. } | ProviderSetupStep::SelectRouterModel { .. } => {
             StepView::new(super::model_picker::MODEL_PICKER_TITLE, LIST_HINT)
+        }
+        // Drawn by the router dialog; listed so a new step is not missed.
+        ProviderSetupStep::SetupRouter { .. } => {
+            StepView::new(super::router::ROUTER_TITLE, LIST_HINT)
         }
     }
 }
