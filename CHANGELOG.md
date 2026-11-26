@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.183] - 2026-11-23
+
+The Agent tab gains a Swarm dialog, GUI dialogs and ribbon tabs stay reachable in
+short or narrow windows, right-click selection and Copy work again, and the Model
+Router setup is a Material dialog.
+
 ### Added
 
 - Added: a **Swarm** button after **Loop** in the Agent tab's Run ribbon group. It opens a Material dialog with a prompt field; **Ok** (or Enter) runs `/swarm <prompt>`, while **Cancel**, Esc or a click outside closes it without running anything. Ok is disabled for a blank prompt, and app shortcuts are held while the dialog is open. The button reuses `Icon::Agent` (`crates/codemason-gui/src/dialogs/swarm.rs`).
