@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.0.186] - 2026-11-26
+
+The log, profile, tasks and memory panels are fixed tabs beside the sessions
+sidebar, next to Context, so `Alt+L`, `Alt+P`, `Alt+I` and `Alt+M` bring a panel
+to the front instead of swapping the panels in and out, and clicking a tab
+opens or closes the panel it names.
+
+### Changed
+
+- Changed: the log, profile, tasks and memory panes are fixed tabs of the left column beside the sessions sidebar, joining the Context tab - `PaneId::LEFT_TABS` names the five, `PaneId::is_left_tab` reports membership, and `PaneId::permissions` gives them one permission set: not closable, movable or floatable, but taking tabs and splits (`crates/codemason-gui/src/dock.rs`). Their `show_*` flags now pick the group's front tab rather than its membership, so `Alt+L`, `Alt+P`, `Alt+I` and `Alt+M` bring a panel to the front instead of displacing the ones already there, and the shell turns the panel they cover off.
+- Changed: `dock::pane_wanted` keeps the four panels present while the sidebar is visible (`app.sidebar.visible || app.show_*`), so `App::show_log` and its siblings mean "this panel is the one in front" - the same reading `show_context_panel` already had.
+- Changed: `dock::pin_context_tab` became `dock::pin_left_tabs`, which migrates a saved layout by pulling the log and tasks panes out of the right column and the profile and memory panes out of wherever they sat, placing all five after the sidebar in `LEFT_TABS` order, forgetting where they were hidden, and restoring the tab that was in front so a migration never drops the user onto the pane that moved last.
+- Changed: `dock::panel_command` answers for the Context pane too (`panel.context`), so every fixed tab has the toggle chord that opens and closes it.
+- Changed: the default left column split widened from `Ratio(0.2)` to `0.28`, enough for six tabs at craft-ui's minimum tab width, and the default layout puts the agents, teams, queue and diff panes in the right column on their own (the log and tasks panes no longer share it).
+- Changed: a tab clicked in the left column turns its panel on, or hands the front back to the sessions sidebar and turns its panel off, in the same frame - `shell::tab_click_keys` sends the panel being left its toggle chord before the one being opened, because every turn-on applies app-core's mutual exclusion and the reverse order would leave the panel just left flagged on behind the one picked. `shell::sync_pinned_tabs` replaces `sync_context_tab` and follows the flags in the other direction, for a panel app-core turned on.
+- Changed: `test_dock_fresh_start_shows_panes_at_their_default_places` expects the log pane anchored to `PaneId::Sessions` with `Placement::Tab { before: Some(PaneId::Profile) }`, and the fade test moves to `PaneId::ActiveAgents` because the left column's tabs are always present.
+
+### Added
+
+- Added: `crates/codemason-gui/src/dock_tabs.rs`, an `egui::plugin::Plugin` whose `input_hook` drops a secondary press and release on the left column's tab strip, so the fixed tabs get no craft-ui tab menu. The strip cannot be switched off there - `DockingStyle::close_menu_items: false` drops only Close and leaves Minimize and Collapse - and a pinned tab's menu offers the one gesture that would pull the strip apart. The rectangle is recorded by the dock renderer each frame, and only the strip is covered: the panes' bodies keep their own right-click menus and the dock's other groups keep craft-ui's menu.
+
+### Tests
+
+- Added: `test_dock_fixed_tabs_are_left_tabs_only`, `test_dock_log_and_tasks_leave_the_right_column`, `test_dock_pin_left_tabs_moves_an_old_layouts_tabs_beside_sessions`, `test_dock_pin_left_tabs_opens_a_hidden_tab_beside_sessions`, `test_dock_pin_left_tabs_moves_a_stranded_log_and_tasks`, `test_dock_fixed_tabs_take_no_close_menu` and `test_dock_closing_a_pane_clears_its_app_flag`.
+
 ## [1.0.185] - 2026-11-26
 
 Selected Material components pass their contrast check, every two-option

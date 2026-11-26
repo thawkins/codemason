@@ -19,7 +19,7 @@ use codemason_app_core::app::App;
 use codemason_app_core::log_channel::{TuiLogRecord, TuiLogSender, tui_log_channel};
 use codemason_gui::Shell;
 use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
-use codemason_gui::dock::{PaneId, default_layout, load_dock, load_layout, save_layout};
+use codemason_gui::dock::{self, PaneId, default_layout, load_dock, load_layout, save_layout};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::panels::context::CONTEXT_LABEL;
 use codemason_gui::panels::log::LOG_LABEL;
@@ -28,8 +28,7 @@ use codemason_gui::panels::prompt::PROMPT_LABEL;
 use codemason_gui::panels::sessions::{SESSIONS_LABEL, tab_title};
 use codemason_gui::panels::status_bar::STATUS_BAR_LABEL;
 use craft_keymap::Platform;
-use craft_ui::docking::{Location, PanelState, Placement, Zone};
-use craft_ui::layout::SplitSize;
+use craft_ui::docking::{Location, PanelState, Placement};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -387,32 +386,48 @@ fn test_log_panel_alt_l_shows_and_hides_the_pane() {
     rig.harness.run();
     focus_prompt(&mut rig.harness);
     assert!(!log_shown(&rig.harness));
-    assert!(!rig.harness.state().layout().contains(&PaneId::Log));
+    // The log is a fixed tab of the left column: it is always there, behind
+    // the sessions sidebar until its chord brings it to the front.
+    assert!(rig.harness.state().layout().contains(&PaneId::Log));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Log),
+        PanelState::Open
+    );
 
     alt(&mut rig.harness, egui::Key::L, "l");
     rig.harness.run();
     assert!(rig.harness.state().app().show_log);
     assert!(log_shown(&rig.harness));
-    assert!(rig.harness.state().layout().contains(&PaneId::Log));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Log),
+        PanelState::Front
+    );
 
     alt(&mut rig.harness, egui::Key::L, "l");
     rig.harness.run();
     assert!(!rig.harness.state().app().show_log);
     assert!(!log_shown(&rig.harness));
-    assert!(!rig.harness.state().layout().contains(&PaneId::Log));
+    assert!(rig.harness.state().layout().contains(&PaneId::Log));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Sessions),
+        PanelState::Front,
+        "the tab stays and the sidebar takes the front back"
+    );
     assert_eq!(rig.harness.state().app().session.input, "");
 }
 
 #[test]
 fn test_context_panel_alt_c_shows_and_hides_the_pane() {
+    // The log panel is on, so its tab is the left column's front one: the
+    // fixed tabs coexist, and the front one is the flagged panel.
     let mut rig = rig(|_, app| app.show_log = true);
     rig.harness.run();
     focus_prompt(&mut rig.harness);
-    // The Context tab is pinned beside the sidebar, behind it.
+    // The Context tab is pinned beside the sidebar, behind the log's tab.
     assert!(!context_shown(&rig.harness));
     assert!(rig.harness.state().layout().contains(&PaneId::Context));
     assert_eq!(
-        rig.harness.state().layout().panel_state(&PaneId::Sessions),
+        rig.harness.state().layout().panel_state(&PaneId::Log),
         PanelState::Front
     );
 
@@ -434,14 +449,15 @@ fn test_context_panel_alt_c_shows_and_hides_the_pane() {
     rig.harness.get_by_label_contains("System prompt");
     rig.harness.get_by_label_contains("0 messages");
 
-    // Alt+C again gives the front back to the sidebar; the tab stays.
+    // Alt+C again gives the front back to the log, whose panel is still on;
+    // the Context tab stays.
     alt(&mut rig.harness, egui::Key::C, "c");
     rig.harness.run();
     assert!(!rig.harness.state().app().show_context_panel);
     assert!(!context_shown(&rig.harness));
     assert!(rig.harness.state().layout().contains(&PaneId::Context));
     assert_eq!(
-        rig.harness.state().layout().panel_state(&PaneId::Sessions),
+        rig.harness.state().layout().panel_state(&PaneId::Log),
         PanelState::Front
     );
     assert_eq!(rig.harness.state().app().session.input, "");
@@ -604,56 +620,79 @@ fn test_dock_placeholder_panes_are_labelled() {
     let mut rig = rig(|_, _| {});
     rig.harness.run();
     focus_prompt(&mut rig.harness);
-    assert!(!rig.harness.state().layout().contains(&PaneId::Profile));
+    // The profile pane is a fixed tab of the left column, behind the sidebar.
+    assert!(rig.harness.state().layout().contains(&PaneId::Profile));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Profile),
+        PanelState::Open
+    );
 
-    // Alt+P turns the profile panel on; its pane comes back in front of
-    // its tab group and shows its labelled panel (Task 3.4b replaced the
-    // placeholder with the profiler table).
+    // Alt+P turns the profile panel on; its tab comes to the front and shows
+    // its labelled panel (Task 3.4b replaced the placeholder with the
+    // profiler table).
     alt(&mut rig.harness, egui::Key::P, "p");
     rig.harness.run();
 
     assert!(rig.harness.state().app().show_profile);
-    assert!(rig.harness.state().layout().contains(&PaneId::Profile));
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Profile),
+        PanelState::Front
+    );
     rig.harness
         .get_by_role_and_label(Role::Table, PROFILE_LABEL);
 }
 
 #[test]
-fn test_dock_closing_a_pane_clears_its_app_flag() {
+fn test_dock_fixed_tabs_take_no_close_menu() {
     let mut rig = rig(|_, app| app.show_log = true);
     rig.harness.run();
-    assert!(rig.harness.state().layout().contains(&PaneId::Log));
 
-    // The dock's own close control: the Log tab's context menu, `Close
-    // Panel`. The shell hides the pane through app-core's Alt+L toggle.
+    // The left column's tabs are fixed: a secondary click on one opens no
+    // menu, so the dock's `Close Panel` never appears there.
     rig.harness
         .get_by_role_and_label(Role::Tab, LOG_LABEL)
         .click_secondary();
     rig.harness.run();
-    rig.harness.get_by_label("Close Panel").click();
-    rig.harness.run();
-    rig.harness.run();
+    assert!(rig.harness.query_by_label("Close Panel").is_none());
+    assert!(rig.harness.state().app().show_log, "the panel is untouched");
+    assert!(rig.harness.state().layout().contains(&PaneId::Log));
+}
 
-    let app = rig.harness.state().app();
-    assert!(!app.show_log);
-    assert_eq!(app.status, "log panel hidden", "app-core's toggle ran");
-    assert!(!rig.harness.state().layout().contains(&PaneId::Log));
-    assert!(!log_shown(&rig.harness));
+#[test]
+fn test_dock_closing_a_pane_clears_its_app_flag() {
+    // `dock::close_in_app` is still the path the shell uses when a pane is
+    // closed through app-core, even though the left column's fixed tabs no
+    // longer offer a close control.
+    let mut app = support::make_app();
+    app.show_log = true;
+    assert!(dock::close_in_app(&mut app, PaneId::Log).is_some());
 }
 
 #[test]
 fn test_dock_closing_the_sessions_tab_hides_the_sidebar() {
     let mut rig = rig(|_, app| app.sidebar.visible = true);
     rig.harness.run();
+    focus_prompt(&mut rig.harness);
 
+    // The left column's tabs take no secondary-click menu, the sidebar's own
+    // included, so the dock's `Close Panel` is never offered there.
     let tab = tab_title(rig.harness.state_mut().app_mut());
     rig.harness
         .get_by_role_and_label(Role::Tab, &tab)
         .click_secondary();
     rig.harness.run();
-    rig.harness.get_by_label("Close Panel").click();
-    rig.harness.run();
+    assert!(rig.harness.query_by_label("Close Panel").is_none());
+    assert!(rig.harness.state().app().sidebar.visible);
 
+    // Alt+S focuses the sidebar; a second Alt+S hides it, as in the TUI.
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    assert!(
+        rig.harness.state().app().sidebar.visible,
+        "the first chord focuses it"
+    );
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
     assert!(!rig.harness.state().app().sidebar.visible);
     assert!(!rig.harness.state().layout().contains(&PaneId::Sessions));
     assert!(!sessions_shown(&rig.harness));
@@ -706,7 +745,9 @@ fn test_sessions_panel_alt_s_fronts_the_sidebar_over_profile() {
 #[test]
 fn test_dock_hidden_pane_returns_to_its_place_after_restart() {
     let path = scratch_file("hidden-after-restart");
-    // First run: the log is shown, the user moves nothing, then hides it.
+    // First run: the log is in front, then its chord hands the front back to
+    // the sidebar. The tab is fixed, so what the file records is where the
+    // log's pane sits, not whether it is present.
     let before = {
         let mut rig = rig_with(|_, app| app.show_log = true, Some(path.clone()));
         rig.harness.run();
@@ -719,21 +760,26 @@ fn test_dock_hidden_pane_returns_to_its_place_after_restart() {
             .expect("log docked");
         alt(&mut rig.harness, egui::Key::L, "l");
         rig.harness.run();
-        assert!(!rig.harness.state().layout().contains(&PaneId::Log));
+        assert!(!rig.harness.state().app().show_log);
         before
     };
-    let (_, hidden) = load_dock(&path);
-    assert!(
-        hidden.contains_key(&PaneId::Log),
-        "the hidden place is saved"
-    );
 
-    // Second run: showing the log puts it back where it was.
+    // Second run: the tab is where it was saved, and its chord fronts it.
     let mut rig = rig_with(|_, _| {}, Some(path));
     rig.harness.run();
     focus_prompt(&mut rig.harness);
+    assert_eq!(
+        rig.harness.state().layout().location(&PaneId::Log).ok(),
+        Some(before.clone()),
+        "the fixed tab keeps its saved place"
+    );
     alt(&mut rig.harness, egui::Key::L, "l");
     rig.harness.run();
+    assert!(rig.harness.state().app().show_log);
+    assert_eq!(
+        rig.harness.state().layout().panel_state(&PaneId::Log),
+        PanelState::Front
+    );
     assert_eq!(
         rig.harness.state().layout().location(&PaneId::Log).ok(),
         Some(before)
@@ -762,15 +808,20 @@ fn test_dock_fresh_start_shows_panes_at_their_default_places() {
     // Without a file the hidden places come straight from the default
     // layout: this is where each pane is designed to appear.
     let designed = show_log_and_sidebar(None);
-    // The log goes back to the default right-hand column, beside the
-    // transcript at the default 3:1 split, not into a new edge frame.
+    // The log is a fixed tab of the left column now, so it comes back in
+    // that group rather than in the right-hand column it used to occupy.
     let log = designed[0].as_ref().expect("log docked");
-    assert_eq!(log.anchor, Some(PaneId::Messages));
-    assert_eq!(log.placement, Placement::Split(Zone::Right));
-    assert_eq!(log.size, Some(SplitSize::Ratio(0.75)));
+    assert_eq!(log.anchor, Some(PaneId::Sessions), "{log:?}");
+    assert_eq!(
+        log.placement,
+        Placement::Tab {
+            before: Some(PaneId::Profile)
+        },
+        "{log:?}"
+    );
     let sessions = designed[1].as_ref().expect("sessions docked");
-    // The sidebar shares its group with the pinned Context tab, so it
-    // goes back in front of that tab.
+    // The sidebar shares its group with the fixed tabs, so it goes back in
+    // front of the first of them.
     assert_eq!(
         sessions.placement,
         Placement::Tab {
@@ -811,12 +862,17 @@ fn test_dock_layout_file_saves_changes() {
     let mut rig = rig_with(|_, _| {}, Some(path.clone()));
     rig.harness.run();
     focus_prompt(&mut rig.harness);
-    assert!(!load_layout(&path).contains(&PaneId::Log));
-
-    alt(&mut rig.harness, egui::Key::L, "l");
-    rig.harness.run();
-
+    // The log's tab is fixed, so the layout always carries it; what the file
+    // records of a tab pick is where the panes sit, which the chord does not
+    // change. Save a real change instead: the sessions sidebar hidden.
     assert!(load_layout(&path).contains(&PaneId::Log));
+
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    alt(&mut rig.harness, egui::Key::S, "s");
+    rig.harness.run();
+    assert!(!rig.harness.state().app().sidebar.visible);
+    assert!(!load_layout(&path).contains(&PaneId::Sessions));
 }
 
 /// Alt+S focuses the sidebar, then the toggle chord `letter` turns on

@@ -12,7 +12,6 @@ use codemason_gui::Shell;
 use codemason_gui::dialogs::about::{
     ABOUT_TITLE, CLOSE_ABOUT, REPOSITORY_URL, VERSION, is_open, logo_uri,
 };
-use codemason_gui::dock::{PaneId, pane_wanted};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::ribbon::TABS;
 use craft_keymap::Platform;
@@ -127,16 +126,19 @@ fn test_about_esc_dismisses() {
 #[test]
 fn test_about_keeps_app_shortcuts_from_the_session_behind() {
     let (_runtime, mut harness) = opened("codemason-dark");
-    let before = pane_wanted(harness.state().app(), PaneId::Log);
+    // The log's panel flag, not `pane_wanted`: the log is a fixed tab of the
+    // left column, so its pane is present whenever the sidebar is and the
+    // flag is what the chord actually moves.
+    let before = harness.state().app().show_log;
     // Alt+L toggles the Log panel when no dialog is up.
     press(&mut harness, egui::Key::L, egui::Modifiers::ALT);
     assert!(is_open(&harness.ctx));
-    assert_eq!(pane_wanted(harness.state().app(), PaneId::Log), before);
+    assert_eq!(harness.state().app().show_log, before);
     // Closed, the same shortcut reaches the App again.
     harness.get_by_label(CLOSE_ABOUT).click();
     harness.run();
     press(&mut harness, egui::Key::L, egui::Modifiers::ALT);
-    assert_ne!(pane_wanted(harness.state().app(), PaneId::Log), before);
+    assert_ne!(harness.state().app().show_log, before);
 }
 
 #[test]

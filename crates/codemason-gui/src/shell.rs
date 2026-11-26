@@ -117,12 +117,17 @@ pub struct Shell {
     layout_dirty: bool,
     /// The panes app-core sent the keyboard to last frame.
     key_panes: BTreeSet<PaneId>,
-    /// `App::show_context_panel` as last synced with the Context tab, so a
-    /// change app-core made (`Alt+C`) is told from a tab the user picked.
-    context_shown: bool,
+    /// `dock::shown_left_tab` as last synced with the left column's front
+    /// tab, so a panel app-core turned on (`Alt+L`, `/log`, ...) is told from
+    /// a tab the user picked.
+    left_tab_shown: Option<PaneId>,
     /// Toggle chords that close panes closed from the dock's chrome, run
     /// through `App::handle_key` after drawing.
     close_keys: Vec<KeyInput>,
+    /// Toggle chords that bring the App's panel flags in line with a tab
+    /// picked in the left column, run through `App::handle_key` after
+    /// drawing.
+    left_tab_keys: Vec<Vec<KeyInput>>,
     /// Installs the visuals of the App's theme, again when it changes.
     theme: ThemeApplier,
     /// The native file dialogs the ribbon queues.
@@ -196,8 +201,9 @@ impl Shell {
             layout_file: None,
             layout_dirty: false,
             key_panes: BTreeSet::new(),
-            context_shown: false,
+            left_tab_shown: None,
             close_keys: Vec::new(),
+            left_tab_keys: Vec::new(),
             theme: ThemeApplier::default(),
             files: FileDialogs::new(),
             close: CloseGuard::default(),
@@ -607,14 +613,22 @@ impl Shell {
     /// attached sources there is no runtime, so they are dropped.
     fn run_close_keys(&mut self, ctx: &egui::Context) {
         let keys = std::mem::take(&mut self.close_keys);
+        // A tab pick's keys are ordered: the panels they turn off come before
+        // the one they turn on, and each pick's batch runs in order.
+        let batches = std::mem::take(&mut self.left_tab_keys);
         let Some(sources) = self.sources.as_ref() else {
             return;
         };
-        if keys.is_empty() {
+        if keys.is_empty() && batches.is_empty() {
             return;
         }
         for key in keys {
             sources.runtime.block_on(self.app.handle_key(key));
+        }
+        for keys in batches {
+            for key in keys {
+                sources.runtime.block_on(self.app.handle_key(key));
+            }
         }
         ctx.request_repaint();
     }
@@ -655,54 +669,53 @@ impl Shell {
             Ok(false) => {}
             Err(err) => tracing::warn!(%err, "dock visibility sync failed"),
         }
-        // A layout loaded with the sidebar hidden kept the Context tab where
-        // it was; pin it as soon as the sidebar is back.
-        match dock::pin_context_tab(&mut self.layout, &mut self.hidden) {
+        // A layout loaded with the sidebar hidden kept the fixed tabs where
+        // they were; pin them as soon as the sidebar is back.
+        match dock::pin_left_tabs(&mut self.layout, &mut self.hidden) {
             Ok(true) => {
                 self.layout_dirty = true;
                 ctx.request_repaint();
             }
             Ok(false) => {}
-            Err(err) => tracing::debug!(%err, "Context tab not pinned"),
+            Err(err) => tracing::debug!(%err, "fixed tabs not pinned"),
         }
         self.front_key_panes(ctx);
-        self.sync_context_tab(ctx);
+        self.sync_pinned_tabs(ctx);
     }
 
-    /// Keep the pinned Context tab and `App::show_context_panel` in step:
-    /// when app-core changed the flag (`Alt+C`), bring the tab to the front
-    /// or give the front back to the sessions sidebar; otherwise the flag
-    /// follows whether the user put the tab in front, so the snapshot is
-    /// refreshed only while the pane is seen.
-    fn sync_context_tab(&mut self, ctx: &egui::Context) {
-        let front = self.layout.panel_state(&PaneId::Context) == PanelState::Front;
-        let wanted = self.app.show_context_panel;
-        if wanted != self.context_shown {
-            if wanted && self.app.sidebar.focused {
+    /// Keep the left column's front tab in step with the App's panel flags.
+    ///
+    /// A flag app-core changed (`Alt+C`, `Alt+L`, `Alt+P`, `Alt+I`, `Alt+M`,
+    /// `/log`, `/profile`, ...) brings its tab to the front, so the panel it
+    /// turned on is the one the column shows; turning a panel off hands the
+    /// front back to the sessions sidebar. The other direction — a tab the
+    /// user picked — is handled where the click is applied
+    /// (`show_dock`/`tab_click_keys`), so the panel a click turns on is the
+    /// one seen in that same frame. app-core's hide side effects (dropping a
+    /// pane's selection and context menu, the status line) run through
+    /// `App::handle_key` with the panel's own toggle chord.
+    fn sync_pinned_tabs(&mut self, ctx: &egui::Context) {
+        let wanted = dock::shown_left_tab(&self.app);
+        if wanted != self.left_tab_shown {
+            if wanted.is_some() && self.app.sidebar.focused {
                 // The sidebar would take the front back next frame
                 // (`front_key_panes`); it gives up the keyboard as when
                 // another pane covers it.
                 sessions_sidebar_state::unfocus(&mut self.app);
             }
-            let pane = match (wanted, front) {
-                (true, false) => Some(PaneId::Context),
-                (false, true) => Some(PaneId::Sessions),
-                (true, true) | (false, false) => None,
-            };
-            if let Some(pane) = pane {
-                match dock::bring_to_front(&mut self.layout, pane) {
+            let target = wanted.unwrap_or(PaneId::Sessions);
+            if self.layout.contains(&target) {
+                match dock::bring_to_front(&mut self.layout, target) {
                     Ok(true) => {
                         self.layout_dirty = true;
                         ctx.request_repaint();
                     }
                     Ok(false) => {}
-                    Err(err) => tracing::debug!(?pane, %err, "Context tab not synced"),
+                    Err(err) => tracing::debug!(?target, %err, "left tab not synced"),
                 }
             }
-        } else if front != wanted {
-            self.app.set_context_panel_shown(front);
         }
-        self.context_shown = self.app.show_context_panel;
+        self.left_tab_shown = dock::shown_left_tab(&self.app);
     }
 
     /// Bring a pane app-core has just started sending the keyboard to to
@@ -816,6 +829,10 @@ impl Shell {
         let mut sessions_rect = None;
         let now = ui.input(|i| i.time);
         let fade = crate::material::motion_time(ui.ctx());
+        // The left column's tabs take no secondary-click menu: their strip is
+        // recorded again below, from whichever of its panes draws a body.
+        crate::dock_tabs::install(ui.ctx());
+        crate::dock_tabs::clear_strip(ui.ctx());
         let Self {
             app,
             messages,
@@ -835,6 +852,19 @@ impl Shell {
             },
             |pane: &PaneId| pane.permissions(),
             |ui, pane| {
+                // The strip is the tab row above the body craft-ui gives the
+                // shown pane, so only the panes of the left column record it.
+                if *pane == PaneId::Sessions || pane.is_left_tab() {
+                    let body = ui.max_rect();
+                    crate::dock_tabs::set_strip(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        egui::Rect::from_min_max(
+                            egui::pos2(body.left(), body.top() - style.tab_height),
+                            egui::pos2(body.right(), body.top()),
+                        ),
+                    );
+                }
                 // A pane that has just come back fades in.
                 if let Some(&start) = opened.get(pane) {
                     match crate::material::fade_in_opacity(now - start, fade) {
@@ -897,10 +927,22 @@ impl Shell {
                     }
                     ui.ctx().request_repaint();
                 }
-                other => match self.layout.apply(other) {
-                    Ok(_) => self.layout_dirty = true,
-                    Err(err) => tracing::debug!(%err, "dock action rejected"),
-                },
+                other => {
+                    let activating = matches!(other, Action::Activate { .. });
+                    match self.layout.apply(other) {
+                        Ok(_) => self.layout_dirty = true,
+                        Err(err) => tracing::debug!(%err, "dock action rejected"),
+                    }
+                    // A tab picked in the left column turns its panel on (or,
+                    // picked for the sidebar, turns the panel off) in the same
+                    // frame, so the panel the user is looking at is the one the
+                    // flags say. See `sync_pinned_tabs` for the hide side
+                    // effects the toggle chords carry.
+                    if activating {
+                        self.left_tab_keys
+                            .push(tab_click_keys(&self.layout, &self.app));
+                    }
+                }
             }
         }
         sessions_rect
@@ -1329,6 +1371,56 @@ impl Shell {
             self.app.push_log(level, message, None);
         }
     }
+}
+
+/// The toggle chords that turn the left column's panels on and off to match
+/// the tab `layout` puts in front of the sessions sidebar's group.
+///
+/// Returns nothing when the front tab already agrees with the App's flags.
+/// Otherwise the panel being left is turned off first: app-core's mutual
+/// exclusion is applied by every turn-on, so sending them in the other order
+/// would leave the panel the user just left flagged on behind the one they
+/// picked. A front of `None` is the sessions sidebar, which has no flag of its
+/// own, so showing it only turns the panel off.
+fn tab_click_keys(layout: &Layout<PaneId>, app: &App) -> Vec<KeyInput> {
+    let front = PaneId::LEFT_TABS
+        .into_iter()
+        .find(|pane| layout.panel_state(pane) == PanelState::Front);
+    let shown = dock::shown_left_tab(app);
+    if front == shown {
+        return Vec::new();
+    }
+    // A panel whose flag is already on needs no key; the one that is showing
+    // but no longer in front is turned off first.
+    let mut keys = Vec::new();
+    if let Some(key) = shown
+        .filter(|pane| dock::pane_is_flag_set(app, *pane))
+        .and_then(dock::panel_command)
+        .and_then(command_key)
+    {
+        keys.push(key);
+    }
+    if let Some(key) = front
+        .filter(|pane| !dock::pane_is_flag_set(app, *pane))
+        .and_then(dock::panel_command)
+        .and_then(command_key)
+    {
+        keys.push(key);
+    }
+    keys
+}
+
+/// The key press that runs the keymap command `command`, if it is bound.
+///
+/// # Arguments
+///
+/// * `command` - the keymap command id, e.g. `panel.log`.
+///
+/// # Returns
+///
+/// `None` when the command is unknown to the keymap.
+fn command_key(command: &'static str) -> Option<KeyInput> {
+    crate::keys::command_key_input(&craft_keymap::CommandRef::new(command))
 }
 
 /// Whether `event` is a press egui moves its keyboard focus on: Tab,

@@ -111,11 +111,13 @@ fn test_document_panes_a_shown_pane_fades_in() {
     harness
         .ctx
         .all_styles_mut(|style| style.animation_time = 1.0 / 12.0);
-    harness.state_mut().app_mut().show_log = true;
+    // The left column's fixed tabs are always present, so the fade is checked
+    // on a pane a flag brings back: the agents window.
+    harness.state_mut().app_mut().show_agents_window = true;
     // The frame that shows the pane starts its fade: the window keeps
     // repainting until the fade ends, then settles.
     harness.step();
-    assert_eq!(harness.state().fading_panes(), [PaneId::Log]);
+    assert_eq!(harness.state().fading_panes(), [PaneId::ActiveAgents]);
     harness.run();
     assert!(harness.state().fading_panes().is_empty(), "the fade ends");
 }

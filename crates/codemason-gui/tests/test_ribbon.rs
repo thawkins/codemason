@@ -134,11 +134,14 @@ fn test_ribbon_panel_button_toggles_the_panel() {
     let before = rig.harness.state().app().show_log;
     rig.harness.get_by_label("View").click();
     rig.harness.run();
-    rig.harness.get_by_label("Log").click();
+    // The log's dock tab carries the same label, so pick the ribbon's button.
+    rig.harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Log")
+        .click();
     rig.harness.run();
     let after = rig.harness.state().app().show_log;
     assert_ne!(after, before);
-    // The button shows the panel's state (the open panel's dock tab is
+    // The button shows the panel's state (the fixed panel's dock tab is
     // also labelled "Log", but is no toggle).
     let toggled: Vec<_> = rig
         .harness

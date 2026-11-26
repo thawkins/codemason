@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use craft_ui::docking::PanelState;
 
 use codemason_gui::dock::{
-    HiddenPanes, PaneId, default_layout, fit_prompt, load_layout, pin_context_tab, save_layout,
+    HiddenPanes, PaneId, default_layout, fit_prompt, load_layout, pin_left_tabs, save_layout,
     sync_visibility, toggle_pane,
 };
 use craft_ui::docking::Node;
@@ -81,7 +81,11 @@ fn test_dock_toggle_log_twice_restores_layout() {
     toggle_pane(&mut layout, &mut hidden, PaneId::Log).expect("show log");
     let after = layout.location(&PaneId::Log).expect("log is docked again");
     assert_eq!(before, after);
-    assert_eq!(layout, default_layout());
+    assert_eq!(
+        layout.panel_state(&PaneId::Log),
+        PanelState::Front,
+        "a pane shown again is its group's active tab"
+    );
 }
 
 #[test]
@@ -145,7 +149,7 @@ fn old_layout() -> craft_ui::docking::Layout<PaneId> {
     layout
         .apply(craft_ui::docking::Action::Move {
             panel: PaneId::Context,
-            anchor: PaneId::Tasks,
+            anchor: PaneId::ActiveAgents,
             placement: craft_ui::docking::Placement::Tab { before: None },
         })
         .expect("move Context to the right column");
@@ -162,44 +166,133 @@ fn test_dock_context_tab_is_pinned_beside_sessions_by_default() {
     let layout = default_layout();
     let root = layout.root.as_ref().expect("root");
     assert_eq!(
-        group_of(root, PaneId::Context),
+        group_of(root, PaneId::Sessions),
         Some(vec![
             PaneId::Sessions,
             PaneId::Context,
+            PaneId::Log,
             PaneId::Profile,
-            PaneId::Memory
+            PaneId::Tasks,
+            PaneId::Memory,
         ])
     );
-    let permissions = PaneId::Context.permissions();
-    assert!(!permissions.closable && !permissions.movable && !permissions.floatable);
+    for pane in PaneId::LEFT_TABS {
+        let permissions = pane.permissions();
+        assert!(
+            !permissions.closable && !permissions.movable && !permissions.floatable,
+            "{pane:?} is a fixed tab"
+        );
+        assert!(permissions.accepts_tabs, "{pane:?} takes tabs");
+    }
 }
 
 #[test]
-fn test_dock_pin_context_tab_moves_an_old_layouts_tab_beside_sessions() {
+fn test_dock_fixed_tabs_are_left_tabs_only() {
+    for pane in PaneId::ALL {
+        assert_eq!(pane.is_left_tab(), PaneId::LEFT_TABS.contains(&pane));
+    }
+    assert!(!PaneId::Sessions.is_left_tab(), "the sidebar is not one");
+}
+
+#[test]
+fn test_dock_log_and_tasks_leave_the_right_column() {
+    let layout = default_layout();
+    let root = layout.root.as_ref().expect("root");
+    assert_eq!(
+        group_of(root, PaneId::ActiveAgents),
+        Some(vec![
+            PaneId::ActiveAgents,
+            PaneId::Teams,
+            PaneId::Queue,
+            PaneId::Diff,
+        ])
+    );
+    for pane in [PaneId::Log, PaneId::Tasks] {
+        assert_eq!(
+            group_of(root, PaneId::Sessions).filter(|group| group.contains(&pane)),
+            group_of(root, PaneId::Sessions),
+            "{pane:?} is in the sidebar's group"
+        );
+        assert!(
+            !group_of(root, PaneId::ActiveAgents)
+                .expect("right group")
+                .contains(&pane),
+            "{pane:?} left the right column"
+        );
+    }
+}
+
+#[test]
+fn test_dock_pin_left_tabs_moves_an_old_layouts_tabs_beside_sessions() {
     let mut layout = old_layout();
     let mut hidden = HiddenPanes::new();
-    pin_context_tab(&mut layout, &mut hidden).expect("pin");
+    pin_left_tabs(&mut layout, &mut hidden).expect("pin");
     assert_eq!(layout, default_layout());
     assert_eq!(
         layout.panel_state(&PaneId::Sessions),
         PanelState::Front,
         "pinning does not cover the sidebar"
     );
-    // Pinning a pinned tab changes nothing.
-    assert!(!pin_context_tab(&mut layout, &mut hidden).expect("pin again"));
+    // Pinning pinned tabs changes nothing.
+    assert!(!pin_left_tabs(&mut layout, &mut hidden).expect("pin again"));
     assert_eq!(layout, default_layout());
 }
 
 #[test]
-fn test_dock_pin_context_tab_opens_a_hidden_tab_beside_sessions() {
+fn test_dock_pin_left_tabs_opens_a_hidden_tab_beside_sessions() {
     let mut layout = old_layout();
     let mut hidden = HiddenPanes::new();
     toggle_pane(&mut layout, &mut hidden, PaneId::Context).expect("hide Context");
     assert!(hidden.contains_key(&PaneId::Context));
-    pin_context_tab(&mut layout, &mut hidden).expect("pin");
+    pin_left_tabs(&mut layout, &mut hidden).expect("pin");
     assert!(
         !hidden.contains_key(&PaneId::Context),
         "old place forgotten"
     );
     assert_eq!(layout, default_layout());
+}
+
+#[test]
+fn test_dock_pin_left_tabs_moves_a_stranded_log_and_tasks() {
+    let mut layout = default_layout();
+    let mut hidden = HiddenPanes::new();
+    // A layout saved when the log and tasks panes lived in the right column.
+    for pane in [PaneId::Log, PaneId::Tasks] {
+        layout
+            .apply(craft_ui::docking::Action::Move {
+                panel: pane,
+                anchor: PaneId::ActiveAgents,
+                placement: craft_ui::docking::Placement::Tab { before: None },
+            })
+            .expect("move to the right column");
+    }
+    pin_left_tabs(&mut layout, &mut hidden).expect("pin");
+    let root = layout.root.as_ref().expect("root");
+    assert_eq!(
+        group_of(root, PaneId::Sessions),
+        Some(vec![
+            PaneId::Sessions,
+            PaneId::Context,
+            PaneId::Log,
+            PaneId::Profile,
+            PaneId::Tasks,
+            PaneId::Memory,
+        ]),
+        "both are pulled back left, in tab order"
+    );
+    assert_eq!(
+        group_of(root, PaneId::ActiveAgents),
+        Some(vec![
+            PaneId::ActiveAgents,
+            PaneId::Teams,
+            PaneId::Queue,
+            PaneId::Diff,
+        ]),
+        "the right column keeps only its own panes"
+    );
+    assert_eq!(
+        layout.panel_state(&PaneId::Sessions),
+        PanelState::Front,
+        "the migration does not drop the user onto another pane"
+    );
 }

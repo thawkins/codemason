@@ -39,6 +39,7 @@
 pub mod bridge;
 pub mod dialogs;
 pub mod dock;
+pub mod dock_tabs;
 pub mod external_edit;
 pub mod fonts;
 pub mod icons;

@@ -16,6 +16,17 @@
 //! pane from the dock's own chrome, [`close_in_app`] hides it through
 //! app-core's own action or toggle chord, and the next sync hides it.
 //!
+//! # Fixed tabs
+//!
+//! The Context, log, profile, tasks and memory panes are fixed tabs beside
+//! the sessions sidebar ([`PaneId::LEFT_TABS`], pinned by
+//! [`pin_left_tabs`]): the dock's chrome neither closes, moves nor floats
+//! them, and [`pane_wanted`] keeps them present whenever the sidebar is.
+//! Their flags pick the group's front tab rather than its membership, so
+//! `Alt+L`, `Alt+P`, `Alt+I` and `Alt+M` bring one to the front instead of
+//! displacing the others, and the shell turns the panel they cover off when
+//! the user picks another tab.
+//!
 //! The shell renders the layout with craft-ui's `DockArea` and maps each
 //! pane to its panel (`crate::panels`).
 //!
@@ -117,9 +128,10 @@ impl PaneId {
     ///
     /// The transcript and the prompt are the window's canvas: they can
     /// neither move, close nor take tabs, so craft-ui draws them without a
-    /// tab strip. The Context pane is a pinned tab beside the sessions
-    /// sidebar: it stays in its group and cannot be closed or floated, but
-    /// takes tabs and splits. Every other pane takes craft-ui's defaults.
+    /// tab strip. The Context, log, profile, tasks and memory panes are fixed
+    /// tabs beside the sessions sidebar ([`Self::LEFT_TABS`]): they stay in
+    /// their group and cannot be closed, moved or floated, but they take tabs
+    /// and splits. Every other pane takes craft-ui's defaults.
     ///
     /// # Returns
     ///
@@ -131,33 +143,58 @@ impl PaneId {
                 accepts_splits: true,
                 ..Permissions::PROTECTED
             },
-            Self::Context => Permissions {
+            Self::Context | Self::Log | Self::Profile | Self::Tasks | Self::Memory => Permissions {
                 movable: false,
                 floatable: false,
                 closable: false,
                 accepts_tabs: true,
                 accepts_splits: true,
             },
-            Self::Sessions
-            | Self::Log
-            | Self::Profile
-            | Self::Tasks
-            | Self::Memory
-            | Self::ActiveAgents
-            | Self::Teams
-            | Self::Queue
-            | Self::Diff => Permissions::default(),
+            Self::Sessions | Self::ActiveAgents | Self::Teams | Self::Queue | Self::Diff => {
+                Permissions::default()
+            }
         }
     }
+
+    /// Whether the pane is a fixed tab of the left column: it sits beside the
+    /// sessions sidebar, in [`Self::LEFT_TABS`] order, and the dock's chrome
+    /// neither closes, moves nor floats it ([`Self::permissions`]). Its panel
+    /// is turned on and off by its toggle chord instead, which brings its tab
+    /// to the front (`App::show_log` and its siblings).
+    ///
+    /// # Returns
+    ///
+    /// `true` for the panes pinned beside the sidebar.
+    #[must_use]
+    pub const fn is_left_tab(self) -> bool {
+        matches!(
+            self,
+            Self::Context | Self::Log | Self::Profile | Self::Tasks | Self::Memory
+        )
+    }
+
+    /// The fixed tabs of the left column, after the sessions sidebar, in tab
+    /// order.
+    pub const LEFT_TABS: [Self; 5] = [
+        Self::Context,
+        Self::Log,
+        Self::Profile,
+        Self::Tasks,
+        Self::Memory,
+    ];
 }
 
 /// Whether the App wants `pane` shown, read from the App's own flags.
 ///
-/// The transcript and the prompt are always shown. The pinned Context tab
-/// (see [`pin_context_tab`]) goes with the sessions sidebar, so hiding the
-/// sidebar still collapses the left column, and is shown on its own while
-/// `App::show_context_panel` says it is in front (`Alt+C`). The input queue
-/// is drawn above the prompt (as in the TUI), so its pane stays closed.
+/// The transcript and the prompt are always shown. The fixed tabs beside the
+/// sessions sidebar ([`PaneId::LEFT_TABS`]) go with the sidebar, so hiding the
+/// sidebar still collapses the left column: they are shown while
+/// `App::sidebar.visible` is, and one of them is shown on its own while its
+/// flag says it is in front (`Alt+C`, `Alt+L`, `Alt+P`, `Alt+I`, `Alt+M`), so
+/// a panel turned on with the sidebar hidden still appears. Their flags pick
+/// the group's front tab rather than its membership, so the five coexist as
+/// tabs instead of displacing each other. The input queue is drawn above the
+/// prompt (as in the TUI), so its pane stays closed.
 ///
 /// # Arguments
 ///
@@ -172,15 +209,62 @@ pub fn pane_wanted(app: &App, pane: PaneId) -> bool {
     match pane {
         PaneId::Messages | PaneId::Prompt => true,
         PaneId::Context => app.sidebar.visible || app.show_context_panel,
+        PaneId::Log => app.sidebar.visible || app.show_log,
+        PaneId::Profile => app.sidebar.visible || app.show_profile,
+        PaneId::Tasks => app.sidebar.visible || app.show_tasks_panel,
+        PaneId::Memory => app.sidebar.visible || app.show_memory,
         PaneId::Sessions => app.sidebar.visible,
-        PaneId::Log => app.show_log,
-        PaneId::Profile => app.show_profile,
-        PaneId::Tasks => app.show_tasks_panel,
-        PaneId::Memory => app.show_memory,
         PaneId::ActiveAgents => app.show_agents_window,
         PaneId::Teams => app.show_teams_window,
         PaneId::Queue => false,
         PaneId::Diff => app.diff_pane.shown,
+    }
+}
+
+/// The panel a fixed tab of the left column shows, read from the App's flags:
+/// the one whose `show_*` flag is set, or `None` when they are all off (the
+/// sidebar is in front). app-core sets at most one of them at a time.
+///
+/// # Arguments
+///
+/// * `app` - the App whose panel flags are read.
+///
+/// # Returns
+///
+/// The flagged pane, in [`PaneId::LEFT_TABS`] order.
+#[must_use]
+pub fn shown_left_tab(app: &App) -> Option<PaneId> {
+    PaneId::LEFT_TABS
+        .into_iter()
+        .find(|pane| pane_is_flag_set(app, *pane))
+}
+
+/// Whether `pane`'s `show_*` flag is set, i.e. app-core wants its panel
+/// visible in the left column.
+///
+/// # Arguments
+///
+/// * `app` - the App whose panel flags are read.
+/// * `pane` - the fixed tab in question.
+///
+/// # Returns
+///
+/// `false` for a pane that is not a fixed tab of the left column.
+#[must_use]
+pub fn pane_is_flag_set(app: &App, pane: PaneId) -> bool {
+    match pane {
+        PaneId::Context => app.show_context_panel,
+        PaneId::Log => app.show_log,
+        PaneId::Profile => app.show_profile,
+        PaneId::Tasks => app.show_tasks_panel,
+        PaneId::Memory => app.show_memory,
+        PaneId::Messages
+        | PaneId::Prompt
+        | PaneId::Sessions
+        | PaneId::ActiveAgents
+        | PaneId::Teams
+        | PaneId::Queue
+        | PaneId::Diff => false,
     }
 }
 
@@ -251,6 +335,7 @@ pub fn close_in_app(app: &mut App, pane: PaneId) -> Option<KeyInput> {
 #[must_use]
 pub const fn panel_command(pane: PaneId) -> Option<&'static str> {
     match pane {
+        PaneId::Context => Some("panel.context"),
         PaneId::Log => Some("panel.log"),
         PaneId::Profile => Some("panel.profile"),
         PaneId::Tasks => Some("panel.tasks"),
@@ -258,7 +343,6 @@ pub const fn panel_command(pane: PaneId) -> Option<&'static str> {
         PaneId::Messages
         | PaneId::Prompt
         | PaneId::Sessions
-        | PaneId::Context
         | PaneId::ActiveAgents
         | PaneId::Teams
         | PaneId::Queue
@@ -376,45 +460,37 @@ fn split(
 
 /// Build the layout a first launch (or an unreadable layout file) uses.
 ///
-/// Sessions, the pinned Context tab, profile and memory sit in a left
-/// column; the transcript sits above the prompt in the centre; agents,
-/// teams, tasks, the queue and the diff sit above the log in a right column. Every
-/// [`PaneId`] is placed; [`sync_visibility`] then hides the ones the App does
-/// not want, keeping their place.
+/// The sessions sidebar and the five fixed tabs beside it
+/// ([`PaneId::LEFT_TABS`]) form the left column, sized wide enough for six
+/// tabs at craft-ui's minimum width; the transcript sits above the prompt in
+/// the centre; the agents, teams, queue and diff panes share the right
+/// column. Every [`PaneId`] is placed; [`sync_visibility`] then hides the ones
+/// the App does not want, keeping their place.
 ///
 /// # Returns
 ///
 /// A layout that passes [`Layout::validate`].
 pub fn default_layout() -> Layout<PaneId> {
-    let left = tabs(vec![
-        PaneId::Sessions,
-        PaneId::Context,
-        PaneId::Profile,
-        PaneId::Memory,
-    ]);
+    let mut left_tabs = vec![PaneId::Sessions];
+    left_tabs.extend(PaneId::LEFT_TABS);
+    let left = tabs(left_tabs);
     let centre = split(
         SplitAxis::Vertical,
         SplitSize::FixedSecond(120.0),
         tabs(vec![PaneId::Messages]),
         tabs(vec![PaneId::Prompt]),
     );
-    let right = split(
-        SplitAxis::Vertical,
-        SplitSize::Ratio(0.6),
-        tabs(vec![
-            PaneId::ActiveAgents,
-            PaneId::Teams,
-            PaneId::Tasks,
-            PaneId::Queue,
-            PaneId::Diff,
-        ]),
-        tabs(vec![PaneId::Log]),
-    );
+    let right = tabs(vec![
+        PaneId::ActiveAgents,
+        PaneId::Teams,
+        PaneId::Queue,
+        PaneId::Diff,
+    ]);
     let main = split(SplitAxis::Horizontal, SplitSize::Ratio(0.75), centre, right);
     Layout {
         root: Some(split(
             SplitAxis::Horizontal,
-            SplitSize::Ratio(0.2),
+            SplitSize::Ratio(0.28),
             left,
             main,
         )),
@@ -422,14 +498,16 @@ pub fn default_layout() -> Layout<PaneId> {
     }
 }
 
-/// Pin the Context tab into the sessions sidebar's tab group.
+/// Pin the fixed tabs of the left column into the sessions sidebar's tab
+/// group, in [`PaneId::LEFT_TABS`] order after the sidebar's tab.
 ///
-/// A layout saved before the Context pane became a pinned tab may have it
-/// elsewhere, or hidden; this moves it (or opens it) into the group that
-/// holds the sessions sidebar, right after the sidebar's tab, and forgets
-/// where it was hidden. A layout without the sessions sidebar (hidden) is left
-/// alone, so the Context pane keeps its hidden place; the shell calls this
-/// again each frame, so it is pinned as soon as the sidebar is shown.
+/// A layout saved before these panes became fixed tabs may have them
+/// elsewhere (the log and tasks panes were in the right column, the profile
+/// and memory panes after another pane) or hidden; this moves each into the
+/// group that holds the sessions sidebar, in order, and forgets where it was
+/// hidden. A layout without the sessions sidebar (hidden) is left alone, so
+/// the panes keep their hidden places; the shell calls this again each frame,
+/// so they are pinned as soon as the sidebar is shown.
 ///
 /// # Arguments
 ///
@@ -442,44 +520,57 @@ pub fn default_layout() -> Layout<PaneId> {
 ///
 /// # Errors
 ///
-/// Returns the [`DockError`] craft-ui reports for the move.
-pub fn pin_context_tab(
+/// Returns the [`DockError`] craft-ui reports for the first move.
+pub fn pin_left_tabs(
     layout: &mut Layout<PaneId>,
     hidden: &mut HiddenPanes,
 ) -> Result<bool, DockError> {
     if !layout.contains(&PaneId::Sessions) {
         return Ok(false);
     }
-    hidden.remove(&PaneId::Context);
-    // The tab after the sidebar's, which the Context tab goes before.
-    let next = match layout.location(&PaneId::Sessions).map(|at| at.placement) {
-        Ok(Placement::Tab { before }) => before,
-        Ok(_) | Err(_) => None,
-    };
-    let action = if !layout.contains(&PaneId::Context) {
-        Action::OpenAt {
-            panel: PaneId::Context,
-            anchor: PaneId::Sessions,
-            placement: Placement::Tab { before: next },
+    // Moving or opening a pane makes it its group's active tab, so remember
+    // which of the group's panes was showing and put it back afterwards: a
+    // migration must not drop the user onto the pane that moved last.
+    let front_before = std::iter::once(PaneId::Sessions)
+        .chain(PaneId::LEFT_TABS)
+        .find(|pane| layout.panel_state(pane) == PanelState::Front);
+    let mut changed = false;
+    // Each pane goes before the tab that follows its predecessor, so the
+    // group ends up in `LEFT_TABS` order whatever order they arrive in.
+    let mut after = PaneId::Sessions;
+    for pane in PaneId::LEFT_TABS {
+        hidden.remove(&pane);
+        let next = match layout.location(&after).map(|at| at.placement) {
+            Ok(Placement::Tab { before }) => before,
+            Ok(_) | Err(_) => break,
+        };
+        if layout.contains(&pane) && next == Some(pane) {
+            after = pane;
+            continue;
         }
-    } else if next == Some(PaneId::Context) {
-        return Ok(false);
-    } else {
-        Action::Move {
-            panel: PaneId::Context,
-            anchor: PaneId::Sessions,
-            placement: Placement::Tab { before: next },
-        }
-    };
-    let front = layout.panel_state(&PaneId::Sessions) == PanelState::Front;
-    layout.apply(action)?;
-    // Joining the group must not cover the sidebar.
-    if front {
-        layout.apply(Action::Activate {
-            panel: PaneId::Sessions,
-        })?;
+        let action = if layout.contains(&pane) {
+            Action::Move {
+                panel: pane,
+                anchor: after,
+                placement: Placement::Tab { before: next },
+            }
+        } else {
+            Action::OpenAt {
+                panel: pane,
+                anchor: after,
+                placement: Placement::Tab { before: next },
+            }
+        };
+        layout.apply(action)?;
+        changed = true;
+        after = pane;
     }
-    Ok(true)
+    // The pane that was showing keeps the front; joining the group must not
+    // cover a pane the user was reading.
+    if let Some(front) = front_before.filter(|pane| layout.contains(pane)) {
+        layout.apply(Action::Activate { panel: front })?;
+    }
+    Ok(changed)
 }
 
 /// Size the split holding the prompt pane so the pane is `height` points
@@ -678,8 +769,8 @@ pub fn load_dock(path: &Path) -> (Layout<PaneId>, HiddenPanes) {
     match parsed {
         Ok((mut layout, mut hidden)) => {
             hidden.retain(|pane, _| !layout.contains(pane));
-            if let Err(err) = pin_context_tab(&mut layout, &mut hidden) {
-                tracing::warn!(%err, "cannot pin the Context tab; using default");
+            if let Err(err) = pin_left_tabs(&mut layout, &mut hidden) {
+                tracing::warn!(%err, "cannot pin the left column's fixed tabs; using default");
                 return (default_layout(), HiddenPanes::new());
             }
             (layout, hidden)
