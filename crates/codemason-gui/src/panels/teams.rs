@@ -4,8 +4,7 @@
 //! (lead + N teammates)`), a header naming the columns, the lead row, one
 //! row per teammate (focus marker, id, `name-id` label, agent type, status
 //! word, model or `(inherited)`, elapsed, steps, claimed and done task
-//! counts, messages sent and received, and the `[stop]`/`>`/`[approve]` and
-//! `[x]`/`[reject]` indicators), a `plan awaiting approval:` line under a
+//! counts, messages sent and received, and the Space/Delete key hints), a `plan awaiting approval:` line under a
 //! member waiting on a plan, the parked-member hint, the empty-state hint,
 //! then the key legend. The claimed/done counts and parked plans are read
 //! from the team's store each frame, as the TUI reads them.
@@ -43,7 +42,7 @@ use codemason_types::strutil::{format_duration_compact, short_suffix, truncate_c
 use egui::{Color32, Role};
 
 use super::agents::rows_in_view;
-use super::rows::{Follow, Line, label_panel, show_lines};
+use super::rows::{Follow, Line, label_panel, legend_height, show_lines};
 use crate::palette::Palette;
 
 /// Accessible label of the teams table.
@@ -277,7 +276,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             format!(
                 "{:MARKER_W$}{:<ID_W$} {:<LABEL_W$} {:<AGENT_TYPE_W$} {:<STATUS_W$} \
                  {:<MODEL_W$} {:>ELAPSED_W$} {:>STEPS_W$} {:>CLAIMED_W$} {:>DONE_W$} \
-                 {:>SENT_W$} {:>RECV_W$}  {:<STOP_W$}  [x]",
+                 {:>SENT_W$} {:>RECV_W$}  {:<STOP_W$}  del",
                 "",
                 "id",
                 "name",
@@ -290,7 +289,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
                 "done",
                 "sent",
                 "recv",
-                "[stop]"
+                "space"
             ),
             hint,
         ),
@@ -408,19 +407,20 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             member.name, member.agent_type
         ));
         if !is_terminal(&member.status) {
-            let (left, left_color, right, right_color) = match member.status {
-                MemberStatus::PlanPending => (
-                    "[approve]",
-                    ThemeColor::Success,
-                    "[reject]",
-                    ThemeColor::Error,
-                ),
-                MemberStatus::Suspended => (">", ThemeColor::Success, "[x]", ThemeColor::Error),
-                _ => ("[stop]", ThemeColor::Warning, "[x]", ThemeColor::Error),
+            // Key hints, muted plain words rather than bracketed
+            // button-like text: the keys act, a click only selects the row.
+            // A plan waiting for approval is answered with a slash command
+            // (its own line below says so); Space and Delete act as on any
+            // live member.
+            let left = if member.status == MemberStatus::Suspended {
+                "resume"
+            } else {
+                "stop"
             };
+            let right = "shut down";
             line = line
-                .push(format!("  {left:<STOP_W$}  "), palette.color(left_color))
-                .push(right, palette.color(right_color));
+                .push(format!("  {left:<STOP_W$}  "), palette.muted)
+                .push(right, palette.muted);
         }
         out.push((line, member.agent_id.clone()));
         if member.status == MemberStatus::PlanPending {
@@ -488,7 +488,8 @@ pub fn teams_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         .teams_cursor_teammate
         .and_then(|cursor| app.teams_teammate_agent_ids.get(cursor))
         .and_then(|id| app.teams_row_agent_ids.iter().position(|key| key == id));
-    let legend_height = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+    // The legend wraps in a narrow pane; the list leaves room for all of it.
+    let legend_height = legend_height(ui, LEGEND);
     let mut drawn = None;
     ui.vertical(|ui| {
         ui.strong(title(app));

@@ -5,7 +5,7 @@
 //! columns, the primary agent, an empty-state hint while nothing else would
 //! show, the ancestor-indented sub-agent tree (status suffixes, `[C]`/`[T]`
 //! badges, waiter counts, the `fg`/`bg`/`detached` contract, elapsed time,
-//! steps, and the `[stop]`/`>` and `[x]` indicators), the background shell
+//! steps, and the Space/Delete key hints), the background shell
 //! tasks and the completed history, then the key legend.
 //!
 //! # Keys and clicks
@@ -37,7 +37,7 @@ use codemason_app_core::styled::ThemeColor;
 use codemason_types::strutil::{format_duration_compact, short_suffix};
 use egui::{Color32, Role};
 
-use super::rows::{Follow, Line, label_panel, show_lines};
+use super::rows::{Follow, Line, label_panel, legend_height, show_lines};
 use crate::palette::Palette;
 
 /// Accessible label of the agents table.
@@ -142,15 +142,14 @@ fn fixed(
         .push(format!("{steps:>STEPS_W$} "), palette.muted)
 }
 
-/// The `[stop]`/`>` and `[x]` indicators of a live row.
+/// The key hints of a live row: what Space (stop or resume) and Delete
+/// (kill) do to it. They are muted plain words under the `space`/`del`
+/// header, not bracketed button-like text: the row's keys act, a click on
+/// them only selects the row.
 fn controls(line: Line, suspended: bool, palette: &Palette) -> Line {
-    let (glyph, color) = if suspended {
-        (">", palette.color(ThemeColor::Success))
-    } else {
-        ("[stop]", palette.color(ThemeColor::Warning))
-    };
-    line.push(format!("{glyph:<STOP_W$} "), color)
-        .push("[x]", palette.color(ThemeColor::Error))
+    let space = if suspended { "resume" } else { "stop" };
+    line.push(format!("{space:<STOP_W$} "), palette.muted)
+        .push("kill", palette.muted)
 }
 
 /// What the sub-agent tree rows read.
@@ -247,8 +246,8 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
     let mut out: Vec<(Line, String)> = vec![(
         Line::new().push(
             format!(
-                "  {:<ID_W$} {:<LABEL_W$}{:<TYPE_W$}{:>ELAPSED_W$} {:>STEPS_W$} {:<STOP_W$} [x]",
-                "id", "name", "type", "elapsed", "steps", "[stop]"
+                "  {:<ID_W$} {:<LABEL_W$}{:<TYPE_W$}{:>ELAPSED_W$} {:>STEPS_W$} {:<STOP_W$} del",
+                "id", "name", "type", "elapsed", "steps", "space"
             ),
             dim,
         ),
@@ -374,7 +373,8 @@ pub fn agents_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         .agents_cursor_subagent
         .and_then(|cursor| app.agents_subagent_task_ids.get(cursor))
         .and_then(|id| app.agents_row_task_ids.iter().position(|key| key == id));
-    let legend_height = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+    // The legend wraps in a narrow pane; the list leaves room for all of it.
+    let legend_height = legend_height(ui, LEGEND);
     let mut drawn = None;
     ui.vertical(|ui| {
         let list_height = (ui.available_height() - legend_height).max(0.0);

@@ -21,6 +21,7 @@ use codemason_app_core::theme_tokens::Rgb;
 
 use super::material_modal;
 use crate::material::button::{ButtonKind, button};
+use crate::material::dialog::dialog_actions;
 use crate::metrics::space;
 use crate::palette::rgb;
 
@@ -120,17 +121,22 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                     }
                 });
             ui.add_space(space::SM);
-            ui.horizontal(|ui| {
+            // Save and Cancel sit at the trailing edge, as in every dialog;
+            // the destructive Reset is a text button apart at the leading
+            // edge, so it never outranks Cancel.
+            dialog_actions(ui, |ui| {
                 if button(ui, &palette, ButtonKind::Filled, None, SAVE_THEME).clicked() {
                     action = Some(Action::Save);
                 }
                 if button(ui, &palette, ButtonKind::Text, None, CANCEL_EDIT).clicked() {
                     action = Some(Action::Cancel);
                 }
-                if builtin
-                    && button(ui, &palette, ButtonKind::Outlined, None, RESET_THEME).clicked()
-                {
-                    action = Some(Action::Reset);
+                if builtin {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if button(ui, &palette, ButtonKind::Text, None, RESET_THEME).clicked() {
+                            action = Some(Action::Reset);
+                        }
+                    });
                 }
             });
         },

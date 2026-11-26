@@ -289,3 +289,23 @@ fn test_theme_editor_keyboard_reaches_and_presses_save_and_reset() {
         reset_from_keyboard(&scratch, picker);
     }
 }
+
+#[test]
+fn test_theme_editor_reset_sits_apart_at_the_leading_edge() {
+    let scratch = ScratchThemes::scrub_themes();
+    let (_rt, mut harness) = rig(&scratch, |_| {});
+    harness.run();
+    harness.get_by_label(&edit_theme_label("nord")).click();
+    harness.run();
+    let reset = harness.get_by_label(RESET_THEME).rect();
+    let cancel = harness.get_by_label(CANCEL_EDIT).rect();
+    let save = harness.get_by_label(SAVE_THEME).rect();
+    assert!(
+        save.left() > cancel.left(),
+        "Save trails Cancel: {save:?} {cancel:?}"
+    );
+    assert!(
+        reset.right() < cancel.left(),
+        "Reset leads, apart from Cancel: {reset:?} {cancel:?}"
+    );
+}

@@ -435,7 +435,7 @@ pub fn ribbon_ui(
         return None;
     }
     let tab = TABS.get(state.tab).or_else(|| TABS.first())?;
-    let full = BAND_MARGIN.mul_add(2.0, BAND_HEIGHT);
+    let full = BAND_MARGIN.mul_add(2.0, BAND_HEIGHT) + band_bar_room(&ctx);
     let top = ui.cursor().min;
     let width = ui.available_width();
     let (visible, _) = ui.allocate_exact_size(Vec2::new(width, full * openness), Sense::hover());
@@ -597,12 +597,18 @@ fn band(
         .inner_margin(egui::Margin::symmetric(8, BAND_MARGIN as i8))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.set_height(BAND_HEIGHT);
             // In a window too narrow for the groups the band scrolls
             // sideways (a plain mouse wheel scrolls it too), so no command
-            // is cut off; at full width nothing scrolls.
+            // is cut off; at full width nothing scrolls. While it scrolls,
+            // a solid bar shows that more groups lie past the edge, on a
+            // row of its own below the captions rather than over them.
+            let bar_room = band_bar_room(ui.ctx());
+            if bar_room > 0.0 {
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            }
+            ui.set_height(BAND_HEIGHT + bar_room);
             ui.style_mut().always_scroll_the_only_direction = true;
-            egui::ScrollArea::horizontal()
+            let output = egui::ScrollArea::horizontal()
                 .id_salt("ribbon_band_scroll")
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -617,8 +623,31 @@ fn band(
                         }
                     });
                 });
+            let overflows = output.content_size.x > output.inner_rect.width() + 0.5;
+            let ctx = ui.ctx().clone();
+            if overflows != (bar_room > 0.0) {
+                ctx.data_mut(|d| d.insert_temp(band_overflows_id(), overflows));
+                ctx.request_discard("ribbon band overflow changed");
+            }
         });
     chosen
+}
+
+/// The memory slot holding whether the band's groups overflowed its width
+/// last frame.
+fn band_overflows_id() -> egui::Id {
+    egui::Id::unique("codemason_ribbon_band_overflows")
+}
+
+/// The extra height the band takes for its solid scroll bar: the bar's
+/// width while the groups overflow the band, else zero.
+fn band_bar_room(ctx: &egui::Context) -> f32 {
+    let overflows = ctx.data(|d| d.get_temp::<bool>(band_overflows_id()).unwrap_or(false));
+    if overflows {
+        egui::style::ScrollStyle::solid().allocated_width()
+    } else {
+        0.0
+    }
 }
 
 /// A divider between two groups, inset from the band's edges.

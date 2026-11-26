@@ -234,6 +234,28 @@ pub fn show_lines(
     }
 }
 
+/// The height a key legend drawn with `ui.weak(text)` under a list takes,
+/// wrapped to the pane's width, plus the gap above it: the room the list
+/// leaves so no legend line is pushed below the pane.
+///
+/// # Arguments
+///
+/// * `ui` - the pane's body, whose available width the legend wraps to.
+/// * `text` - the legend.
+///
+/// # Returns
+///
+/// The legend's height in points.
+pub fn legend_height(ui: &egui::Ui, text: &str) -> f32 {
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Wrap),
+        ui.available_width(),
+        egui::TextStyle::Body,
+    );
+    galley.size().y + ui.spacing().item_spacing.y
+}
+
 /// Give the list drawn in `rect` its accessible `role` and `label`.
 ///
 /// # Arguments

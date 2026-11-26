@@ -110,8 +110,16 @@ fn field_ui<R>(
 ) -> R {
     let m3 = &palette.m3;
     let ctx = ui.ctx().clone();
-    let last = field_height(&ctx).unwrap_or(pane.height());
-    let room = (ctx.content_rect().height() * FIELD_MAX_SHARE).max(last);
+    let mut last = field_height(&ctx).unwrap_or(pane.height());
+    let mut room = (ctx.content_rect().height() * FIELD_MAX_SHARE).max(last);
+    // In a short window the dock clamps the pane below the field's height
+    // (the messages keep their minimum). The field then fits the pane, so
+    // its editor scrolls instead of its top (attachments, first rows) being
+    // cut off with no way to reach it.
+    if pane.height() < last - 0.5 {
+        last = pane.height();
+        room = pane.height();
+    }
     let top = pane.bottom() - last;
     let column = Rect::from_min_max(pos2(pane.left(), top), pos2(pane.right(), top + room));
     let frame = Frame::new()
