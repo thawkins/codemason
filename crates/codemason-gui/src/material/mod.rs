@@ -194,6 +194,23 @@ pub(crate) fn text_galley(
     )
 }
 
+/// `text` laid out in `font` and `colour` on one line, cut with an ellipsis
+/// to `max_width` points; the galley's `elided` flag says whether it was.
+pub(crate) fn elided_galley(
+    ui: &egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    colour: Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    egui::WidgetText::from(egui::RichText::new(text).font(font).color(colour)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        max_width.max(0.0),
+        egui::TextStyle::Body,
+    )
+}
+
 /// The M3 "label large" font: 14 pt medium, used on buttons, tabs and chips.
 ///
 /// # Arguments

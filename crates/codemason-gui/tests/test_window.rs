@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 use codemason_app_core::app::App;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_gui::Shell;
-use codemason_gui::platform::window::{CANCEL_QUIT, CONFIRM_QUIT, QUIT_TITLE, WindowGeometry};
+use codemason_gui::platform::window::{
+    CANCEL_QUIT, CONFIRM_QUIT, MIN_SIZE, QUIT_TITLE, WindowGeometry,
+};
 use craft_window::restore::{Monitor, MonitorKey};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -506,5 +508,30 @@ fn test_persistent_geometry_write_error_warns_once() {
         text.matches("cannot save the window geometry").count(),
         1,
         "one warning for a persistent error, got:\n{text}"
+    );
+}
+
+#[test]
+fn test_window_has_a_minimum_size() {
+    let path = scratch("min_first").join("gui-window.json");
+    let viewport = opened_with(&path);
+    assert_eq!(
+        viewport.min_inner_size,
+        Some(egui::vec2(MIN_SIZE[0], MIN_SIZE[1]))
+    );
+}
+
+#[test]
+fn test_window_small_saved_size_reopens_at_the_minimum() {
+    let path = scratch("min_saved").join("gui-window.json");
+    let mut geometry = WindowGeometry::open(&path);
+    geometry.record(&normal_info([10.0, 10.0], [200.0, 150.0], 1.0), 1.0);
+    geometry.save();
+
+    let viewport = opened_with(&path);
+    let size = viewport.inner_size.expect("a saved size");
+    assert!(
+        size.x >= MIN_SIZE[0] && size.y >= MIN_SIZE[1],
+        "saved 200x150 reopened at {size:?}"
     );
 }

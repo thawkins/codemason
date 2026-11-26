@@ -109,3 +109,21 @@ fn test_dialog_bounds_long_session_menu_stays_in_a_small_window() {
     let last = harness.get_by_label("Section 39").rect();
     assert!(inside_window(last), "item {last:?} in window {WINDOW:?}");
 }
+
+#[test]
+fn test_dialog_bounds_long_notice_detail_keeps_ok_in_a_small_window() {
+    let (_rt, mut harness) = rig(|app| {
+        app.notice_open = true;
+        app.notice_title = "Error".to_string();
+        app.notice_message = "Something failed".to_string();
+        app.notice_detail = Some(
+            (0..200)
+                .map(|i| format!("    at frame {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    });
+    harness.run();
+    let ok = harness.get_by_role_and_label(Role::Button, "OK").rect();
+    assert!(inside_window(ok), "OK {ok:?} in window {WINDOW:?}");
+}

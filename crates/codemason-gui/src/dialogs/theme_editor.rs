@@ -21,6 +21,7 @@ use codemason_app_core::theme_tokens::Rgb;
 
 use super::material_modal;
 use crate::material::button::{ButtonKind, button};
+use crate::material::dialog::dialog_actions;
 use crate::metrics::space;
 use crate::palette::rgb;
 
@@ -99,7 +100,11 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             // The colours scroll on their own, so the buttons stay in view.
             egui::ScrollArea::vertical()
                 .id_salt("theme_editor_colours")
-                .max_height(LIST_HEIGHT)
+                .max_height(LIST_HEIGHT.min(super::body_height(
+                    ui.ctx(),
+                    1.0,
+                    super::DIALOG_CHROME,
+                )))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for group in colours.chunk_by(|a, b| group_of(&a.0) == group_of(&b.0)) {
@@ -116,17 +121,22 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                     }
                 });
             ui.add_space(space::SM);
-            ui.horizontal(|ui| {
+            // Save and Cancel sit at the trailing edge, as in every dialog;
+            // the destructive Reset is a text button apart at the leading
+            // edge, so it never outranks Cancel.
+            dialog_actions(ui, |ui| {
                 if button(ui, &palette, ButtonKind::Filled, None, SAVE_THEME).clicked() {
                     action = Some(Action::Save);
                 }
                 if button(ui, &palette, ButtonKind::Text, None, CANCEL_EDIT).clicked() {
                     action = Some(Action::Cancel);
                 }
-                if builtin
-                    && button(ui, &palette, ButtonKind::Outlined, None, RESET_THEME).clicked()
-                {
-                    action = Some(Action::Reset);
+                if builtin {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if button(ui, &palette, ButtonKind::Text, None, RESET_THEME).clicked() {
+                            action = Some(Action::Reset);
+                        }
+                    });
                 }
             });
         },

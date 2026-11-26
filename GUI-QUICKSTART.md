@@ -89,7 +89,10 @@ for it):
   and is labelled with its name. The Log, Profile, Tasks and Memory buttons
   stay highlighted while their panel is open. The band of buttons spans the
   window, so it keeps its size when you switch tabs; in a window too narrow
-  for a tab's buttons, scroll the mouse wheel over the band to reach the rest.
+  for a tab's buttons, a scroll bar appears under the band: drag it or scroll
+  the mouse wheel over the band to reach the rest. Tabs that do not fit in a
+  narrow window sit behind the **>** button after the last tab, which lists
+  them in a menu. The window cannot be made smaller than 640 x 420 points.
 - The chevron at the right of the tabs collapses the ribbon to its tabs;
   clicking any tab opens it again. codemason remembers whether the ribbon was
   collapsed (`gui-ribbon.json` in its config directory).

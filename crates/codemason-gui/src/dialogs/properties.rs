@@ -160,7 +160,11 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             if let (Some(cursor), Some((choices, _))) = (dialog.list, dialog.focused_choices()) {
                 let list = egui::ScrollArea::vertical()
                     .id_salt("codemason_properties_choices")
-                    .max_height(LIST_HEIGHT)
+                    .max_height(LIST_HEIGHT.min(super::body_height(
+                        ui.ctx(),
+                        1.0,
+                        super::DIALOG_CHROME,
+                    )))
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.vertical(|ui| {

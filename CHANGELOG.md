@@ -8,6 +8,12 @@
 
 ### Fixed
 
+- Fixed: GUI dialog buttons could be pushed off-screen. A long permission command or detail, many question options, a long notice detail, and the fixed-height lists of the theme editor, model picker, provider, router, properties and pickers now scroll within a window-aware height (`dialogs::body_height`), so the action buttons stay visible in a short window.
+- Fixed: ribbon tabs that did not fit a narrow window were dropped with no way to reach them; they now sit behind a "More ribbon tabs" overflow menu (`crates/codemason-gui/src/ribbon.rs`). While a tab's groups overflow the band, a solid scroll bar shows on its own row below the group captions instead of a hover-only bar drawn over them.
+- Fixed: the GUI window had no minimum size, and a tiny saved size came back on launch; it is now at least 640 x 420 points (`platform::window::MIN_SIZE`).
+- Fixed: cut-off text with no way to the full value. Material list items end in an ellipsis and show the full text on hover; memory rows carry the whole content instead of 80 bytes; Teams and Agents rows show the full name, type, model, id or command on hover (`rows::Line::hover`).
+- Fixed: in a short window the top of the prompt field (attachments, first rows) was clipped; the field now fits its pane and the editor scrolls (`crates/codemason-gui/src/page.rs`).
+- Fixed: the Teams and Agents key legends wrapped in a narrow pane and their extra lines were clipped; the list now leaves room for the wrapped legend (`rows::legend_height`).
 - Fixed: in themes without an `m3` block, the derived Material `secondary_container` role was `bg.raised2`, the same colour as `surface_container_high`, so a selected list row was invisible in a Material dialog. It is now the accent mixed 20% into `bg.raised2`; every built-in theme still passes its contrast check (`crates/codemason-app-core/src/theme_tokens.rs`).
 - Fixed: holding the right mouse button inside a transcript selection cut the selection off at the pointer, because egui's label selection treats a press of any button held on a label as a drag. `TranscriptSelection` now removes a right-press on the transcript (and its release) from egui's input in `Plugin::input_hook` and hands the click to the shell (`take_transcript_right_click`), so egui's selection never sees it. This replaces the save-and-restore of the selection around the press, which covered only the press frame (`crates/codemason-gui/src/dialogs/context_menu.rs`).
 
@@ -18,6 +24,8 @@
 
 ### Changed
 
+- Changed: one primary action per GUI view. The plugin/connector store rows' Install stays tonal (the details pane's is the filled one), the Swarm dialog's Ok is filled, and the theme editor's destructive Reset is a text button apart at the leading edge, with Save and Cancel trailing as in every dialog.
+- Changed: the Teams and Agents tables' bracketed `[stop]`/`[x]`/`[approve]` markers, which looked like buttons but only selected the row, are muted `stop`/`resume` and `kill`/`shut down` key hints under `space`/`del` column headers.
 - Changed: the GUI's Model Router setup (`/provider` -> Model Router) is now a Material dialog instead of the terminal-style text lines. Providers are filter chips that toggle cluster membership; the four tiers are segmented buttons labelled with their model counts; the active tier's models are list items in fallback order with move up, move down and remove buttons; an "Add from <provider>" chip opens the model picker for the active tier; Save and Cancel are dialog actions. Clicks drive the same app-core key handling, so the keyboard shortcuts are unchanged. The highlighted provider chip is outlined; the selected model row uses the list's selected fill. The router save confirmation is a Material dialog too (`crates/codemason-gui/src/dialogs/router.rs`, `crates/codemason-gui/src/dialogs/confirm.rs`).
 - Changed: in the GUI, Esc stops a running turn only when typed into the focused prompt (or chosen as the ribbon/toolbar **Stop** command). An Esc pressed elsewhere, or sent by a dialog to close itself, no longer cancels the turn. New `App::esc_stops_turn` flag, set by the GUI for each key it forwards and always `true` in the TUI.
 

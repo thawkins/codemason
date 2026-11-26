@@ -23,7 +23,9 @@ use egui::{
 };
 
 use super::feedback::{SWATCH_RADIUS, SWATCH_SIZE, swatch_rect};
-use super::{content_colour, label_large, paint_state_layer, state_opacity, text_galley};
+use super::{
+    content_colour, elided_galley, label_large, paint_state_layer, state_opacity, text_galley,
+};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::{Palette, rgb};
 
@@ -128,14 +130,26 @@ pub fn list_item(
     let trail_width = trail.as_ref().map_or(0.0, |t| t.size().x + TRAILING_GAP);
     let text_right = rect.right() - PADDING - trail_width;
     let clip = rect.with_max_x(text_right.max(rect.left()));
-    let head = text_galley(
+    // Text wider than the row is cut with an ellipsis, and hovering shows
+    // it whole.
+    let text_width = clip.width() - PADDING;
+    let head = elided_galley(
         ui,
         headline,
         egui::FontId::proportional(text_size::BODY),
         content,
+        text_width,
     );
-    let sub = supporting
-        .map(|s| text_galley(ui, s, egui::FontId::proportional(text_size::SMALL), variant));
+    let sub = supporting.map(|s| {
+        elided_galley(
+            ui,
+            s,
+            egui::FontId::proportional(text_size::SMALL),
+            variant,
+            text_width,
+        )
+    });
+    let cut = head.elided || sub.as_ref().is_some_and(|s| s.elided);
     let block = head.size().y + sub.as_ref().map_or(0.0, |s| s.size().y);
     let mut y = rect.center().y - block / 2.0;
     let x = rect.left() + PADDING;
@@ -152,6 +166,10 @@ pub fn list_item(
             rect.center().y - trail.size().y / 2.0,
         );
         ui.painter().galley(pos, trail, variant);
+    }
+    if cut {
+        let full = supporting.map_or_else(|| headline.to_owned(), |s| format!("{headline}\n{s}"));
+        return response.on_hover_text(full);
     }
     response
 }
@@ -241,8 +259,10 @@ pub fn dense_item(
     }
     let columns_left = DENSE_COLUMN.mul_add(-(trailing.len() as f32), rect.right());
     let font = egui::FontId::proportional(text_size::SMALL + 1.0);
-    let head = text_galley(ui, headline, font.clone(), content);
     let clip = rect.with_max_x((columns_left - DENSE_GAP).max(x));
+    // A long name is cut with an ellipsis, and hovering shows it whole.
+    let head = elided_galley(ui, headline, font.clone(), content, clip.right() - x);
+    let cut = head.elided;
     painter.with_clip_rect(clip).galley(
         egui::pos2(x, centre_y - head.size().y / 2.0),
         head,
@@ -253,6 +273,9 @@ pub fn dense_item(
         let right = DENSE_COLUMN.mul_add((index + 1) as f32, columns_left);
         let pos = egui::pos2(right - galley.size().x, centre_y - galley.size().y / 2.0);
         painter.galley(pos, galley, variant);
+    }
+    if cut {
+        return response.on_hover_text(headline);
     }
     response
 }
@@ -400,7 +423,10 @@ pub fn avatar_list_item<R>(
     text.style_mut().interaction.selectable_labels = false;
     text.spacing_mut().item_spacing = Vec2::new(space::SM, LINE_GAP);
     text.horizontal(|ui| {
-        ui.label(RichText::new(item.headline).strong().color(content));
+        // The headline identifies the row: it keeps the width first, cut
+        // with an ellipsis (hover shows it whole) when the trailing slot is
+        // wide.
+        ui.add(Label::new(RichText::new(item.headline).strong().color(content)).truncate());
         ui.add(
             Label::new(
                 RichText::new(item.subtitle)

@@ -536,6 +536,34 @@ pub(crate) fn modal<R>(
         .inner
 }
 
+/// The room a dialog's heading, labels, buttons and hint usually take, in
+/// points; a scrolling list or preview inside the dialog leaves this much.
+pub(crate) const DIALOG_CHROME: f32 = 200.0;
+
+/// The smallest a dialog's scrolling list or preview shrinks to, in points,
+/// so a few rows still show in a short window.
+const MIN_BODY_HEIGHT: f32 = 72.0;
+
+/// The height for a scrolling list or preview inside a dialog: `share` of
+/// the window, but short enough that `reserved` points of heading, fields
+/// and buttons still fit in the window beside it.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context, whose window height is used.
+/// * `share` - the preferred fraction of the window's height (0..=1).
+/// * `reserved` - the points the rest of the dialog needs.
+///
+/// # Returns
+///
+/// The list's maximum height, never below a few rows.
+pub(crate) fn body_height(ctx: &egui::Context, share: f32, reserved: f32) -> f32 {
+    let window = ctx.content_rect().height();
+    (window * share)
+        .min(window - DIALOG_WINDOW_MARGIN - reserved)
+        .max(MIN_BODY_HEIGHT)
+}
+
 /// Room a Material dialog leaves around it in the window: its own padding
 /// on both sides plus a margin, in points.
 const DIALOG_WINDOW_MARGIN: f32 = 80.0;

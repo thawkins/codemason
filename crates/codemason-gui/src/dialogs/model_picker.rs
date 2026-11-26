@@ -286,7 +286,11 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             ui.add_space(space::SM);
             shown = matching(models, &text);
             let list = egui::ScrollArea::vertical()
-                .max_height(LIST_HEIGHT)
+                .max_height(LIST_HEIGHT.min(super::body_height(
+                    ui.ctx(),
+                    1.0,
+                    super::DIALOG_CHROME,
+                )))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.vertical(|ui| {

@@ -80,6 +80,12 @@ fn countdown(expire_at_ms: Option<u64>) -> Option<String> {
     })
 }
 
+/// The memory slot holding the option highlighted last frame, so a newly
+/// highlighted option is scrolled into view once.
+fn last_selected_id() -> Id {
+    Id::unique("codemason_question_last_selected")
+}
+
 /// Draw the question dialog for the front question, if any.
 ///
 /// # Arguments
@@ -107,6 +113,11 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let selected = app.session.question_selected_index;
     let answer = &mut app.session.pending_question_input;
     let mut clicked: Option<(usize, bool)> = None;
+    let moved = ctx.data_mut(|d| {
+        let last = d.get_temp::<usize>(last_selected_id());
+        d.insert_temp(last_selected_id(), selected);
+        last != Some(selected)
+    });
     modal(ctx, "codemason_question_dialog", QUESTION_TITLE, |ui| {
         ui.label(question.as_str());
         ui.add_space(crate::metrics::space::XS);
@@ -137,22 +148,32 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             });
             ui.weak("Enter to submit  Esc to dismiss");
         } else {
-            let list = ui.vertical(|ui| {
-                for (i, option) in options.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let row = ui.selectable_label(i == selected, option.as_str());
-                        if row.double_clicked() {
-                            clicked = Some((i, true));
-                        } else if row.clicked() {
-                            clicked = Some((i, false));
+            // Many options scroll, so Select and Dismiss stay in view.
+            let list = egui::ScrollArea::vertical()
+                .id_salt("question_options")
+                .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        for (i, option) in options.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                let row = ui.selectable_label(i == selected, option.as_str());
+                                if i == selected && moved {
+                                    row.scroll_to_me(None);
+                                }
+                                if row.double_clicked() {
+                                    clicked = Some((i, true));
+                                } else if row.clicked() {
+                                    clicked = Some((i, false));
+                                }
+                                if i == default {
+                                    ui.weak("(default)");
+                                }
+                            });
                         }
-                        if i == default {
-                            ui.weak("(default)");
-                        }
-                    });
-                }
-            });
-            list.response
+                    })
+                    .response
+                });
+            list.inner
                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, OPTIONS_LABEL));
             ui.add_space(crate::metrics::space::SM);
             ui.add_enabled_ui(answerable, |ui| {

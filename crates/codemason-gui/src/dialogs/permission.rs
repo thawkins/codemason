@@ -78,9 +78,8 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         match &preview {
             Some(PermissionPreview::Diffs(diffs)) => {
                 ui.label(CHANGES_LABEL);
-                let height = ctx.content_rect().height() * 0.5;
                 egui::ScrollArea::both()
-                    .max_height(height)
+                    .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         for diff in diffs {
@@ -96,12 +95,27 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                     .corner_radius(crate::metrics::radius::SM)
                     .inner_margin(crate::metrics::space::SM)
                     .show(ui, |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(command).monospace()).wrap());
+                        // A long heredoc scrolls, so the answer buttons stay
+                        // in view.
+                        egui::ScrollArea::vertical()
+                            .id_salt("permission_command")
+                            .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(command).monospace())
+                                        .wrap(),
+                                );
+                            });
                     });
             }
             None => {
                 ui.label("Details:");
-                ui.monospace(detail);
+                egui::ScrollArea::vertical()
+                    .id_salt("permission_detail")
+                    .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
+                    .show(ui, |ui| {
+                        ui.monospace(&detail);
+                    });
             }
         }
         ui.weak(countdown);

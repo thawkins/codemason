@@ -35,6 +35,10 @@ use super::{key_buttons, modal, plain};
 /// Title of the rollback offer.
 pub const ROLLBACK_TITLE: &str = "Roll back the loop's changes?";
 
+/// The room the memory view's metadata lines, buttons and hint take, in
+/// points, beside its scrolling content.
+const MEMORY_VIEW_CHROME: f32 = 300.0;
+
 /// The button that rolls the workspace back (Enter).
 pub const ROLL_BACK: &str = "Roll back";
 
@@ -123,7 +127,7 @@ pub fn show_rollback(ctx: &egui::Context, app: &mut App) -> bool {
             ui.label(offer.diffstat.as_str());
         }
         egui::ScrollArea::vertical()
-            .max_height(200.0)
+            .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
             .show(ui, |ui| {
                 for file in &offer.files {
                     ui.monospace(file.as_str());
@@ -160,7 +164,7 @@ pub fn show_plan_approval(ctx: &egui::Context, app: &mut App) -> bool {
     };
     modal(ctx, "codemason_plan_dialog", PLAN_TITLE, |ui| {
         egui::ScrollArea::vertical()
-            .max_height((ctx.content_rect().height() * 0.6).max(120.0))
+            .max_height(super::body_height(ctx, 0.6, super::DIALOG_CHROME))
             .show(ui, |ui| {
                 ui.label(state.plan_text.as_str());
             });
@@ -282,7 +286,14 @@ pub fn show_notice(ctx: &egui::Context, app: &mut App) -> bool {
     modal(ctx, "codemason_notice_dialog", title, |ui| {
         ui.label(app.notice_message.as_str());
         if let Some(detail) = app.notice_detail.as_deref() {
-            ui.monospace(detail);
+            // A stack trace or log scrolls on its own, so OK stays in view.
+            egui::ScrollArea::both()
+                .id_salt("notice_detail")
+                .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.monospace(detail);
+                });
         }
         ui.add_space(crate::metrics::space::SM);
         key_buttons(ui, &[(NOTICE_OK, ENTER)]);
@@ -545,8 +556,9 @@ pub fn show_memory_view(ctx: &egui::Context, app: &mut App) -> bool {
         ui.label(format!("Updated: {}", row.updated_at));
         ui.add_space(crate::metrics::space::XS);
         ui.weak("Content:");
+        // Five metadata lines sit above the content.
         egui::ScrollArea::vertical()
-            .max_height((ctx.content_rect().height() * 0.6).max(120.0))
+            .max_height(super::body_height(ctx, 0.6, MEMORY_VIEW_CHROME))
             .show(ui, |ui| {
                 ui.label(row.content.as_str());
             });

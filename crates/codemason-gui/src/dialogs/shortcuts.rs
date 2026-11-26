@@ -35,7 +35,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     }
     modal(ctx, "codemason_shortcuts_panel", SHORTCUTS_TITLE, |ui| {
-        let height = (ctx.content_rect().height() * 0.7).max(120.0);
+        let height = super::body_height(ctx, 0.7, super::DIALOG_CHROME);
         egui::ScrollArea::vertical()
             .max_height(height)
             .show(ui, |ui| {

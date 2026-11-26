@@ -23,6 +23,7 @@ use crate::styled_text::{FONT_SIZE, drawable};
 #[derive(Clone, Debug, Default)]
 pub struct Line {
     sections: Vec<(String, Color32)>,
+    hover: Option<String>,
 }
 
 impl Line {
@@ -49,6 +50,22 @@ impl Line {
     #[must_use]
     pub fn push(mut self, text: impl Into<String>, color: Color32) -> Self {
         self.sections.push((text.into(), color));
+        self
+    }
+
+    /// Show `text` when the row is hovered, in place of the row's own text:
+    /// the full values of columns the row cuts to a fixed width.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - the hover text.
+    ///
+    /// # Returns
+    ///
+    /// The line with its hover text set.
+    #[must_use]
+    pub fn hover(mut self, text: impl Into<String>) -> Self {
+        self.hover = Some(text.into());
         self
     }
 
@@ -190,7 +207,8 @@ pub fn show_lines(
     let output = scroll.show_rows(ui, height, count, |ui, range| {
         for index in range {
             let background = (cursor == Some(index)).then_some(selection);
-            let job = line(index).job(ui.ctx(), background);
+            let drawn = line(index);
+            let job = drawn.job(ui.ctx(), background);
             // A line wider than the pane is cut at its edge, as the TUI
             // clips it (hovering shows it whole), so a row's click target is
             // always on screen.
@@ -198,7 +216,14 @@ pub fn show_lines(
             if clickable(index) {
                 label = label.sense(egui::Sense::click());
             }
-            if ui.add(label).clicked() {
+            if drawn.hover.is_some() {
+                label = label.show_tooltip_when_elided(false);
+            }
+            let mut response = ui.add(label);
+            if let Some(hover) = drawn.hover {
+                response = response.on_hover_text(hover);
+            }
+            if response.clicked() {
                 clicked = Some(index);
             }
         }
@@ -207,6 +232,28 @@ pub fn show_lines(
         rect: output.inner_rect,
         clicked,
     }
+}
+
+/// The height a key legend drawn with `ui.weak(text)` under a list takes,
+/// wrapped to the pane's width, plus the gap above it: the room the list
+/// leaves so no legend line is pushed below the pane.
+///
+/// # Arguments
+///
+/// * `ui` - the pane's body, whose available width the legend wraps to.
+/// * `text` - the legend.
+///
+/// # Returns
+///
+/// The legend's height in points.
+pub fn legend_height(ui: &egui::Ui, text: &str) -> f32 {
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Wrap),
+        ui.available_width(),
+        egui::TextStyle::Body,
+    );
+    galley.size().y + ui.spacing().item_spacing.y
 }
 
 /// Give the list drawn in `rect` its accessible `role` and `label`.
