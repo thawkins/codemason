@@ -332,7 +332,8 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             Some(lead_sent),
             Some(lead_recv),
             palette,
-        ),
+        )
+        .hover(name.as_str()),
         "lead".to_string(),
     ));
     let members = &app.session.team_members;
@@ -387,6 +388,11 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
                 status_color(&member.status, palette),
             )
             .push(format!("{model:<MODEL_W$}"), model_color);
+        // The columns cut names to fixed widths; hovering shows them whole.
+        let full_model = member.model_override.as_ref().map_or_else(
+            || "(inherited)".to_string(),
+            |m| format!("{}/{}", m.provider_id, m.model_id),
+        );
         let mut line = counters(
             line,
             &elapsed(member.created_at),
@@ -396,7 +402,11 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             sent,
             recv,
             palette,
-        );
+        )
+        .hover(format!(
+            "{}-{short}\nType: {}\nModel: {full_model}",
+            member.name, member.agent_type
+        ));
         if !is_terminal(&member.status) {
             let (left, left_color, right, right_color) = match member.status {
                 MemberStatus::PlanPending => (

@@ -595,12 +595,9 @@ fn result_row(
             if row.installed {
                 button(ui, palette, ButtonKind::Outlined, None, UNINSTALL).clicked()
             } else {
-                let kind = if selected {
-                    ButtonKind::Filled
-                } else {
-                    ButtonKind::Tonal
-                };
-                button(ui, palette, kind, None, INSTALL).clicked()
+                // The details pane's Install is the view's one filled
+                // (primary) action; the row's stays tonal.
+                button(ui, palette, ButtonKind::Tonal, None, INSTALL).clicked()
             }
         },
     );

@@ -68,11 +68,14 @@ pub const WINDOW_FILE: &str = "gui-window.json";
 /// The largest window size, in points, a saved placement may hold.
 const MAX_POINTS: f32 = 100_000.0;
 
+/// The smallest window, in points, both for the window itself and for
+/// craft-window's placement: the title strip, ribbon and status bar (about
+/// 190 points) plus room for the transcript and the prompt. A smaller
+/// window, or a smaller saved size, would collapse the dock.
+pub const MIN_SIZE: [f32; 2] = [640.0, 420.0];
+
 /// Size of a window that is un-maximized before any normal rect was seen.
 const DEFAULT_SIZE: [f32; 2] = [1200.0, 800.0];
-
-/// The smallest window craft-window's placement keeps, in points.
-const MIN_SIZE: [f32; 2] = [480.0, 320.0];
 
 /// The smallest interface scale a saved window may restore (egui's own
 /// minimum for `Context::set_zoom_factor`'s useful range).
@@ -161,11 +164,18 @@ impl WindowGeometry {
     /// The viewport with its size, position and maximized state set.
     #[must_use]
     pub fn viewport(&self, builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
+        let builder = builder.with_min_inner_size(MIN_SIZE);
         let Some(saved) = self.saved() else {
             return builder.with_maximized(true);
         };
+        // A size saved below the minimum (an older build, a tiling WM)
+        // reopens at the minimum instead.
+        let size = [
+            saved.normal.size[0].max(MIN_SIZE[0]),
+            saved.normal.size[1].max(MIN_SIZE[1]),
+        ];
         let mut builder = builder
-            .with_inner_size(saved.normal.size)
+            .with_inner_size(size)
             .with_maximized(saved.maximized);
         if let Some(px) = saved.position_px {
             let scale = if saved.scale.is_finite() && saved.scale > 0.0 {

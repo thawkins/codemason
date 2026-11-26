@@ -399,7 +399,7 @@ fn tiers_section(ui: &mut egui::Ui, palette: &Palette, view: &View<'_>) -> Optio
     } else {
         let list = egui::ScrollArea::vertical()
             .id_salt("codemason_router_models")
-            .max_height(LIST_HEIGHT)
+            .max_height(LIST_HEIGHT.min(super::body_height(ui.ctx(), 1.0, super::DIALOG_CHROME)))
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.vertical(|ui| {

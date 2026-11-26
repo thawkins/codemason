@@ -76,7 +76,7 @@ fn choice_list(
     let mut clicked = (None, false);
     let list = egui::ScrollArea::vertical()
         .id_salt("codemason_provider_choice")
-        .max_height(LIST_HEIGHT)
+        .max_height(LIST_HEIGHT.min(super::body_height(ui.ctx(), 1.0, super::DIALOG_CHROME)))
         .auto_shrink([false, true])
         .show(ui, |ui| {
             ui.vertical(|ui| {

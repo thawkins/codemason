@@ -99,7 +99,11 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
             // The colours scroll on their own, so the buttons stay in view.
             egui::ScrollArea::vertical()
                 .id_salt("theme_editor_colours")
-                .max_height(LIST_HEIGHT)
+                .max_height(LIST_HEIGHT.min(super::body_height(
+                    ui.ctx(),
+                    1.0,
+                    super::DIALOG_CHROME,
+                )))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for group in colours.chunk_by(|a, b| group_of(&a.0) == group_of(&b.0)) {

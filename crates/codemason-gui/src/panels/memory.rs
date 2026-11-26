@@ -30,7 +30,6 @@ use std::collections::BTreeMap;
 
 use codemason_app_core::app::App;
 use codemason_app_core::styled::ThemeColor;
-use codemason_types::strutil::truncate_bytes;
 use egui::Role;
 
 use super::rows::{Follow, Line, label_panel, show_lines};
@@ -108,7 +107,9 @@ fn lines(app: &App, palette: &Palette) -> Vec<(Line, Option<usize>)> {
                     .push(" ", palette.text)
                     .push(format!("{}b", row.content.len()), palette.muted)
                     .push(" ", palette.text)
-                    .push(truncate_bytes(&row.content, 80), palette.text),
+                    // The whole content, on one line: the row cuts it at the
+                    // pane's edge and hovering shows all of it.
+                    .push(row.content.replace('\n', " "), palette.text),
                 Some(*index),
             ));
             if let Some(tags) = app.memory_cache_tags.get(&row.id).filter(|t| !t.is_empty()) {

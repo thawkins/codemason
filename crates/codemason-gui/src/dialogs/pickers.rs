@@ -75,7 +75,7 @@ pub(crate) fn entry_list(
     selected: usize,
 ) -> Option<(usize, bool)> {
     let mut clicked = None;
-    let height = (ui.ctx().content_rect().height() * 0.6).max(120.0);
+    let height = super::body_height(ui.ctx(), 0.6, super::DIALOG_CHROME);
     let list = egui::ScrollArea::vertical()
         .max_height(height)
         .show(ui, |ui| {
@@ -208,7 +208,7 @@ fn theme_entry_list(
 
     let mut clicked = None;
     let mut edit = None;
-    let height = (ui.ctx().content_rect().height() * 0.6).max(120.0);
+    let height = super::body_height(ui.ctx(), 0.6, super::DIALOG_CHROME);
     let list = egui::ScrollArea::vertical()
         .max_height(height)
         .show(ui, |ui| {

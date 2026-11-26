@@ -210,6 +210,8 @@ fn tree_rows(
         if !task.status.is_terminal() {
             line = controls(line, task.status == TaskStatus::Suspended, ctx.palette);
         }
+        // The label column cuts the id; hovering shows it whole.
+        let line = line.hover(format!("{}\n{}", task.id, task.agent_name));
         out.push((line, task.id.clone()));
         let mut stack = last_stack.to_vec();
         stack.push(is_last);
@@ -322,7 +324,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
             if task.status == "running" {
                 line = controls(line, false, palette);
             }
-            out.push((line, String::new()));
+            out.push((line.hover(task.command.as_str()), String::new()));
         }
     }
     if !app.agents_history.is_empty() {
@@ -347,7 +349,7 @@ fn rows(app: &App, palette: &Palette) -> (Vec<(Line, String)>, std::ops::Range<u
                 let yellow = palette.color(ThemeColor::Warning);
                 line = line.push("[memory] ", yellow).push(note, yellow);
             }
-            out.push((line, String::new()));
+            out.push((line.hover(format!("{}\n{label}", row.id)), String::new()));
         }
     }
     (out, tree)

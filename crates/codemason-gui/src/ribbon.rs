@@ -78,6 +78,9 @@ const BUTTON_ICON: f32 = 24.0;
 /// Horizontal padding of a tab label, in points.
 const TAB_PADDING: f32 = 16.0;
 
+/// The accessible name of the button listing the tabs that do not fit.
+pub const MORE_TABS_LABEL: &str = "More ribbon tabs";
+
 /// The tab the ribbon opens on: Home.
 pub const HOME_TAB: usize = 1;
 
@@ -459,7 +462,10 @@ fn tab_strip(ui: &mut egui::Ui, palette: &Palette, state: &mut RibbonState) {
         .map(|width| TAB_PADDING.mul_add(2.0, width))
         .collect();
     let chevron = crate::material::icon_button::SIZE;
-    let fit = fit_whole(&natural, state.tab, strip.width() - chevron, 0.0);
+    // Tabs that do not fit go behind an overflow button, so every tab stays
+    // reachable in a narrow window (the integrated frame has no native menu
+    // to fall back on).
+    let fit = fit_whole(&natural, state.tab, strip.width() - chevron, chevron);
     let mut x = strip.left();
     let mut underline = None;
     for (index, width) in fit.shown {
@@ -493,6 +499,43 @@ fn tab_strip(ui: &mut egui::Ui, palette: &Palette, state: &mut RibbonState) {
             Vec2::new(width, 3.0),
         );
         ui.painter().rect_filled(bar, 1.5, rgb(m3.primary));
+    }
+    if !fit.overflow.is_empty() {
+        let more_rect = Rect::from_min_size(
+            egui::pos2(x, strip.center().y - chevron / 2.0),
+            Vec2::splat(chevron),
+        );
+        let more = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(more_rect), |ui| {
+                icon_button(
+                    ui,
+                    palette,
+                    IconButtonKind::Standard,
+                    Icon::ChevronRight,
+                    MORE_TABS_LABEL,
+                    None,
+                )
+            })
+            .inner;
+        let picked = egui::Popup::menu(&more)
+            .frame(crate::material::menu::menu_frame(palette))
+            .show(|ui| {
+                let mut picked = None;
+                for &index in &fit.overflow {
+                    let Some(tab) = TABS.get(index) else { continue };
+                    if crate::material::menu::menu_item(ui, palette, None, tab.label, None)
+                        .clicked()
+                    {
+                        picked = Some(index);
+                    }
+                }
+                picked
+            })
+            .and_then(|inner| inner.inner);
+        if let Some(index) = picked {
+            state.tab = index;
+            state.collapsed = false;
+        }
     }
     let chevron_rect = Rect::from_min_size(
         egui::pos2(strip.right() - chevron, strip.center().y - chevron / 2.0),

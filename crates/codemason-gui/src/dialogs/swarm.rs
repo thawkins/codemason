@@ -126,7 +126,7 @@ pub fn show(ctx: &egui::Context, palette: &Palette) -> Option<String> {
             dialog_actions(ui, |ui| {
                 let ok_button = ui
                     .add_enabled_ui(ready, |ui| {
-                        button(ui, palette, ButtonKind::Text, None, OK_SWARM)
+                        button(ui, palette, ButtonKind::Filled, None, OK_SWARM)
                     })
                     .inner;
                 ok = (ok_button.clicked() || entered) && ready;

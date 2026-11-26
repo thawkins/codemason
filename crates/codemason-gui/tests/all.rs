@@ -176,6 +176,8 @@ mod test_prompt;
 mod test_provider_dialog_masking_gui;
 #[path = "test_research.rs"]
 mod test_research;
+#[path = "test_ribbon_overflow_gui.rs"]
+mod test_ribbon_overflow_gui;
 #[path = "test_runtime_context.rs"]
 mod test_runtime_context;
 #[path = "test_sessions_request_popup.rs"]
