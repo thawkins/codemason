@@ -86,11 +86,24 @@ pub const SAVE: &str = "Save";
 /// The notice dialog's only button (Enter).
 pub const NOTICE_OK: &str = "OK";
 
-/// The `/db prune` dialog's Yes button.
-pub const YES: &str = "Yes";
-
-/// The `/db prune` dialog's No button.
+/// The `/db prune` dialog's No button, shared by every two-option
+/// confirmation whose default answer leaves everything unchanged.
 pub const NO: &str = "No";
+
+/// The `/db prune` dialog's confirming button: it deletes messages.
+pub const PRUNE_DELETE: &str = "Delete";
+
+/// The `/memory clear` dialog's confirming button: it clears this project's
+/// memory.
+pub const MEMORY_CLEAR_ACTION: &str = "Clear memory";
+
+/// The `/compact prune --all` dialog's confirming button: it deletes every
+/// compaction summary.
+pub const COMPACT_DELETE: &str = "Delete all";
+
+/// The `Clear the input queue?` dialog's confirming button: it empties the
+/// queue.
+pub const QUEUE_CLEAR_ACTION: &str = "Clear queue";
 
 /// Title of the `/db prune` confirmation for a window of `days` days (the
 /// TUI's title).
@@ -104,7 +117,8 @@ pub const NO: &str = "No";
 /// The dialog title.
 #[must_use]
 pub fn db_prune_title(days: u32) -> String {
-    format!("Delete messages older than {days} day(s)?")
+    let unit = if days == 1 { "day" } else { "days" };
+    format!("Delete messages older than {days} {unit}?")
 }
 
 /// Title of the `/compact prune --all` confirmation.
@@ -395,12 +409,15 @@ pub fn show_db_prune(ctx: &egui::Context, app: &mut App) -> bool {
         &title,
         WIDTH,
         |ui| {
-            yes_no_actions(ui, &palette, yes);
+            yes_no_actions(ui, &palette, PRUNE_DELETE, yes);
             ui.add_space(space::LG);
             material_hint(
                 ui,
                 &palette,
-                "Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels",
+                &format!(
+                    "Left/Right move * Enter on {PRUNE_DELETE} deletes * Enter on {NO} cancels \
+                     * Esc cancels"
+                ),
             );
         },
     );
@@ -438,12 +455,15 @@ pub fn show_compact_prune(ctx: &egui::Context, app: &mut App) -> bool {
         COMPACT_PRUNE_TITLE,
         WIDTH,
         |ui| {
-            yes_no_actions(ui, &palette, yes);
+            yes_no_actions(ui, &palette, COMPACT_DELETE, yes);
             ui.add_space(space::LG);
             material_hint(
                 ui,
                 &palette,
-                "Left/Right move * Enter on Yes deletes * Enter on No cancels * Esc cancels",
+                &format!(
+                    "Left/Right move * Enter on {COMPACT_DELETE} deletes * Enter on {NO} \
+                     cancels * Esc cancels"
+                ),
             );
         },
     );
@@ -474,7 +494,20 @@ pub fn row_action_title(app: &App) -> Option<String> {
 /// Yes and No buttons over a two-option app-core dialog whose choice
 /// Right toggles: the button first moves the choice to itself, then sends
 /// Enter, which acts on the choice.
-fn yes_no_actions(ui: &mut egui::Ui, palette: &Palette, yes_selected: bool) {
+///
+/// `confirm` is the confirming button's label: the action's own verb (`Delete`,
+/// `Clear memory`, `Kill`) rather than a generic `Yes`, because the dialog's
+/// most dangerous click is the one whose label should say what it does. The
+/// cancelling button stays [`NO`], and the hint names whichever option the
+/// App's cursor is on, so the reader always knows what Enter will do.
+///
+/// # Arguments
+///
+/// * `ui` - the dialog's ui.
+/// * `palette` - the colours.
+/// * `confirm` - the confirming button's label.
+/// * `yes_selected` - whether the App's cursor is on the confirming option.
+fn yes_no_actions(ui: &mut egui::Ui, palette: &Palette, confirm: &str, yes_selected: bool) {
     let enter = plain(Key::Enter);
     let right_then_enter = [plain(Key::Right), enter];
     let yes_keys: &[KeyInput] = if yes_selected {
@@ -490,14 +523,14 @@ fn yes_no_actions(ui: &mut egui::Ui, palette: &Palette, yes_selected: bool) {
     material_hint(
         ui,
         palette,
-        &format!("Selected: {}", if yes_selected { YES } else { NO }),
+        &format!("Selected: {}", if yes_selected { confirm } else { NO }),
     );
     ui.add_space(space::MD);
     action_row(
         ui,
         palette,
         &[
-            (YES, ButtonKind::Filled, yes_keys, true),
+            (confirm, ButtonKind::Filled, yes_keys, true),
             (NO, ButtonKind::Text, no_keys, true),
         ],
     );
@@ -528,12 +561,61 @@ pub fn show_memory_clear(ctx: &egui::Context, app: &mut App) -> bool {
         MEMORY_CLEAR_TITLE,
         WIDTH,
         |ui| {
-            yes_no_actions(ui, &palette, yes);
+            yes_no_actions(ui, &palette, MEMORY_CLEAR_ACTION, yes);
             ui.add_space(space::LG);
             material_hint(
                 ui,
                 &palette,
-                "Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels",
+                &format!(
+                    "Left/Right move * Enter on {MEMORY_CLEAR_ACTION} clears * Enter on {NO} \
+                     cancels * Esc cancels"
+                ),
+            );
+        },
+    );
+    true
+}
+
+/// Title of the `/queue clear` confirmation (the TUI's heading).
+pub const QUEUE_CLEAR_TITLE: &str = "Clear the input queue?";
+
+/// Draw the `Clear the input queue?` confirmation
+/// (`App::queue_clear_confirm_open`), the Alt+Q menu's `Clear` row.
+///
+/// Same two-option shape as [`show_memory_clear`]: No is selected when it
+/// opens, so a stray Enter clears nothing; Yes drains the queue in app-core's
+/// `ConfirmQueueClear`.
+///
+/// # Arguments
+///
+/// * `ctx` - the frame's context.
+/// * `app` - the App whose queue confirmation is read.
+///
+/// # Returns
+///
+/// `true` while the confirmation is open.
+pub fn show_queue_clear(ctx: &egui::Context, app: &mut App) -> bool {
+    if !app.queue_clear_confirm_open {
+        return false;
+    }
+    let yes = app.queue_clear_confirm_is_yes();
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_queue_clear_dialog",
+        QUEUE_CLEAR_TITLE,
+        WIDTH,
+        |ui| {
+            yes_no_actions(ui, &palette, QUEUE_CLEAR_ACTION, yes);
+            ui.add_space(space::LG);
+            material_hint(
+                ui,
+                &palette,
+                &format!(
+                    "Left/Right move * Enter on {QUEUE_CLEAR_ACTION} clears * Enter on {NO} \
+                     cancels * Esc cancels"
+                ),
             );
         },
     );
@@ -594,6 +676,10 @@ pub fn show_row_action(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     };
     let body = pending.action.body();
+    // The button names the verb, not `Yes`: this dialog's confirming click is
+    // the destructive one.
+    let confirm = pending.action.confirm_label();
+    let outcome = codemason_app_core::app::row_action_outcome_hint(&pending.action);
     let yes = app.row_action_confirm_is_yes();
     let palette = crate::palette::palette_for(app, ctx);
     material_modal(
@@ -605,18 +691,14 @@ pub fn show_row_action(ctx: &egui::Context, app: &mut App) -> bool {
         |ui| {
             dialog_body(ui, &palette, &body);
             ui.add_space(space::LG);
-            yes_no_actions(ui, &palette, yes);
+            yes_no_actions(ui, &palette, confirm, yes);
             ui.add_space(space::LG);
             material_hint(
                 ui,
                 &palette,
                 codemason_app_core::app::ROW_ACTION_TOGGLE_HINT,
             );
-            material_hint(
-                ui,
-                &palette,
-                codemason_app_core::app::ROW_ACTION_OUTCOME_HINT,
-            );
+            material_hint(ui, &palette, &outcome);
         },
     );
     true

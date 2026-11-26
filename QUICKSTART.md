@@ -1566,7 +1566,7 @@ cdmn db prune --days 30
 
 ```
 /db prune --dry-run --days 30     # GUI: report the count, delete nothing
-/db prune --days 30               # GUI: asks "Delete messages older than 30 day(s)?" first
+/db prune --days 30               # GUI: asks "Delete messages older than 30 days?" first
 /db help                          # GUI: subcommands, defaults, and caveats
 ```
 

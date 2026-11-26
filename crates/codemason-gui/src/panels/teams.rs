@@ -51,7 +51,7 @@ pub const TEAMS_LABEL: &str = "Teams";
 /// The key legend under the table, as in the TUI.
 pub const LEGEND: &str = "Up/Down select  PgUp/PgDn page  Space stop/resume  \
      Del shut down (blocked: resume)  Enter open  Esc close  \
-     | dialogs: toggle Yes/No first - Enter on No cancels";
+     | dialog: Left/Right toggles - Enter on No cancels";
 
 /// The hint shown while the team has no teammates.
 pub const EMPTY_HINT: &str = "(no teammates yet - use team_spawn tool or blueprint)";

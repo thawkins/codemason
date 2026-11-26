@@ -10,7 +10,9 @@
 
 use egui::{CornerRadius, Frame, Margin, Response, Role, Sense, Vec2, WidgetInfo};
 
-use super::{content_colour, elevation_shadow, icon_galley, paint_state_layer, text_galley};
+use super::{
+    content_colour, elevation_shadow, icon_galley, paint_state_layer, supporting_role, text_galley,
+};
 use crate::icons::Icon;
 use crate::metrics::{radius, text_size};
 use crate::palette::{Palette, rgb};
@@ -98,7 +100,7 @@ fn menu_item_at(
 ) -> Response {
     let m3 = &palette.m3;
     let content = content_colour(ui, palette, rgb(m3.on_surface));
-    let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
+    let variant = content_colour(ui, palette, rgb(supporting_role(m3, selected)));
     let font = egui::FontId::proportional(text_size::BODY);
     let text = text_galley(ui, label, font.clone(), content);
     let trail = trailing.map(|t| text_galley(ui, t, font.clone(), variant));

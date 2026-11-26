@@ -140,6 +140,9 @@ pub enum ActiveDialog {
     MemoryDelete,
     /// The `/memory clear` confirmation (`App::memory_clear_confirm_open`).
     MemoryClear,
+    /// The `Clear the input queue?` confirmation
+    /// (`App::queue_clear_confirm_open`).
+    QueueClear,
     /// The full-memory view (`App::memory_view`).
     MemoryView,
 }
@@ -235,7 +238,7 @@ pub fn active(app: &App) -> Option<ActiveDialog> {
     }
     // The queue panel draws the queue clear confirm.
     if app.queue_clear_confirm_open {
-        return None;
+        return Some(ActiveDialog::QueueClear);
     }
     if app.memory_clear_confirm_open {
         return Some(ActiveDialog::MemoryClear);
@@ -370,6 +373,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         Some(ActiveDialog::RowAction) => confirm::show_row_action(ctx, app),
         Some(ActiveDialog::MemoryDelete) => confirm::show_memory_delete(ctx, app),
         Some(ActiveDialog::MemoryClear) => confirm::show_memory_clear(ctx, app),
+        Some(ActiveDialog::QueueClear) => confirm::show_queue_clear(ctx, app),
         Some(ActiveDialog::MemoryView) => confirm::show_memory_view(ctx, app),
         None => false,
     }
@@ -423,6 +427,7 @@ pub fn prepare(ctx: &egui::Context, app: &mut App) {
             | ActiveDialog::RowAction
             | ActiveDialog::MemoryDelete
             | ActiveDialog::MemoryClear
+            | ActiveDialog::QueueClear
             | ActiveDialog::MemoryView,
         )
         | None => {}

@@ -55,7 +55,7 @@ from those roles.
 
 | Form | Description |
 |---|---|
-| `/theme` | Open the theme picker. Up/Down (or a click) previews a theme in the window, Enter (Apply) keeps it, Esc (Cancel) restores the previous one |
+| `/theme` | Open the theme picker. Up/Down (or a click) previews a theme in the window, Enter (Apply) keeps it, `e` opens the editor on the highlighted theme, Esc (Cancel) restores the previous one |
 | `/theme list` | Show the current theme and the available ones |
 | `/theme system` | Follow the operating system (`default` is accepted too) |
 | `/theme dark` | Switch to `codemason-dark` |
@@ -65,7 +65,8 @@ from those roles.
 
 ## Editing a theme
 
-In the picker, every theme except `system` has an edit (pencil) button. It
+In the picker, every theme except `system` has an edit (pencil) button, and `e`
+opens the same editor from the keyboard on whichever row is highlighted. It
 opens the theme editor over the picker:
 
 - Every colour is listed under its group (`text`, `bg`, `border`, `accent`,

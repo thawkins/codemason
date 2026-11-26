@@ -40,7 +40,8 @@ use codemason_gui::dialogs::ActiveDialog;
 use codemason_gui::dialogs::active;
 use codemason_gui::dialogs::confirm::{
     COMPACT_PRUNE_TITLE, FORCE_CLEANUP_TITLE, MEMORY_CLEAR_TITLE, MEMORY_DELETE_TITLE, PLAN_TITLE,
-    ROLLBACK_TITLE, ROUTER_SAVE_TITLE, db_prune_title, memory_view_title, row_action_title,
+    QUEUE_CLEAR_TITLE, ROLLBACK_TITLE, ROUTER_SAVE_TITLE, db_prune_title, memory_view_title,
+    row_action_title,
 };
 use codemason_gui::dialogs::context_menu::CONTEXT_MENU_LABEL;
 use codemason_gui::dialogs::lists::{MCP_DISCOVER_TITLE, PLUGINS_LIST_TITLE, backend_title};
@@ -136,6 +137,7 @@ fn case(dialog: ActiveDialog) -> Case {
         ActiveDialog::RowAction => row(Surface::Dialog, open_row_action),
         ActiveDialog::MemoryDelete => row(Surface::Dialog, open_memory_delete),
         ActiveDialog::MemoryClear => row(Surface::Dialog, open_memory_clear),
+        ActiveDialog::QueueClear => row(Surface::Dialog, open_queue_clear),
         ActiveDialog::MemoryView => row(Surface::Dialog, open_memory_view),
     }
 }
@@ -177,6 +179,7 @@ const VARIANTS: &[ActiveDialog] = &[
     ActiveDialog::RowAction,
     ActiveDialog::MemoryDelete,
     ActiveDialog::MemoryClear,
+    ActiveDialog::QueueClear,
     ActiveDialog::MemoryView,
 ];
 
@@ -607,6 +610,20 @@ fn open_memory_delete(app: &mut App) -> String {
 fn open_memory_clear(app: &mut App) -> String {
     app.open_memory_clear_confirm();
     MEMORY_CLEAR_TITLE.to_string()
+}
+
+/// The `Clear the input queue?` confirmation, armed the way the Alt+Q menu's
+/// `Clear` row arms it.
+fn open_queue_clear(app: &mut App) -> String {
+    app.session
+        .input_queue
+        .push_back(codemason_app_core::app::QueuedInput {
+            text: "a queued prompt".to_string(),
+            image_paths: Vec::new(),
+        });
+    app.queue_clear_confirm_open = true;
+    app.queue_clear_confirm_selected = codemason_app_core::app::QUEUE_CLEAR_CONFIRM_NO;
+    QUEUE_CLEAR_TITLE.to_string()
 }
 
 /// The full-memory view.

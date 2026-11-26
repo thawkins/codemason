@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [1.0.185] - 2026-11-26
+
+Selected Material components pass their contrast check, every two-option
+confirmation names the action its confirming button performs, and the remaining
+hand-drawn dialogs are Material surfaces.
+
+### Added
+
+- Added: `material::supporting_role`, which returns a component's less-prominent text colour for the fill it is drawn on - `on_secondary_container` on a selected component's `secondary_container`, `on_surface_variant` otherwise. Supporting text on a selected component was painted `on_surface_variant`, which on that fill falls below 4.5:1 in catppuccin-mocha (3.82:1), gruvbox-dark (3.89:1) and tokyo-night (4.49:1). Material list items, menus and sheets now use it (`crates/codemason-gui/src/material/list.rs`, `menu.rs`, `sheet.rs`).
+- Added: `RowAction::confirm_label`, the verb a row action's confirming button carries (`Kill`, `Cancel task`, `Suspend`, `Shut down`, `Resume`, `Delete`), and `row_action_outcome_hint`, which builds the dialog's key legend from that same verb. A generic `Yes` next to a destructive title made the reader re-derive the action, and for the four verbs that end something the dialog's most dangerous click was the one button whose label said the least (`crates/codemason-app-core/src/app/state.rs`).
+- Added: `e` in the `/theme` picker opens the editor on the highlighted theme, the keyboard path to the per-row edit button. The `system` row has no colours of its own, so it opens nothing, exactly as it draws no button (`App::handle_theme_picker_key`).
+
+### Changed
+
+- Changed: every two-option confirmation labels its confirming button with the action rather than `Yes` - `/db prune` is `Delete`, `/memory clear` is `Clear memory`, `/compact prune --all` is `Delete all`, and the queue clear is `Clear queue` - and each dialog's hint names that same label, so the button and the key legend name one thing (`crates/codemason-gui/src/dialogs/confirm.rs`).
+- Changed: the `Clear the input queue?` confirmation is a Material dialog (`ActiveDialog::QueueClear`) carrying the same surface, headline, action row and accessible role as every other confirmation, instead of lines the `Alt+Q` menu drew itself. The queue panel lost its own overlay, and `QUEUE_CLEAR_LABEL` with it.
+- Changed: the quit confirmation is a Material dialog too - `surface_container_high`, the title as headline, and one right-aligned action row with the quitting action filled - rather than a bare `egui::Modal` with plain buttons (`platform/window.rs`). Its width is `QUIT_WIDTH` (440 points).
+- Changed: an image thumbnail in the prompt's attachment strip is a real control: Tab reaches it, Enter opens the image at full size exactly as a double click does, and it draws a focus ring. It still cannot keep the prompt from taking typed text, because the prompt only yields to another text field, so the first printable key moves the focus back. `ThumbnailResponse::enlarge` reports both paths, so the pointer and the keyboard cannot drift apart (`crates/codemason-gui/src/material/thumbnail.rs`, `panels/prompt.rs`).
+- Changed: the Teams key legend says `dialog: Left/Right toggles` instead of `dialogs: toggle Yes/No first`, matching the labelled buttons.
+- Changed: the `/db prune` dialog title pluralises its window - `Delete messages older than 1 day?`, `... 14 days?` - instead of always printing `day(s)`.
+
+### Fixed
+
+- Fixed: the plugin and connector store dialogs collapsed their result list to zero width at the minimum window (about 512 points of dialog body), because the filter rail and the details pane were both fixed-width. Each column is now capped to a share of the body (`RAIL_SHARE` 28%, `DETAILS_SHARE` 30%) and the list keeps the rest (`crates/codemason-gui/src/dialogs/stores/frame.rs`).
+- Fixed: `primary` on the dialog surface fell below 4.5:1 in nord and gruvbox-dark. `bg.raised2` - which a theme without an `m3` block derives `surface_container_high` from - moved from `#434c5e` to `#3e4657` in nord and from `#3c3836` to `#363231` in gruvbox-dark, raising `primary` on the dialog surface to 4.73:1 and 4.71:1 (`crates/codemason-app-core/themes/`).
+- Fixed: the theme contrast gate checked `primary` only against `surface`, not against the surface dialogs are actually drawn on. It now checks `primary` and `on_surface_variant` against `surface_container_high` too, so a theme whose dialog text fails AA is rejected when it loads (`M3Roles::check`, `crates/codemason-app-core/src/theme_tokens.rs`).
+
+### Tests
+
+- Added: `test_store_dialog_keeps_a_usable_list_at_the_minimum_window` (the list keeps usable width at 640x420), `test_theme_picker_e_opens_the_editor_on_the_highlighted_theme`, `every_row_action_confirms_with_its_own_verb`, `test_material_thumbnail_reports_enter_on_a_focused_picture` and `test_prompt_takes_typing_back_from_a_focused_thumbnail`.
+
 ## [1.0.184] - 2026-11-26
 
 Every GUI dialog is drawn with the Material components, finishing the migration

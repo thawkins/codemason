@@ -1117,3 +1117,47 @@ fn test_prompt_leaves_a_gap_below_the_attachment_thumbnails() {
         "8pt between thumbnails and editor: strip {strip:?}, editor {editor:?}"
     );
 }
+
+#[test]
+fn test_prompt_takes_typing_back_from_a_focused_thumbnail() {
+    // A real file, so the picture decodes and the box is a control: a broken
+    // thumbnail is a name in a frame and takes no focus at all.
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/prompt_focused_thumbnail")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let path = dir.join("screen.png");
+    std::fs::write(&path, PNG).expect("write png");
+    let attached = path.clone();
+    let (_rt, mut harness) = rig_with(
+        move |app| app.session.pending_attachments = vec![attached],
+        // The picture decodes on a background thread, which repaints until it
+        // is done.
+        Harness::builder().with_max_steps(64),
+    );
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    // A thumbnail is a focusable control (Tab reaches it so Enter can enlarge
+    // the image), which is only safe because the prompt takes typing back from
+    // anything that is not a text field: typed text must still land in the
+    // prompt, not be swallowed by the focused picture.
+    harness.get_by_label("screen.png").focus();
+    harness.run();
+    assert!(
+        harness.get_by_label("screen.png").is_focused(),
+        "precondition: the thumbnail holds the focus"
+    );
+
+    harness.event(egui::Event::Text("hello".to_string()));
+    harness.run();
+
+    assert_eq!(
+        prompt_text(&harness),
+        "hello",
+        "typing goes to the prompt, not the focused thumbnail"
+    );
+    assert!(
+        prompt(&harness).is_focused(),
+        "the prompt holds the focus after typing"
+    );
+}

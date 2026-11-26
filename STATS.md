@@ -1,6 +1,22 @@
 # Project Statistics
 
-**Version:** 1.0.181
+**Version:** 1.0.185
+
+> **Material contrast, verb-labelled confirmations (1.0.185).** No crate is
+> added or removed. `codemason-gui` gains 6 files and 5,192 lines over the
+> 1.0.181 measurement (the Material dialog migration and this release's
+> contrast and focus work); `codemason-app-core` gains 837 lines.
+> `material::supporting_role` picks a selected component's supporting text
+> colour (`on_secondary_container`) instead of painting `on_surface_variant` on
+> a `secondary_container` fill, where it fell below 4.5:1 in catppuccin-mocha,
+> gruvbox-dark and tokyo-night; `nord` and `gruvbox-dark` moved `bg.raised2` so
+> `primary` clears AA on the dialog surface; and `M3Roles::check` now tests
+> `primary` and `on_surface_variant` against `surface_container_high`, the
+> surface dialogs are actually drawn on. The tree measures **2,278** crate
+> files, **837,240** crate lines, **1,283** crate test files and **16,370**
+> crate test attributes (**2,302 / 846,117 / 1,293 / 16,457** with the root
+> package; `cargo nextest list --workspace` enumerates and runs **16,466**, all
+> passing in 294 s with 16 skipped).
 
 > **Git-fixture isolation and `/release` message (1.0.181).** No crate or tool is
 > added or removed, and no library code changes. Three `git()` test helpers
@@ -548,12 +564,12 @@
 
 | Metric | Value |
 |---|---|
-| Total Rust lines | 840,087 (831,210 in `crates/` + 8,877 in root `src/`/`tests/`) |
-| Total Rust files | 2,292 (2,268 under `crates/` + 24 in root `src/`/`tests/`) |
-| Tests defined | 16,409 (`#[test]` / `#[tokio::test]` attributes across `crates/`, `src/`, and root `tests/`; the tree has no `#[rstest]`) |
-| Test files | 1,286 consolidated `tests/test_*.rs` files (1,276 under the crate `tests/` trees + 10 in the root `tests/` tree), plus the `tests/inline/*` modules, 20 `tests/all.rs` roots and the shared support/prelude helpers (re-measured on the working tree) |
+| Total Rust lines | 846,117 (837,240 in `crates/` + 8,877 in root `src/`/`tests/`) |
+| Total Rust files | 2,302 (2,278 under `crates/` + 24 in root `src/`/`tests/`) |
+| Tests defined | 16,457 (`#[test]` / `#[tokio::test]` attributes across `crates/`, `src/`, and root `tests/`; the tree has no `#[rstest]`) |
+| Test files | 1,293 consolidated `tests/test_*.rs` files (1,283 under the crate `tests/` trees + 10 in the root `tests/` tree), plus the `tests/inline/*` modules, 20 `tests/all.rs` roots and the shared support/prelude helpers (re-measured on the working tree) |
 | Test binaries | 19 consolidated `[[test]] name = "all"` integration targets (one per crate) plus the crate lib targets and the root bin and its `tests/all.rs` |
-| Tests executed | 16,387 passed / 0 failed / 16 skipped in the last full workspace `cargo nextest run --workspace --no-fail-fast` (working tree with the compaction-pruning work, 284 s) |
+| Tests executed | 16,466 passed / 0 failed / 16 skipped in the last full workspace `cargo nextest run --workspace --no-fail-fast` (the 1.0.185 release tree, 294 s) |
 | Line coverage | 86.7% (146,001 of 168,392 instrumented lines; measured before the TUI removal and not re-measured) |
 | Benchmark files | 16 (+1 in `vendor/html2text`) |
 | Tools registered | 152 in 21 families (`mf_screenshot` engine-gated above the shown count); 150 at the `1.0.168` tree, +2 from the `autofix_status` and `autofix_add` tools |
@@ -628,37 +644,36 @@ shows the file count, line count, and test-file count for each crate (including
 
 | Crate | Rust files | Rust lines | Test files |
 |---|---|---|---|
-| `codemason-agent` | 495 | 188,250 | 282 |
-| `codemason-app-core` | 376 | 171,936 | 274 |
+| `codemason-agent` | 498 | 188,753 | 284 |
+| `codemason-app-core` | 376 | 172,156 | 274 |
 | `codemason-bench` | 36 | 11,051 | 9 |
 | `codemason-codeindex` | 82 | 25,550 | 50 |
 | `codemason-config` | 83 | 20,948 | 55 |
 | `codemason-connectors` | 46 | 20,346 | 21 |
-| `codemason-gui` | 192 | 53,280 | 103 |
+| `codemason-gui` | 198 | 58,472 | 107 |
 | `codemason-llm` | 102 | 40,096 | 41 |
 | `codemason-plugins` | 67 | 24,155 | 38 |
 | `codemason-research` | 196 | 79,182 | 80 |
 | `codemason-server` | 29 | 12,305 | 15 |
 | `codemason-specs` | 41 | 21,801 | 21 |
-| `codemason-storage` | 68 | 23,486 | 60 |
+| `codemason-storage` | 69 | 23,555 | 61 |
 | `codemason-surface` | 19 | 2,502 | 8 |
 | `codemason-telemetry` | 44 | 15,405 | 28 |
 | `codemason-tools-core` | 75 | 22,225 | 33 |
-| `codemason-tools-extended` | 163 | 62,535 | 81 |
+| `codemason-tools-extended` | 163 | 62,549 | 81 |
 | `codemason-tools-vcs` | 79 | 19,466 | 33 |
-| `codemason-types` | 75 | 16,691 | 44 |
-| **Total** | **2,268** | **831,210** | **1,276** |
+| `codemason-types` | 75 | 16,723 | 44 |
+| **Total** | **2,278** | **837,240** | **1,283** |
 
 The root package adds 24 files and 8,877 lines in `src/` and `tests/`, for
-2,292 files and 840,087 lines workspace-wide. These figures are counted from the
+2,302 files and 846,117 lines workspace-wide. These figures are counted from the
 working tree with `find` (`*.rs` only, `target/` pruned - note that
 `crates/codemason-tools-core/target/` exists and must be pruned too, or that
-crate reads as 1,610 files and 71,985 lines), so they include the
-compaction-pruning work described below. The released `HEAD` tree
-(`git ls-tree -r HEAD`) is 2,265 crate files / 830,075 lines / 1,273 crate test
-files / **16,299** crate tests, re-measured at this release, so the difference is
-exactly +3 / +1,135 / +3 / +23 - the three new `tests/test_*.rs` files, their 23
-tests, and the code they cover. `codemason-hyperresearch` appeared
+crate reads as 1,610 files and 71,985 lines). Against the 1.0.181 measurement
+the tree is +10 crate files, +6,030 crate lines, +7 crate test files and +48
+crate tests, most of it `codemason-gui`'s Material dialog migration (+6 files,
++5,192 lines) and this release's contrast and focus work.
+`codemason-hyperresearch` appeared
 in earlier revisions of this table; it was folded into `codemason-research` and
 no longer exists as a directory, which is why `crates/` holds 19 packages plus
 the root binary package.
@@ -668,22 +683,22 @@ the root binary package.
 ## Crate Size Distribution
 
 ```
-codemason-agent          ###########  188,068 lines (22.6%)
-codemason-app-core       ##########   171,319 lines (20.6%)
+codemason-agent          ###########  188,753 lines (22.5%)
+codemason-app-core       ##########   172,156 lines (20.6%)
 codemason-research       #####         79,182 lines (9.5%)
-codemason-tools-extended ####          62,535 lines (7.5%)
-codemason-gui            ###           53,225 lines (6.4%)
+codemason-tools-extended ####          62,549 lines (7.5%)
+codemason-gui            ###           58,472 lines (7.0%)
 codemason-llm            ##            40,096 lines (4.8%)
 codemason-codeindex      ##            25,550 lines (3.1%)
 codemason-plugins        #             24,155 lines (2.9%)
-codemason-storage        #             23,205 lines (2.8%)
+codemason-storage        #             23,555 lines (2.8%)
 codemason-tools-core     #             22,225 lines (2.7%)
 codemason-specs          #             21,801 lines (2.6%)
 codemason-config         #             20,948 lines (2.5%)
-codemason-connectors     #             20,346 lines (2.5%)
+codemason-connectors     #             20,346 lines (2.4%)
 codemason-tools-vcs      #             19,466 lines (2.3%)
-codemason-types          #             16,691 lines (2.0%)
-codemason-telemetry      #             15,405 lines (1.9%)
+codemason-types          #             16,723 lines (2.0%)
+codemason-telemetry      #             15,405 lines (1.8%)
 codemason-server         #             12,305 lines (1.5%)
 codemason-bench          #             11,051 lines (1.3%)
 codemason-surface                       2,502 lines (0.3%)
@@ -695,49 +710,49 @@ codemason-surface                       2,502 lines (0.3%)
 
 | Crate | Test Files | Approx. Tests |
 |-------|-----------:|--------------:|
-| `codemason-app-core` | 274 | 3,571 |
-| `codemason-agent` | 282 | 2,833 |
+| `codemason-app-core` | 274 | 3,562 |
+| `codemason-agent` | 284 | 2,837 |
 | `codemason-tools-extended` | 81 | 1,897 |
 | `codemason-research` | 80 | 1,505 |
-| `codemason-specs` | 21 | 725 |
+| `codemason-specs` | 21 | 719 |
 | `codemason-llm` | 41 | 689 |
-| `codemason-gui` | 103 | 677 |
+| `codemason-gui` | 107 | 737 |
 | `codemason-tools-vcs` | 33 | 508 |
 | `codemason-plugins` | 38 | 504 |
 | `codemason-config` | 55 | 474 |
 | `codemason-codeindex` | 50 | 459 |
 | `codemason-types` | 44 | 452 |
 | `codemason-tools-core` | 33 | 432 |
-| `codemason-storage` | 60 | 420 |
+| `codemason-storage` | 61 | 422 |
 | `codemason-connectors` | 21 | 379 |
 | `codemason-telemetry` | 28 | 352 |
 | `codemason-server` | 15 | 224 |
 | `codemason-bench` | 9 | 151 |
 | `codemason-surface` | 8 | 70 |
-| **Total** | **1,276** | **16,322** |
+| **Total** | **1,283** | **16,370** |
 
 The per-crate test attributes above are counted directly from the tree
 (`#[test]` / `#[tokio::test]` attributes, including `flavor = ...` variants; the
 tree has no `#[rstest]`) and include both the external `tests/` suites
 (included as child modules of each crate's single `tests/all.rs` target) and the
-inline `#[cfg(test)]` modules in library sources (`crates/` totals 16,322, the root
-`src/`+`tests/` tree adds 87, for 16,409 workspace-wide).
+inline `#[cfg(test)]` modules in library sources (`crates/` totals 16,370, the root
+`src/`+`tests/` tree adds 87, for 16,457 workspace-wide).
 
-The runner and the static count differ in *what they count*. `cargo nextest list
---workspace` on this tree enumerates **16,387** tests and the full run executes
-the same 16,387, so 16,387 is the number of tests that actually run and 16,409 is
-a static count of attributes. The 22-test gap cancels at crate level rather than
-accumulating: `codemason-tools-core` contributes 47 more to the runner
-(macro- and `include!`-generated tests, which no attribute scan can see) while
-`codemason-agent` contributes 17 fewer, and the rest net out. 180 attributes also
+The runner and the static count agree exactly at this release: `cargo nextest
+list --workspace` enumerates **16,466** tests and the full run executes the same
+16,466, all passing with 16 skipped, while the attribute scan counts 16,457
+workspace-wide. The 9-test gap cancels at crate level rather than accumulating:
+`codemason-tools-core` contributes more to the runner (macro- and
+`include!`-generated tests, which no attribute scan can see) while
+`codemason-agent` contributes fewer, and the rest net out. 180 attributes also
 sit under a `feature` gate (`telemetry` 171, `acp-server` 9) that the default
 build leaves off, and 98 more under a `target_os`/`unix` gate, so a feature-enabled
 run would execute more than either number. Neither figure is a defect; use
-16,387 when quoting what runs and 16,409 when quoting what is written.
+16,466 when quoting what runs and 16,457 when quoting what is written.
 
 At 1.0.178 the runner counted
-16,228; the difference from today's 16,387 is the two releases' new suites
-(23 here plus the 1.0.179 additions). The telemetry review extends five suites: `test_telemetry_slash`
+16,228; the difference from today's 16,466 is five releases' new suites
+(23 in 1.0.181, plus the 1.0.179, 1.0.183, 1.0.184 and 1.0.185 additions). The telemetry review extends five suites: `test_telemetry_slash`
 (+109 lines: the `on|off|logs|setup|counters|help` replies and the
 merge-on-save behaviour), `test_subsystem_reconfigure` (+30, the retire/join
 and cache-rebuild cases), `test_export_health` (+30, generation isolation

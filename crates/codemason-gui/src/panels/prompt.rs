@@ -815,11 +815,12 @@ impl CompletionList<'_> {
 /// The strip is one scrolling row, so many attachments stay above the prompt
 /// instead of pushing the editor off the pane.
 ///
-/// A double click on a thumbnail shows that image at full size in the same
-/// view a transcript image opens ([`crate::dialogs::image_view`]).
+/// A double click on a thumbnail, or Enter while it has the focus, shows that
+/// image at full size in the same view a transcript image opens
+/// ([`crate::dialogs::image_view`]).
 ///
-/// A close mark's click and a picture's double click are collected while the
-/// strip is drawn and applied after the row, so the list is never mutated
+/// A close mark's click and a picture's enlarge request are collected while
+/// the strip is drawn and applied after the row, so the list is never mutated
 /// under its own iteration.
 fn attachments_row(ui: &mut egui::Ui, app: &mut App) {
     if app.session.pending_attachments.is_empty() {
@@ -846,7 +847,7 @@ fn attachments_row(ui: &mut egui::Ui, app: &mut App) {
                     if shown.close.clicked() {
                         removed = Some(index);
                     }
-                    if shown.picture.double_clicked() {
+                    if shown.enlarge {
                         enlarged = Some(path.clone());
                     }
                 }

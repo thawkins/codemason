@@ -18,9 +18,10 @@ The same operation is available headless as
 automatically at startup when `storage.retention.enabled` is set in
 `codemason.json`.
 
-Nothing is deleted without confirmation: a real prune opens a
-`Delete messages older than N day(s)?` dialog that starts on `No`, so a stray
-`Enter` cannot remove messages.
+Nothing is deleted without confirmation: a real prune opens a Material dialog
+titled `Delete messages older than N days?` (the noun is singular for a
+one-day window) that starts on `No`, so a stray `Enter` cannot remove
+messages.
 
 ## Syntax
 
@@ -79,13 +80,16 @@ Prune with the confirmation dialog (default window from config):
 ```
 
 ```
- Delete messages older than 14 day(s)?
-   [ Yes ]   [ No ]
+ Delete messages older than 14 days?
+
+   [ Delete ]   [ No ]
 ```
 
 The dialog opens on `No`. `Left` / `Right` (or `Tab`) move the selection,
 `Enter` applies it, and `Esc` cancels - cancelling leaves the database
-unchanged.
+unchanged. The confirming button carries the action's own verb (`Delete`)
+rather than a generic `Yes`, and the hint under it names the same label, so
+what `Enter` will do is never in doubt.
 
 Prune with an explicit 14-day window:
 

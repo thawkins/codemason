@@ -27,7 +27,8 @@ use egui::{
 
 use super::feedback::{SWATCH_RADIUS, SWATCH_SIZE, swatch_rect};
 use super::{
-    content_colour, elided_galley, label_large, paint_state_layer, state_opacity, text_galley,
+    content_colour, elided_galley, label_large, paint_state_layer, state_opacity, supporting_role,
+    text_galley,
 };
 use crate::metrics::{radius, space, text_size};
 use crate::palette::{Palette, rgb};
@@ -185,7 +186,11 @@ pub fn list_item_with<R>(
             m3.on_surface
         }),
     );
-    let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
+    // The supporting and trailing text sits on the row's own fill, so a
+    // selected row takes the same content colour as its headline: the
+    // variant colour is only checked against the surfaces, and on
+    // `secondary_container` it falls below AA in several themes.
+    let variant = content_colour(ui, palette, rgb(supporting_role(m3, selected)));
     let trail =
         trailing.map(|t| text_galley(ui, t, egui::FontId::proportional(text_size::SMALL), variant));
     let trail_width = trail.as_ref().map_or(0.0, |t| t.size().x + TRAILING_GAP);
@@ -376,7 +381,7 @@ fn dense_row(
         return response;
     }
     let content = content_colour(ui, palette, rgb(m3.on_surface));
-    let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
+    let variant = content_colour(ui, palette, rgb(supporting_role(m3, option == Some(true))));
     if option == Some(true) {
         ui.painter().rect_filled(
             rect,
@@ -530,7 +535,7 @@ pub fn avatar_list_item<R>(
     } else {
         m3.on_surface
     });
-    let variant = rgb(m3.on_surface_variant);
+    let variant = rgb(supporting_role(m3, item.selected));
 
     let centre = egui::pos2(rect.left() + PADDING + AVATAR_SIZE / 2.0, rect.center().y);
     let (avatar_fill, avatar_text) = if item.selected {

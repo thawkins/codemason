@@ -193,7 +193,8 @@ per-project state lives in `.codemason/`. Start with
   for attaching images and opening projects (an image staged for the next
   message shows as a removable thumbnail above the editor, its close mark drops
   just that image and leaves the file on disk, and double-clicking the
-  thumbnail opens it at full size in the same viewer the transcript uses), and a
+  thumbnail, or pressing `Enter` on it once `Tab` has focused it, opens it at
+  full size in the same viewer the transcript uses), and a
   message input queue (`Alt+Q`
   menu / `/queue`) that keeps the prompt editable while the agent executes; side
   panes for memory (`Alt+M` | `Cmd+Shift+M`), the log, the profiler, tasks
@@ -204,7 +205,9 @@ per-project state lives in `.codemason/`. Start with
   first time, then remembers its size, position and layout. It follows the
   system's dark or light setting; `/theme` opens a picker over seven built-in
   themes (dark, light, high contrast, Catppuccin Mocha, Gruvbox, Nord, Tokyo
-  Night), and your own themes are JSON files in `~/.config/codemason/themes/`
+  Night), Up/Down previews a highlighted theme, Enter applies it and `e` opens
+  the editor on it, and your own themes are JSON files in
+  `~/.config/codemason/themes/`
   or `.codemason/themes/`. Tool calls fold into one activity row per run
   (`/verbosity low|medium|high`), reasoning sits under a collapsible Thinking
   row (`/thinking-display`) whose line count shows at its right (a thought of 3

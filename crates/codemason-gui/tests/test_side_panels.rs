@@ -17,7 +17,8 @@ use codemason_agent::team::{MemberStatus, TeamMember};
 use codemason_app_core::app::App;
 use codemason_gui::Shell;
 use codemason_gui::dialogs::confirm::{
-    MEMORY_CLEAR_TITLE, MEMORY_DELETE_TITLE, NO, YES, memory_view_title, row_action_title,
+    MEMORY_CLEAR_ACTION, MEMORY_CLEAR_TITLE, MEMORY_DELETE_TITLE, NO, memory_view_title,
+    row_action_title,
 };
 use codemason_gui::dialogs::output_view::CLOSE as VIEW_CLOSE;
 use codemason_gui::dock::PaneId;
@@ -237,10 +238,10 @@ fn test_memory_panel_clear_requires_confirm() {
     assert_eq!(memory_count(&rig), 2);
 
     // The dialog owns the keys, as in the TUI, even with the prompt
-    // focused: Right moves to Yes, Enter clears, and the panel shows its
-    // empty state.
+    // focused: Right moves to the confirming button, Enter clears, and the
+    // panel shows its empty state.
     rig.slash("/memory clear");
-    rig.harness.get_by_label(YES);
+    rig.harness.get_by_label(MEMORY_CLEAR_ACTION);
     tap(&mut rig, egui::Key::ArrowRight);
     assert!(rig.harness.state().app().memory_clear_confirm_is_yes());
     tap(&mut rig, egui::Key::Enter);

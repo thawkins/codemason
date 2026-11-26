@@ -11,7 +11,9 @@
 use egui::{CornerRadius, Frame, Margin, Response, Role, Sense, Vec2, WidgetInfo};
 
 use super::icon_button::{IconButtonKind, icon_button};
-use super::{content_colour, icon_galley, label_large, paint_state_layer, text_galley};
+use super::{
+    content_colour, icon_galley, label_large, paint_state_layer, supporting_role, text_galley,
+};
 use crate::icons::Icon;
 use crate::metrics::{space, text_size};
 use crate::palette::{Palette, rgb};
@@ -137,7 +139,10 @@ fn draw_item(
     // The label ends before the count (or the padding), elided if need be.
     let mut label_end = rect.right() - ITEM_PADDING;
     if let Some(count) = count {
-        let colour = content_colour(ui, palette, rgb(m3.on_surface_variant));
+        // The count sits on the item's own fill, so it follows the item: on a
+        // selected item's `secondary_container` the variant colour falls below
+        // AA, and the headline colour is checked against it.
+        let colour = content_colour(ui, palette, rgb(supporting_role(m3, selected)));
         let number = text_galley(ui, &count.to_string(), label_large(ui.ctx()), colour);
         let pos = egui::pos2(
             rect.right() - ITEM_PADDING - number.size().x,

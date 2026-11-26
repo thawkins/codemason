@@ -91,14 +91,21 @@ impl App {
     }
 
     /// Serves a key while the `/theme` picker is open: Up/Down (or k/j) move
-    /// the highlight and preview the theme, Enter keeps it, Esc or `q`
-    /// restores the theme the picker opened on.
+    /// the highlight and preview the theme, Enter keeps it, `e` opens the
+    /// editor on the highlighted theme, Esc or `q` restores the theme the
+    /// picker opened on.
+    ///
+    /// `e` is the keyboard path to the per-row edit button the picker draws:
+    /// without it that action is pointer-only, and the picker is the only
+    /// place the editor is reached from. The `system` row has no colours of
+    /// its own, so it opens nothing - exactly as it draws no button.
     pub(crate) fn handle_theme_picker_key(&mut self, key: KeyInput) {
         use crate::input_event::Key;
         let Some(picker) = self.theme_picker.as_ref() else {
             return;
         };
         let selected = picker.selected;
+        let highlighted = picker.entries.get(selected).cloned();
         match key.key {
             Key::Esc | Key::Char('q') => {
                 if let Some(picker) = self.theme_picker.take() {
@@ -111,6 +118,14 @@ impl App {
             Key::Enter => {
                 self.theme_picker = None;
                 self.commit_theme(self.theme.clone());
+            }
+            Key::Char('e') => {
+                // Row 0 is `system`, which has no colours to edit.
+                if selected > 0
+                    && let Some(name) = highlighted.as_deref()
+                {
+                    self.open_theme_editor(name);
+                }
             }
             _ => {}
         }

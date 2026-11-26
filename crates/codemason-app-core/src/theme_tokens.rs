@@ -359,10 +359,11 @@ pub struct M3Roles {
 
 impl M3Roles {
     /// Checks every `on_x` role against its `x` role, `primary` (text
-    /// buttons, the open tab, links) against `surface`, and
-    /// `inverse_primary` (the snackbar's action) against `inverse_surface`
-    /// at [`AA_CONTRAST`], and `outline` against `surface` at
-    /// [`UI_CONTRAST`].
+    /// buttons, the open tab, links) against `surface` and against the
+    /// dialog surface `surface_container_high`, `on_surface_variant` against
+    /// `surface_container_high`, `inverse_primary` (the snackbar's action)
+    /// against `inverse_surface` at [`AA_CONTRAST`], and `outline` against
+    /// `surface` at [`UI_CONTRAST`].
     ///
     /// # Arguments
     ///
@@ -473,6 +474,24 @@ impl M3Roles {
                 self.primary,
                 "surface",
                 self.surface,
+                AA_CONTRAST,
+            ),
+            // Dialogs are drawn on `surface_container_high` and carry
+            // outlined and text buttons in `primary`.
+            (
+                "primary",
+                self.primary,
+                "surface_container_high",
+                self.surface_container_high,
+                AA_CONTRAST,
+            ),
+            // A dialog's supporting text is `on_surface_variant` on
+            // `surface_container_high`.
+            (
+                "on_surface_variant",
+                self.on_surface_variant,
+                "surface_container_high",
+                self.surface_container_high,
                 AA_CONTRAST,
             ),
         ];

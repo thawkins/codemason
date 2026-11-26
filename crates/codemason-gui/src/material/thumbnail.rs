@@ -8,14 +8,15 @@
 //! else, so a strip of thumbnails is laid out with [`egui::Ui::horizontal`]
 //! and each one is dropped from the caller's `Vec` on its click.
 //!
-//! The picture also reports a double click ([`ThumbnailResponse`]'s `picture`
-//! response), which the caller answers by opening the image at full size in
+//! The picture also reports an enlarge request ([`ThumbnailResponse`]'s
+//! `enlarge`), from a double click or from Enter while the picture has the
+//! focus: the caller answers it by opening the image at full size in
 //! [`crate::dialogs::image_view`], the same view a transcript image opens.
 //!
 //! An image the window cannot decode (a file that went away, or a format no
 //! loader reads) is drawn as its `label` inside the same frame, so a broken
 //! attachment can still be seen and removed; there is no picture to enlarge,
-//! so that one reports no double click.
+//! so that one is inert and takes no focus.
 //!
 //! Dependencies: `egui`, and this crate's image loading, icons, palette and
 //! metrics.
@@ -23,7 +24,7 @@
 use egui::{CornerRadius, Response, Role, Sense, Stroke, StrokeKind, Vec2, WidgetInfo};
 
 use super::icon_button::{DENSE_SIZE, IconButtonKind, icon_button_dense};
-use super::{label_large, paint_state_layer, text_galley};
+use super::{label_large, paint_focus_ring, paint_state_layer, text_galley};
 use crate::icons::Icon;
 use crate::metrics::{radius, space};
 use crate::palette::{Palette, rgb};
@@ -74,12 +75,17 @@ impl From<crate::image_load::PictureState> for Picture {
 /// What a thumbnail reported this frame.
 #[derive(Debug)]
 pub struct ThumbnailResponse {
-    /// The picture's response. Its `double_clicked()` asks to show the image
-    /// at full size; it is never focusable, so a thumbnail cannot take the
-    /// keyboard from the prompt.
+    /// The picture's response. It is focusable: Tab reaches it, and
+    /// [`ThumbnailResponse::enlarge`] answers both the pointer and the
+    /// keyboard.
     pub picture: Response,
     /// The close mark's response; `clicked()` removes the attachment.
     pub close: Response,
+    /// Something asked to show the image at full size: the picture was
+    /// double-clicked, or it had the focus and Enter was pressed. A caller
+    /// that acts on the double click acts on this, so the two paths cannot
+    /// drift apart.
+    pub enlarge: bool,
 }
 
 /// Draw a removable image thumbnail.
@@ -100,9 +106,9 @@ pub struct ThumbnailResponse {
 ///
 /// [`ThumbnailResponse`]: the caller drops its entry when
 /// [`ThumbnailResponse::close`] was clicked, and shows the image at full size
-/// when [`ThumbnailResponse::picture`] was double-clicked. Only a decoded
-/// picture senses a click, so a thumbnail whose image is still loading, or
-/// that no loader could read, reports no double click.
+/// when [`ThumbnailResponse::enlarge`] is true. Only a decoded picture is a
+/// control at all, so a thumbnail whose image is still loading, or that no
+/// loader could read, reports no click and takes no focus.
 pub fn thumbnail(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -121,19 +127,26 @@ pub fn thumbnail(
     } else {
         Picture::OffScreen
     };
-    // `Sense::CLICK` rather than `Sense::click()`: it reports a double click
-    // without becoming focusable, so Tab never lands on a thumbnail and a
-    // focused mark cannot keep the prompt from taking typed text. Hover is
-    // sensed for free (its mask is empty), so the tooltip needs no sense of its
-    // own.
+    // `Sense::click()` rather than `Sense::CLICK`: the picture is a real
+    // control, so Tab reaches it and Enter opens the image at full size, the
+    // same as a double click. It cannot keep the prompt from taking typed
+    // text: the prompt only yields to another *text field*
+    // (`panels::prompt::prepare`), so a focused thumbnail loses the focus on
+    // the first printable key. Hover is sensed for free (its mask is empty),
+    // so the tooltip needs no sense of its own.
     let sense = if picture == Picture::Ready {
-        Sense::CLICK
+        Sense::click()
     } else {
         Sense::hover()
     };
     let (rect, picture_response) = ui.allocate_exact_size(Vec2::splat(side), sense);
     picture_response.widget_info(|| WidgetInfo::labeled(Role::Image, ui.is_enabled(), label));
     let picture_response = picture_response.on_hover_text(label);
+    // Enter on the focused picture is the keyboard's double click. egui
+    // activates only its own button widgets from the keyboard, so the key is
+    // read here, guarded by the focus that Tab gave this thumbnail.
+    let enlarge = picture_response.double_clicked()
+        || (picture_response.has_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter)));
     if picture != Picture::OffScreen {
         let corner = CornerRadius::same(radius::SM);
         paint_picture(ui, palette, uri, label, rect, corner, picture);
@@ -144,6 +157,9 @@ pub fn thumbnail(
             StrokeKind::Inside,
         );
         paint_state_layer(ui, &picture_response, corner, rgb(palette.m3.on_surface));
+        if picture_response.has_focus() {
+            paint_focus_ring(ui, &picture_response, corner, palette);
+        }
     }
     // The close mark gets its own ui over the picture's top-right corner, so
     // it keeps a full Material hit target inside the thumbnail's box. It stays
@@ -170,6 +186,7 @@ pub fn thumbnail(
     ThumbnailResponse {
         picture: picture_response,
         close,
+        enlarge,
     }
 }
 

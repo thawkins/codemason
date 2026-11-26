@@ -87,6 +87,15 @@ const SEARCH_WIDTH: f32 = 360.0;
 /// The share of a narrow dialog's width the details pane may take.
 const DETAILS_SHARE: f32 = 0.3;
 
+/// The share of a narrow dialog's width the filter rail may take.
+///
+/// The rail's [`RAIL_WIDTH`] plus the details pane's [`DETAILS_WIDTH`] are
+/// wider than the body of a dialog in the smallest window (about 512 points),
+/// so each column is capped to its share there and the result list keeps the
+/// rest. Without the cap the rail and the details pane take the whole body
+/// and the list collapses to nothing.
+const RAIL_SHARE: f32 = 0.28;
+
 /// What differs between the store dialogs.
 #[derive(Debug, Clone, Copy)]
 pub struct Look {
@@ -286,12 +295,16 @@ fn body(
 ) {
     ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Min), |ui| {
         ui.set_height(size.y);
+        // Both side columns are capped to a share of a narrow body, so the
+        // result list keeps usable width at the smallest window instead of
+        // collapsing between two fixed-width panes.
+        let rail_width = RAIL_WIDTH.min(size.x * RAIL_SHARE);
         let details_width = DETAILS_WIDTH.min(size.x * DETAILS_SHARE);
-        let list_width = (size.x - RAIL_WIDTH - details_width - TWO_GAPS).max(0.0);
+        let list_width = (size.x - rail_width - details_width - TWO_GAPS).max(0.0);
         let m3 = &palette.m3;
         column(
             ui,
-            Vec2::new(RAIL_WIDTH, size.y),
+            Vec2::new(rail_width, size.y),
             rgb(m3.surface_container),
             |ui| set(click, rail(ui, palette, id, snap)),
         );

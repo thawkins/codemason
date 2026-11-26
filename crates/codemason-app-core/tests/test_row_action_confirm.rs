@@ -311,3 +311,67 @@ async fn the_kill_answer_follows_a_row_that_became_a_background_task() {
 // ---------------------------------------------------------------------------
 // FR-028 / FR-032 - the dialog states which option performs and which cancels
 // ---------------------------------------------------------------------------
+
+/// The confirming button names the action's own verb, and the outcome hint
+/// names that same verb, so the dialog's destructive click is never a generic
+/// `Yes`.
+#[test]
+fn every_row_action_confirms_with_its_own_verb() {
+    let actions = [
+        (
+            RowAction::KillSubagent {
+                task_id: "a1b2c3d4".to_string(),
+                agent_name: "explore".to_string(),
+            },
+            "Kill",
+        ),
+        (
+            RowAction::CancelBackground {
+                task_id: "a1b2c3d4".to_string(),
+                command: "sleep 30".to_string(),
+            },
+            "Cancel task",
+        ),
+        (
+            RowAction::SuspendTeammate {
+                agent_id: "tm-001".to_string(),
+                name: "reviewer".to_string(),
+            },
+            "Suspend",
+        ),
+        (
+            RowAction::ShutdownTeammate {
+                agent_id: "tm-001".to_string(),
+                name: "reviewer".to_string(),
+            },
+            "Shut down",
+        ),
+        (
+            RowAction::ResumeTeammate {
+                agent_id: "tm-001".to_string(),
+                name: "reviewer".to_string(),
+            },
+            "Resume",
+        ),
+        (
+            RowAction::DeleteSession {
+                session_id: "session-1".to_string(),
+                title: "a session".to_string(),
+                children: 0,
+            },
+            "Delete",
+        ),
+    ];
+    for (action, verb) in actions {
+        assert_eq!(action.confirm_label(), verb, "{action:?}");
+        let hint = codemason_app_core::app::row_action_outcome_hint(&action);
+        assert!(
+            hint.contains(verb),
+            "{action:?}: the outcome hint {hint:?} does not name {verb:?}"
+        );
+        assert!(
+            !hint.contains("Yes"),
+            "{action:?}: the outcome hint {hint:?} still says Yes"
+        );
+    }
+}

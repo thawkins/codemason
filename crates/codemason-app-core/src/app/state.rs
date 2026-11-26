@@ -1371,17 +1371,38 @@ pub enum RowAction {
 /// The footer hints for the modal row-action dialog (spec `teamssetup` FR-028,
 /// FR-032).
 ///
-/// Row verbs are modal: `Space`/`Del` open a `Yes`/`No` dialog whose default is
-/// `No`, so an `Enter` on an un-toggled dialog DISMISSES the action. Both
-/// strings therefore name the toggle key pair first and say which option
+/// Row verbs are modal: `Space`/`Del` open a two-option dialog whose default
+/// is `No`, so an `Enter` on an un-toggled dialog DISMISSES the action. The
+/// toggle line names the key pair, and the outcome line names which option
 /// performs and which cancels, so "pressed `Enter` and nothing happened" is
-/// never the observed behaviour.
+/// never the observed behaviour. The confirming option is labelled with the
+/// action's own verb ([`RowAction::confirm_label`]), not a generic `Yes`.
 pub const ROW_ACTION_TOGGLE_HINT: &str = "Left/Right toggle the selection";
 
 /// The second footer line: which option performs, which cancels, and how to
 /// leave without acting (spec `teamssetup` FR-028, FR-032).
-pub const ROW_ACTION_OUTCOME_HINT: &str =
-    "Enter on Yes performs * Enter on No cancels * Esc cancels";
+///
+/// The outcome line is built per action from [`RowAction::confirm_label`], so
+/// it names the same verb its button does rather than a generic `Yes`.
+pub const ROW_ACTION_CANCEL_HINT: &str = "Esc cancels";
+
+/// The row-action dialog's outcome hint for `action`: the verb's own label,
+/// then what Enter and Esc do.
+///
+/// # Arguments
+///
+/// * `action` - the pending destructive action.
+///
+/// # Returns
+///
+/// One line naming both options and the escape.
+#[must_use]
+pub fn row_action_outcome_hint(action: &RowAction) -> String {
+    format!(
+        "Enter on {} performs * Enter on No cancels * Esc cancels",
+        action.confirm_label()
+    )
+}
 
 impl RowAction {
     /// The dialog title naming the action (spec `agentui` T-009, FR-036,
@@ -1404,6 +1425,26 @@ impl RowAction {
             Self::DeleteSessions { session_ids, .. } => {
                 format!(" Delete {} sessions? ", session_ids.len())
             }
+        }
+    }
+
+    /// The verb its confirming button carries (spec `agentui` T-009).
+    ///
+    /// The button names what pressing it does. A generic `Yes` next to a
+    /// destructive verb makes the reader re-derive the action from the title,
+    /// and for the four verbs that end something (`kill`, `cancel`, `shut
+    /// down`, `delete`) the dialog's most dangerous click is the one button
+    /// whose label says the least. The same word is used in the dialog's
+    /// hint, so the button and the key legend name one thing.
+    #[must_use]
+    pub fn confirm_label(&self) -> &'static str {
+        match self {
+            Self::KillSubagent { .. } => "Kill",
+            Self::CancelBackground { .. } => "Cancel task",
+            Self::SuspendTeammate { .. } => "Suspend",
+            Self::ShutdownTeammate { .. } => "Shut down",
+            Self::ResumeTeammate { .. } => "Resume",
+            Self::DeleteSession { .. } | Self::DeleteSessions { .. } => "Delete",
         }
     }
 

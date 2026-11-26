@@ -1,12 +1,10 @@
 //! The input queue (spec `inputqueue`) and its Alt+Q queue-control menu.
 //!
 //! [`queue_ui`] lists the App's queued prompts above the prompt, oldest
-//! first, and draws the overlays the queue-control menu opens: the menu
-//! itself (`Next`, `Stop`/`Resume`, `Clear`, `Show`) and the
-//! `Clear the input queue?` confirmation. Everything shown is App state;
-//! the overlays' keys reach `App::handle_key` through the key router (the
-//! App locks the prompt while one is open, so every key is forwarded) and
-//! app-core runs them, as in the TUI.
+//! first, and draws the queue-control menu (`Next`, `Stop`/`Resume`, `Clear`,
+//! `Show`). Everything shown is App state; the menu's keys reach
+//! `App::handle_key` through the key router (the App locks the prompt while it
+//! is open, so every key is forwarded) and app-core runs them, as in the TUI.
 //!
 //! The menu is a Material menu surface ([`menu_frame`]) with one
 //! [`menu_item`] per row app-core names; the row its cursor is on is
@@ -14,10 +12,14 @@
 //! The rows are what the App's keys act on, so the menu carries no hit
 //! targets of its own: a row is a label, not a button.
 //!
+//! The `Clear` row's `Clear the input queue?` confirmation is a Material
+//! dialog like every other confirmation, drawn by `crate::dialogs`
+//! (`ActiveDialog::QueueClear`).
+//!
 //! Dependencies: `codemason-app-core` (the queue state), `egui`, and this
 //! crate's Material menu.
 
-use codemason_app_core::app::{App, QUEUE_CLEAR_CONFIRM_YES};
+use codemason_app_core::app::App;
 use egui::{Align2, Id, Role, Vec2, WidgetInfo};
 
 use crate::material::label_large;
@@ -30,9 +32,6 @@ pub const QUEUE_LABEL: &str = "Input queue";
 
 /// Accessible label of the queue-control menu.
 pub const QUEUE_MENU_LABEL: &str = "Queue control";
-
-/// Accessible label of the `Clear the input queue?` confirmation.
-pub const QUEUE_CLEAR_LABEL: &str = "Clear the input queue?";
 
 /// Width of the queue-control menu, in points: wide enough for the longest
 /// row and its title, and narrow enough not to crowd the prompt.
@@ -56,20 +55,21 @@ fn preview(text: &str) -> String {
     out
 }
 
-/// Draw the input queue and the queue-control overlays.
+/// Draw the input queue and the queue-control menu.
+///
+/// The `Clear the input queue?` confirmation is a Material dialog drawn by
+/// `crate::dialogs` (`ActiveDialog::QueueClear`), so it carries the same
+/// surface, action row and accessible role as every other confirmation.
 ///
 /// # Arguments
 ///
-/// * `ui` - the ui the queue list is drawn into; the overlays float over
-///   the window.
+/// * `ui` - the ui the queue list is drawn into; the menu floats over the
+///   window.
 /// * `app` - the App whose `session.input_queue` is shown.
 pub fn queue_ui(ui: &mut egui::Ui, app: &App) {
     queue_list(ui, app);
     if app.queue_menu_open {
         queue_menu(ui.ctx(), app);
-    }
-    if app.queue_clear_confirm_open {
-        clear_confirm(ui.ctx(), app);
     }
 }
 
@@ -105,20 +105,6 @@ fn queue_list(ui: &mut egui::Ui, app: &App) {
     });
     list.response
         .widget_info(|| WidgetInfo::labeled(Role::List, true, QUEUE_LABEL));
-}
-
-/// A centred overlay holding `add_contents`, labelled `label`.
-fn overlay(ctx: &egui::Context, id: &str, label: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Area::new(Id::unique(id))
-        .order(egui::Order::Foreground)
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                let menu = ui.vertical(add_contents);
-                menu.response
-                    .widget_info(|| WidgetInfo::labeled(Role::Menu, true, label));
-            });
-        });
 }
 
 /// The Alt+Q queue-control menu: the four rows app-core names, with the
@@ -175,14 +161,4 @@ fn queue_menu(ctx: &egui::Context, app: &App) {
                     .widget_info(|| WidgetInfo::labeled(Role::Menu, true, QUEUE_MENU_LABEL));
             });
         });
-}
-
-/// The `Clear the input queue?` confirmation, `No` selected by default.
-fn clear_confirm(ctx: &egui::Context, app: &App) {
-    overlay(ctx, "codemason_queue_clear", QUEUE_CLEAR_LABEL, |ui| {
-        ui.strong(QUEUE_CLEAR_LABEL);
-        let yes = app.queue_clear_confirm_selected == QUEUE_CLEAR_CONFIRM_YES;
-        ui.label(format!("{}Yes", marker(yes)));
-        ui.label(format!("{}No", marker(!yes)));
-    });
 }

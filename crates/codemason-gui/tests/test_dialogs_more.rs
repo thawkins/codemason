@@ -26,8 +26,8 @@ use codemason_app_core::session_menu::{MenuAction, MenuItem, MenuTarget, Session
 use codemason_gui::Shell;
 use codemason_gui::dialogs::banner::{BANNER_LABEL, DISMISS_BANNER};
 use codemason_gui::dialogs::confirm::{
-    APPROVE, COMPACT_PRUNE_TITLE, FORCE_CLEANUP_TITLE, KEEP_CHANGES, NO, NOTICE_OK, PLAN_TITLE,
-    ROLLBACK_TITLE, ROUTER_SAVE_TITLE, YES, db_prune_title,
+    APPROVE, COMPACT_DELETE, COMPACT_PRUNE_TITLE, FORCE_CLEANUP_TITLE, KEEP_CHANGES, NO, NOTICE_OK,
+    PLAN_TITLE, PRUNE_DELETE, ROLLBACK_TITLE, ROUTER_SAVE_TITLE, db_prune_title,
 };
 use codemason_gui::dialogs::context_menu::{CONTEXT_MENU_LABEL, item_label};
 use codemason_gui::dialogs::loop_setup::{AGENTS_LABEL, CHECKPOINTS_LABEL, LOOP_TITLE, START};
@@ -528,21 +528,23 @@ fn test_db_prune_dialog_is_a_material_row_with_the_confirming_button_rightmost()
     assert!(dialog_shown(&harness, &db_prune_title(30)));
 
     // Both answers are Material buttons on one right-aligned row, and the
-    // confirming one (Yes) sits to the right of the cancelling one (No).
-    let yes = harness.get_by_role_and_label(Role::Button, YES).rect();
+    // confirming one (Delete) sits to the right of the cancelling one (No).
+    let confirm = harness
+        .get_by_role_and_label(Role::Button, PRUNE_DELETE)
+        .rect();
     let no = harness.get_by_role_and_label(Role::Button, NO).rect();
     assert!(
-        yes.left() > no.right(),
-        "Yes {yes:?} should be right of No {no:?}"
+        confirm.left() > no.right(),
+        "Delete {confirm:?} should be right of No {no:?}"
     );
 
-    // Yes still moves app-core's own cursor before confirming, so the
-    // Yes/No choice stays app-core's.
+    // The confirming button still moves app-core's own cursor before acting,
+    // so the two-option choice stays app-core's.
     assert!(!harness.state().app().db_prune_confirm_is_yes());
-    harness.get_by_label(YES).click();
+    harness.get_by_label(PRUNE_DELETE).click();
     harness.run();
     let app = harness.state().app();
-    assert!(!app.db_prune_confirm_open, "Yes runs the prune");
+    assert!(!app.db_prune_confirm_open, "Delete runs the prune");
     assert_eq!(app.status, "db: pruned 0");
 }
 
@@ -563,10 +565,10 @@ fn test_compact_prune_dialog_no_cancels_and_yes_deletes() {
     harness.run();
     type_key(&mut harness, egui::Key::ArrowLeft, None);
     assert!(harness.state().app().compact_prune_confirm_is_yes());
-    harness.get_by_label(YES).click();
+    harness.get_by_label(COMPACT_DELETE).click();
     harness.run();
     let app = harness.state().app();
-    assert!(!app.compact_prune_confirm_open, "Yes prunes");
+    assert!(!app.compact_prune_confirm_open, "Delete all prunes");
     assert_eq!(app.status, "compact: pruned 0");
 }
 
@@ -1050,6 +1052,33 @@ fn test_theme_picker_keys_preview_and_apply_keeps_the_theme() {
     assert_eq!(
         harness.ctx.global_style().visuals,
         theme_visuals("codemason-light")
+    );
+}
+
+#[test]
+fn test_theme_picker_e_opens_the_editor_on_the_highlighted_theme() {
+    let _config = support::scratch_config_target();
+    let (_rt, _events, mut harness) = theme_picker_rig();
+    harness.run();
+
+    // On `system` (row 0) `e` opens nothing: that row has no colours and
+    // draws no edit button either.
+    type_key(&mut harness, egui::Key::E, None);
+    assert!(
+        harness.state().app().theme_editor.is_none(),
+        "the system row has no colours to edit"
+    );
+
+    // Down moves to the first theme; `e` then opens the editor on it, the
+    // keyboard equivalent of that row's edit button.
+    type_key(&mut harness, egui::Key::ArrowDown, None);
+    let highlighted = harness.state().app().theme.display_name().to_string();
+    type_key(&mut harness, egui::Key::E, None);
+    let app = harness.state().app();
+    let editor = app.theme_editor.as_ref().expect("e opens the editor");
+    assert_eq!(
+        editor.name, highlighted,
+        "the editor opens on the shown theme"
     );
 }
 

@@ -162,25 +162,27 @@ fn test_material_thumbnail_names_an_image_it_cannot_load() {
 }
 
 #[test]
-fn test_material_thumbnail_does_not_take_the_keyboard() {
+fn test_material_thumbnail_picture_is_in_the_tab_order() {
+    let dir = scratch("tab-order");
+    let path = dir.join("shot.png");
+    write_png(&path);
+    let uri = codemason_gui::image_load::file_uri(&path);
     let palette = support_material::palette();
     let mut harness = support_material::builder().build_ui(move |ui| {
-        thumbnail(
-            ui,
-            &palette,
-            "file:///nonexistent/shot.png",
-            "shot.png",
-            SIZE,
-        );
+        thumbnail(ui, &palette, &uri, "shot.png", SIZE);
     });
+    // Only a decoded picture is a control; a broken one is a name in a frame.
+    egui_extras::install_image_loaders(&harness.ctx);
     harness.run();
-    // A focusable picture would take Tab's focus from the prompt and keep
-    // typed text from reaching it; a thumbnail answers the mouse only.
+    // The picture is a real control: Tab reaches it so Enter can enlarge it
+    // from the keyboard. It cannot hold the keyboard against typing - the
+    // prompt yields only to another text field (`panels::prompt::prepare`),
+    // which `test_prompt_takes_typing_back_from_a_focused_thumbnail` pins.
     harness.get_by_label("shot.png").focus();
     harness.run();
     assert!(
-        !harness.get_by_label("shot.png").is_focused(),
-        "the picture is not in the Tab order"
+        harness.get_by_label("shot.png").is_focused(),
+        "the picture is in the Tab order"
     );
 }
 
@@ -193,10 +195,7 @@ fn test_material_thumbnail_reports_a_double_click_on_its_picture() {
     let palette = support_material::palette();
     let mut harness = support_material::builder().build_ui_state(
         move |ui, clicks: &mut u32| {
-            if thumbnail(ui, &palette, &uri, "shot.png", SIZE)
-                .picture
-                .double_clicked()
-            {
+            if thumbnail(ui, &palette, &uri, "shot.png", SIZE).enlarge {
                 *clicks += 1;
             }
         },
@@ -241,8 +240,7 @@ fn test_material_thumbnail_reports_no_double_click_on_an_unloadable_picture() {
                 "gone.png",
                 SIZE,
             )
-            .picture
-            .double_clicked()
+            .enlarge
             {
                 *clicks += 1;
             }
@@ -341,10 +339,7 @@ fn test_material_thumbnail_shows_a_picture_that_is_still_loading() {
     let palette = support_material::palette();
     let mut harness = pending_builder().build_ui_state(
         move |ui, clicks: &mut u32| {
-            if thumbnail(ui, &palette, "file:///pending/shot.png", "shot.png", SIZE)
-                .picture
-                .double_clicked()
-            {
+            if thumbnail(ui, &palette, "file:///pending/shot.png", "shot.png", SIZE).enlarge {
                 *clicks += 1;
             }
         },
@@ -368,6 +363,53 @@ fn test_material_thumbnail_shows_a_picture_that_is_still_loading() {
     // There is no picture yet, so there is nothing to enlarge: an image still
     // on its way must not open an empty viewer.
     assert_eq!(*harness.state(), 0, "a loading thumbnail enlarges nothing");
+}
+
+#[test]
+fn test_material_thumbnail_reports_enter_on_a_focused_picture() {
+    let dir = scratch("enter");
+    let path = dir.join("shot.png");
+    write_png(&path);
+    let uri = codemason_gui::image_load::file_uri(&path);
+    let palette = support_material::palette();
+    let mut harness = support_material::builder().build_ui_state(
+        move |ui, clicks: &mut u32| {
+            if thumbnail(ui, &palette, &uri, "shot.png", SIZE).enlarge {
+                *clicks += 1;
+            }
+        },
+        0,
+    );
+    egui_extras::install_image_loaders(&harness.ctx);
+    harness.run();
+    // Enter without the focus does nothing: a key typed into the prompt must
+    // not open an image.
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+    assert_eq!(*harness.state(), 0, "Enter without the focus is ignored");
+
+    // With the focus (Tab reaches it) Enter is the keyboard's double click.
+    harness.get_by_label("shot.png").focus();
+    harness.run();
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+    assert_eq!(
+        *harness.state(),
+        1,
+        "Enter on the focused picture enlarges it"
+    );
 }
 
 /// A loader that records every URI it is asked for and loads none of them.

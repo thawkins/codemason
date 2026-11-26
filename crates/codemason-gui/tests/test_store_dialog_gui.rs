@@ -194,6 +194,35 @@ fn test_store_dialog_small_window_clamps() {
 }
 
 #[test]
+fn test_store_dialog_keeps_a_usable_list_at_the_minimum_window() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    // The smallest window the GUI opens (window::MIN_SIZE).
+    let small = egui::vec2(640.0, 420.0);
+    let harness = rig(small, app_with(&rt, three()));
+    let dialog = dialog_rect(&harness);
+    let rail = harness
+        .get_by_role_and_label(Role::List, CATEGORIES_LABEL)
+        .rect();
+    let list = list_rect(&harness);
+    // The rail and the details pane are capped to a share of a narrow body,
+    // so the result list keeps width instead of collapsing between them.
+    assert!(
+        list.width() >= 120.0,
+        "at {small:?} the result list collapses to {} points: {list:?}",
+        list.width()
+    );
+    assert!(
+        rail.right() <= list.left(),
+        "the rail {rail:?} overlaps the list {list:?}"
+    );
+    assert!(
+        list.right() <= dialog.max.x + 1.0,
+        "the list {list:?} runs past the dialog {dialog:?}"
+    );
+    finish(rt, harness);
+}
+
+#[test]
 fn test_store_dialog_size_rule() {
     assert_eq!(
         dialog_size(egui::vec2(800.0, 500.0)),

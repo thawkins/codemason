@@ -329,6 +329,9 @@ pub const CONFIRM_QUIT: &str = "Quit";
 /// The quit confirmation's button that keeps the window and the turn.
 pub const CANCEL_QUIT: &str = "Cancel";
 
+/// Width of the quit confirmation, in points.
+pub const QUIT_WIDTH: f32 = 440.0;
+
 /// Decides what a close request does, and asks when an agent turn would be
 /// cancelled.
 #[derive(Debug, Default)]
@@ -380,11 +383,20 @@ impl CloseGuard {
     /// through `App::quit`; [`CANCEL_QUIT`], Esc or a click outside closes the
     /// dialog and keeps the window.
     ///
+    /// It is a Material dialog like every other confirmation: the
+    /// `surface_container_high` surface, the title as its headline and
+    /// accessible label, and one right-aligned action row with the quitting
+    /// action filled.
+    ///
     /// # Arguments
     ///
     /// * `ctx` - the frame's context.
     /// * `app` - the App to quit.
     pub fn show(&mut self, ctx: &egui::Context, app: &mut App) {
+        use crate::dialogs::material_modal_response;
+        use crate::material::button::{ButtonKind, button};
+        use crate::material::dialog::{dialog_actions, dialog_body};
+
         if !self.asking {
             return;
         }
@@ -392,25 +404,31 @@ impl CloseGuard {
             self.asking = false;
             return;
         }
-        let response =
-            egui::Modal::new(egui::Id::unique("codemason_quit_confirmation")).show(ctx, |ui| {
-                let inner = ui.vertical(|ui| {
-                    ui.heading(QUIT_TITLE);
-                    ui.add_space(crate::metrics::space::XS);
-                    ui.label("An agent turn is running. Quitting cancels it.");
-                    ui.add_space(crate::metrics::space::SM);
-                    ui.horizontal(|ui| {
-                        let quit = ui.button(CONFIRM_QUIT).clicked();
-                        let cancel = ui.button(CANCEL_QUIT).clicked();
-                        (quit, cancel)
-                    })
-                    .inner
-                });
-                inner.response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, QUIT_TITLE)
-                });
-                inner.inner
-            });
+        let palette = crate::palette::palette_for(app, ctx);
+        let response = material_modal_response(
+            ctx,
+            &palette,
+            "codemason_quit_confirmation",
+            QUIT_TITLE,
+            QUIT_WIDTH,
+            |ui| {
+                dialog_body(
+                    ui,
+                    &palette,
+                    "An agent turn is running. Quitting cancels it.",
+                );
+                dialog_actions(ui, |ui| {
+                    // The confirming action is filled and rightmost, so the
+                    // cancelling one is added first.
+                    let cancel =
+                        button(ui, &palette, ButtonKind::Text, None, CANCEL_QUIT).clicked();
+                    let quit =
+                        button(ui, &palette, ButtonKind::Filled, None, CONFIRM_QUIT).clicked();
+                    (quit, cancel)
+                })
+                .inner
+            },
+        );
         let (quit, cancel) = response.inner;
         if quit {
             self.asking = false;

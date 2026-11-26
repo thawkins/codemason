@@ -227,7 +227,11 @@ pub fn show_history(ctx: &egui::Context, app: &mut App) -> bool {
 
 /// Draw the `/theme` picker while the App shows it.
 ///
-/// A click on an entry previews that theme; a double click also applies it.
+/// A click on an entry previews that theme; a double click also applies it,
+/// and the edit button on a row opens the editor for that theme. Every one of
+/// those has a key equivalent (`handle_theme_picker_key`): Up/Down preview,
+/// Enter applies and `e` opens the editor on the highlighted row, so the
+/// picker is fully usable without a pointer.
 ///
 /// # Arguments
 ///
@@ -284,7 +288,11 @@ pub fn show_theme(ctx: &egui::Context, app: &mut App) -> bool {
                 ],
             );
             ui.add_space(space::MD);
-            material_hint(ui, &palette, "Up/Down preview * Enter apply * Esc cancel");
+            material_hint(
+                ui,
+                &palette,
+                "Up/Down preview * Enter apply * e edit * Esc cancel",
+            );
         },
     );
     if let Some(i) = edit

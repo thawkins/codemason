@@ -45,6 +45,8 @@ pub mod thumbnail;
 
 use egui::{Color32, CornerRadius, Response, Stroke, StrokeKind};
 
+use codemason_app_core::theme_tokens::{M3Roles, Rgb};
+
 use crate::icons::{Icon, icon_label};
 use crate::palette::{Palette, rgb};
 
@@ -150,6 +152,27 @@ pub fn elevation_shadow(level: u8, palette: &Palette) -> egui::Shadow {
         blur,
         spread: 0,
         color: rgb(palette.m3.shadow).gamma_multiply(alpha),
+    }
+}
+
+/// The colour role of a component's less-prominent text on its own fill.
+///
+/// `on_surface_variant` is the Material role for supporting text, but it is
+/// only checked against the surfaces ([`crate::material`]'s components also
+/// paint it on containers): on a selected component's `secondary_container`
+/// fill it falls below 4.5:1 in several themes. A selected component
+/// therefore takes its headline colour, which is checked against that fill.
+///
+/// # Arguments
+///
+/// * `m3` - the theme's Material roles.
+/// * `selected` - whether the component is drawn on `secondary_container`.
+#[must_use]
+pub fn supporting_role(m3: &M3Roles, selected: bool) -> Rgb {
+    if selected {
+        m3.on_secondary_container
+    } else {
+        m3.on_surface_variant
     }
 }
 
