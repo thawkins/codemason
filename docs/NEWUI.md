@@ -213,6 +213,12 @@ Done for the `document-*` themes, with these differences:
 - Dialogs are not rebuilt: the Phase 3 visuals already give egui's windows
   the M3 dialog surface, 28 pt corners and shadow, and their buttons the
   tonal style.
+   - Superseded: every dialog was rebuilt on the Material components
+     afterwards. `docs/plans/MATERIALDIALOGS.md` converts the remaining
+     twenty-two `modal()` call sites, the eight non-modal popup surfaces and
+     the three in-panel popups, and retires the plain helper; the sweep test
+     `tests/test_material_dialogs.rs` fails if a dialog is drawn without a
+     Material frame.
 - The slider holds a new zoom until the pointer is released: applying it
   while dragging rescales the slider under the pointer.
 

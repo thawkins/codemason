@@ -7,9 +7,10 @@ mod support_material;
 
 use codemason_gui::material::elevation_shadow;
 use codemason_gui::material::feedback::{
-    STACKED_TRACK_HEIGHT, SWATCH_SIZE, TRACK_HEIGHT, linear_progress, slider, snackbar,
-    stacked_progress, swatch,
+    CIRCULAR_SIZE, STACKED_TRACK_HEIGHT, SWATCH_SIZE, TRACK_HEIGHT, circular_progress,
+    linear_progress, slider, snackbar, stacked_progress, swatch,
 };
+use egui::accesskit::Role;
 use egui_kittest::kittest::Queryable;
 
 #[test]
@@ -53,6 +54,34 @@ fn test_material_feedback_linear_progress_is_a_thin_track() {
 }
 
 #[test]
+fn test_material_feedback_circular_progress_is_a_labelled_square() {
+    let palette = support_material::palette();
+    let harness = support_material::builder()
+        .with_size(egui::vec2(120.0, 120.0))
+        .build_ui(move |ui| {
+            let response = circular_progress(ui, &palette, "Loading models");
+            assert!((response.rect.width() - CIRCULAR_SIZE).abs() < 0.5);
+            assert!((response.rect.height() - CIRCULAR_SIZE).abs() < 0.5);
+        });
+    harness.get_by_role_and_label(Role::ProgressIndicator, "Loading models");
+}
+
+#[test]
+fn test_material_feedback_circular_progress_asks_for_the_next_frame_rather_than_spinning() {
+    let palette = support_material::palette();
+    let mut harness = support_material::builder()
+        .with_size(egui::vec2(120.0, 120.0))
+        .build_ui(move |ui| {
+            circular_progress(ui, &palette, "Loading models");
+        });
+    // `run` settles once a frame stops asking for an immediate repaint, so
+    // reaching its end at all proves the spinner does not spin at full rate.
+    harness.run();
+    let delay = harness.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+    assert_eq!(delay, std::time::Duration::from_millis(33));
+}
+
+#[test]
 fn test_material_feedback_stacked_progress_is_labelled_and_fills_the_width() {
     let palette = support_material::palette();
     let harness = support_material::builder()
@@ -81,12 +110,17 @@ fn test_material_feedback_snackbar_reports_its_action() {
         .build_ui_state(
             move |ui, undone: &mut bool| {
                 let id = egui::Id::unique("test_snackbar");
-                if snackbar(ui.ctx(), &palette, id, "Saved", Some("Undo")) {
+                let clicked = snackbar(ui.ctx(), &palette, id, "Saved", "Note saved", Some("Undo"));
+                if clicked {
                     *undone = true;
                 }
             },
             false,
         );
+    // The message is a labelled status under the snackbar's own name, so a
+    // caller that showed the same notice twice would still find each one.
+    harness.get_by_role_and_label(Role::Status, "Saved");
+    harness.get_by_label("Note saved");
     harness.get_by_label("Undo").click();
     harness.run();
     assert!(*harness.state());

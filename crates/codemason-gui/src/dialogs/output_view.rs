@@ -23,11 +23,17 @@
 //!
 //! Dependencies: `codemason-app-core`, [`crate::panels::messages`] and
 //! `egui`.
+//!
+//! The overlay is a Material dialog of a fixed size (the TUI's 90 x 70
+//! share of the window) that draws its own headline, the virtualised
+//! transcript in its body and one filled `Close` above the key legend.
 
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
 
-use super::{key_buttons, modal, plain};
+use super::{material_actions, material_hint, material_modal_sized, plain};
+use crate::material::button::HEIGHT as BUTTON_HEIGHT;
+use crate::metrics::space;
 use crate::palette::palette_for;
 use crate::panels::messages::{MessageSource, MessagesView, ScrollTo};
 
@@ -36,6 +42,20 @@ pub const OUTPUT_LABEL: &str = "Output";
 
 /// The button that closes the overlay (Esc).
 pub const CLOSE: &str = "Close";
+
+/// Share of the window the overlay takes, as the TUI's 90 x 70 frame.
+const SIZE_SHARE: egui::Vec2 = egui::vec2(0.8, 0.7);
+
+/// The overlay's footer: the Close button, its gap and the hint line, which
+/// the transcript leaves free.
+const FOOTER_HEIGHT: f32 =
+    BUTTON_HEIGHT + space::LG + space::MD + crate::metrics::text_size::SMALL + space::XS;
+
+/// What the overlay shows while its target has produced no output.
+pub const NO_OUTPUT: &str = "No output yet for this target";
+
+/// The overlay's key legend.
+pub const FOOTER_HINT: &str = "PgUp/PgDn scroll * Ctrl+PgUp/PgDn jump * Esc close";
 
 /// What the overlay keeps between frames.
 #[derive(Debug, Default)]
@@ -109,47 +129,64 @@ fn show_with(ctx: &egui::Context, app: &mut App, state: &mut OutputView) -> bool
     let follow_app = key_scrolled || std::mem::take(&mut state.force_scroll);
     let palette = palette_for(app, ctx);
     let mut scroll = None;
-    modal(ctx, "codemason_output_view", &content.title, |ui| {
-        let size = ctx.content_rect().size();
-        let width = size.x * 0.8;
-        ui.set_width(width);
-        if content.messages.is_empty() {
-            ui.weak("No output yet for this target");
-        } else {
-            ui.allocate_ui(egui::vec2(width, size.y * 0.7), |ui| {
-                let row = ui.ctx().fonts_mut(|f| {
-                    f.row_height(&egui::FontId::proportional(crate::styled_text::FONT_SIZE))
+    let window = ctx.content_rect().size();
+    let size = egui::vec2(
+        (window.x * SIZE_SHARE.x).max(0.0),
+        (window.y * SIZE_SHARE.y).max(0.0),
+    );
+    material_modal_sized(
+        ctx,
+        &palette,
+        "codemason_output_view",
+        &content.title,
+        size,
+        |ui| {
+            crate::material::dialog::dialog_headline(ui, &palette, &content.title);
+            let width = ui.available_width();
+            let body = (ui.available_height() - FOOTER_HEIGHT).max(0.0);
+            if content.messages.is_empty() {
+                ui.allocate_ui(egui::vec2(width, body), |ui| {
+                    material_hint(ui, &palette, NO_OUTPUT);
                 });
-                // As in the TUI, app-core's offset counts lines from the
-                // bottom: 0 pins the view to the tail, so new output stays
-                // in view; any other offset keeps that distance from the
-                // bottom.
-                let scroll_to = follow_app.then(|| {
-                    if offset_lines == 0 {
-                        ScrollTo::Bottom
-                    } else {
-                        ScrollTo::FromBottom(f32::from(offset_lines) * row)
-                    }
+            } else {
+                ui.allocate_ui(egui::vec2(width, body), |ui| {
+                    let row = ui.ctx().fonts_mut(|f| {
+                        f.row_height(&egui::FontId::proportional(crate::styled_text::FONT_SIZE))
+                    });
+                    // As in the TUI, app-core's offset counts lines from the
+                    // bottom: 0 pins the view to the tail, so new output stays
+                    // in view; any other offset keeps that distance from the
+                    // bottom.
+                    let scroll_to = follow_app.then(|| {
+                        if offset_lines == 0 {
+                            ScrollTo::Bottom
+                        } else {
+                            ScrollTo::FromBottom(f32::from(offset_lines) * row)
+                        }
+                    });
+                    let source = MessageSource {
+                        messages: &content.messages,
+                        processing: content.focused && app.session.is_processing,
+                    };
+                    // The node is made before the transcript, so its messages
+                    // are placed under it.
+                    let node = ui.scope_id().with("output_transcript");
+                    ui.interact(ui.available_rect_before_wrap(), node, egui::Sense::hover())
+                        .widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Log, true, OUTPUT_LABEL)
+                        });
+                    let geometry = state
+                        .view
+                        .show_messages(ui, app, source, &palette, scroll_to, node);
+                    scroll = Some(geometry);
                 });
-                let source = MessageSource {
-                    messages: &content.messages,
-                    processing: content.focused && app.session.is_processing,
-                };
-                // The node is made before the transcript, so its messages
-                // are placed under it.
-                let node = ui.scope_id().with("output_transcript");
-                ui.interact(ui.available_rect_before_wrap(), node, egui::Sense::hover())
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Log, true, OUTPUT_LABEL));
-                let geometry = state
-                    .view
-                    .show_messages(ui, app, source, &palette, scroll_to, node);
-                scroll = Some(geometry);
-            });
-        }
-        ui.add_space(crate::metrics::space::SM);
-        key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
-        ui.weak("PgUp/PgDn scroll * Ctrl+PgUp/PgDn jump * Esc close");
-    });
+            }
+            ui.add_space(space::LG);
+            material_actions(ui, &palette, &[(CLOSE, plain(Key::Esc))], true);
+            ui.add_space(space::MD);
+            material_hint(ui, &palette, FOOTER_HINT);
+        },
+    );
     if let (Some(geometry), Some(view)) = (scroll, app.output_view.as_mut()) {
         let row = geometry.row_height.max(1.0);
         let max_lines = lines(geometry.max_offset / row);

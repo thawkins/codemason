@@ -1,10 +1,13 @@
-//! Material Design 3 feedback components: slider, linear progress
-//! indicator, plain tooltip and snackbar.
+//! Material Design 3 feedback components: slider, linear and circular
+//! progress indicators, plain tooltip and snackbar.
 //!
 //! - [`slider`] edits a value in a range by dragging, clicking the track, or
 //!   the arrow keys while focused.
 //! - [`linear_progress`] shows how far along a task is, or that it is
 //!   running when the progress is unknown.
+//! - [`circular_progress`] is the indeterminate spinner: an arc that turns
+//!   once per 1333 ms, for a task whose length is unknown in a place too
+//!   narrow for a track.
 //! - [`stacked_progress`] shows how a whole is shared out, one coloured
 //!   segment per part, on the progress indicator's track; [`swatch`] is the
 //!   matching legend square.
@@ -16,6 +19,7 @@
 //! Dependencies: `egui`, and this crate's palette and metrics.
 
 use std::ops::RangeInclusive;
+use std::time::Duration;
 
 use egui::{
     Align2, Area, CornerRadius, Frame, Id, Key, Margin, Order, Rect, Response, Role, Sense, Vec2,
@@ -47,6 +51,29 @@ const INDETERMINATE_PERIOD: f64 = 1.5;
 
 /// Fraction of the track the indeterminate segment covers.
 const INDETERMINATE_WIDTH: f32 = 0.3;
+
+/// Diameter of the circular progress indicator, in points.
+pub const CIRCULAR_SIZE: f32 = 24.0;
+
+/// Stroke width of the circular progress indicator, in points (M3's 4 dp).
+pub const CIRCULAR_STROKE: f32 = 4.0;
+
+/// Seconds the circular progress indicator takes for one turn (M3's
+/// 1333 ms).
+pub const CIRCULAR_PERIOD: f64 = 1.333;
+
+/// Fraction of the circle the indicator's arc covers.
+const CIRCULAR_SWEEP: f32 = 0.75;
+
+/// Segments the indicator's arc is drawn with: enough for a smooth curve
+/// at [`CIRCULAR_SIZE`], and cheap.
+const CIRCULAR_SEGMENTS: usize = 32;
+
+/// How often the circular progress indicator asks for its next frame: 30
+/// frames a second, smooth at [`CIRCULAR_SIZE`] without waking an idle
+/// window more than it needs (the status bar's smaller spinner asks for
+/// 60 ms).
+const CIRCULAR_FRAME: Duration = Duration::from_millis(33);
 
 /// Height of a stacked progress indicator, in points: taller than
 /// [`TRACK_HEIGHT`] so narrow segments stay visible.
@@ -214,6 +241,52 @@ pub fn linear_progress(ui: &mut egui::Ui, palette: &Palette, progress: Option<f3
     response
 }
 
+/// Draw a circular progress indicator: an indeterminate arc in the
+/// `primary` colour, turning once every [`CIRCULAR_PERIOD`] seconds.
+///
+/// The indicator asks for its next frame after [`CIRCULAR_FRAME`] rather
+/// than at once, so a window showing one still sleeps between frames
+/// instead of spinning at full rate.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; the indicator takes a [`CIRCULAR_SIZE`]
+///   square.
+/// * `palette` - the colours.
+/// * `label` - the accessible name, e.g. `Loading models`.
+///
+/// # Returns
+///
+/// The indicator's response.
+pub fn circular_progress(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(CIRCULAR_SIZE), Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, label));
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let radius = (CIRCULAR_SIZE - CIRCULAR_STROKE) / 2.0;
+    let centre = rect.center();
+    // Turning clockwise from twelve o'clock: the angle grows with time and
+    // wraps once per period, so the arc's start is wherever it was a period
+    // ago.
+    let start = (ui.input(|input| input.time) / CIRCULAR_PERIOD).fract() as f32;
+    let points: Vec<egui::Pos2> = (0..=CIRCULAR_SEGMENTS)
+        .map(|step| {
+            let turn = step as f32 / CIRCULAR_SEGMENTS as f32;
+            let angle = turn
+                .mul_add(CIRCULAR_SWEEP, start)
+                .mul_add(std::f32::consts::TAU, -std::f32::consts::FRAC_PI_2);
+            centre + radius * egui::vec2(angle.cos(), angle.sin())
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(
+        points,
+        egui::Stroke::new(CIRCULAR_STROKE, rgb(palette.m3.primary)),
+    ));
+    ui.ctx().request_repaint_after(CIRCULAR_FRAME);
+    response
+}
+
 /// Draw a stacked progress indicator: the track with one segment per part,
 /// left to right, each as wide as its fraction of the track.
 ///
@@ -325,6 +398,8 @@ pub fn plain_tooltip(response: Response, palette: &Palette, text: &str) -> Respo
 /// * `ctx` - the window's context.
 /// * `palette` - the colours.
 /// * `id` - a stable id for this snackbar.
+/// * `label` - the snackbar's accessible name; its message is read as a
+///   `Role::Status` under it.
 /// * `text` - the message.
 /// * `action` - an optional action label, drawn as a text button.
 ///
@@ -335,6 +410,7 @@ pub fn snackbar(
     ctx: &egui::Context,
     palette: &Palette,
     id: Id,
+    label: &str,
     text: &str,
     action: Option<&str>,
 ) -> bool {
@@ -345,7 +421,7 @@ pub fn snackbar(
         .fixed_pos(anchor)
         .pivot(Align2::CENTER_BOTTOM)
         .show(ctx, |ui| {
-            Frame::new()
+            let shown = Frame::new()
                 .fill(rgb(m3.inverse_surface))
                 .corner_radius(CornerRadius::same(radius::XS))
                 .inner_margin(Margin::symmetric(16, 14))
@@ -366,8 +442,11 @@ pub fn snackbar(
                         })
                     })
                     .inner
-                })
-                .inner
+                });
+            shown
+                .response
+                .widget_info(|| WidgetInfo::labeled(Role::Status, true, label));
+            shown.inner
         })
         .inner
 }

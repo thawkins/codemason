@@ -138,6 +138,8 @@ mod test_material_card;
 mod test_material_chip;
 #[path = "test_material_dialog.rs"]
 mod test_material_dialog;
+#[path = "test_material_dialogs.rs"]
+mod test_material_dialogs;
 #[path = "test_material_drawer_count.rs"]
 mod test_material_drawer_count;
 #[path = "test_material_feedback.rs"]

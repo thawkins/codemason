@@ -160,3 +160,60 @@ fn test_sessions_request_popup_lists_and_opens_requests() {
     rig.harness.run();
     assert!(rig.harness.query_by_label_contains("acme/app #").is_none());
 }
+
+#[test]
+fn test_sessions_request_popup_rows_are_material_list_items() {
+    use codemason_gui::material::list::TWO_LINE_HEIGHT;
+    use codemason_gui::panels::sessions::REQUESTS_LABEL;
+
+    let mut rig = rig();
+    let row = rig.harness.get_by_label(&rig.title).rect();
+    rig.harness.hover_at(row.center());
+    rig.harness.run_steps(60);
+
+    // The popup is a list of two-line Material list items: each request is
+    // one row of the labelled list, and its accessible name carries the
+    // state, the diff size and the Auto-fix watch the painted parts show.
+    let list = rig
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::List, REQUESTS_LABEL);
+    for number in [1, 2] {
+        let name = entry_label(number);
+        let item = list.get_by_label_contains(&name);
+        assert!(
+            (item.rect().height() - TWO_LINE_HEIGHT).abs() < 0.5,
+            "a request is a two-line item"
+        );
+        // The supporting line and the trailing diff size are painted, so the
+        // item reports them as its description.
+        let description = item
+            .accesskit_node()
+            .description()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            description.starts_with(if number == 1 { "Merged" } else { "Open" }),
+            "{description}"
+        );
+        assert!(
+            description.contains(&format!("acme/app #{number}")),
+            "{description}"
+        );
+    }
+    // The watched request says so, and the older one does not.
+    let watched = list
+        .get_by_label_contains(&entry_label(2))
+        .accesskit_node()
+        .label()
+        .unwrap_or_default()
+        .to_string();
+    assert!(watched.contains("watched by Auto-fix"), "{watched}");
+    let older = list
+        .get_by_label_contains(&entry_label(1))
+        .accesskit_node()
+        .label()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!older.contains("watched"), "{older}");
+    assert!(older.contains("30 added, 4 removed"), "{older}");
+}

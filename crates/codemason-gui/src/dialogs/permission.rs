@@ -12,6 +12,11 @@
 //! (deny); each button sends that key to the App, whose handler publishes
 //! the reply. The keys themselves reach the App through the router.
 //!
+//! The dialog is a Material dialog: the permission is its body text, the
+//! preview sits in a filled card, and the three answers are one right-to-left
+//! action row with Allow once (the confirming action) rightmost. `Deny` is a
+//! text button, `Always allow` tonal, `Allow once` filled.
+//!
 //! app-core answers a request only after it has been shown for
 //! `PERMISSION_ANSWER_DELAY` and only once (`App::permission_answerable`),
 //! so a double-click or a double `y` cannot answer twice or grant the next
@@ -25,7 +30,12 @@ use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
 use codemason_app_core::permission_preview::{PermissionPreview, permission_preview};
 
-use super::{key_buttons, modal, plain};
+use super::{material_hint, material_modal, plain, send_key};
+use crate::material::button::{ButtonKind, button};
+use crate::material::card::{CardKind, card_frame};
+use crate::material::dialog::{dialog_actions, dialog_body};
+use crate::metrics::space;
+use crate::palette::{Palette, rgb};
 
 /// Title and accessible label of the dialog.
 pub const PERMISSION_TITLE: &str = "Permission required";
@@ -44,6 +54,12 @@ pub const CHANGES_LABEL: &str = "Changes:";
 
 /// The heading over a shell call's command.
 pub const COMMAND_LABEL: &str = "Command:";
+
+/// The keyboard hint under the actions.
+const HINT: &str = "Press y to allow, a to always allow, n to deny";
+
+/// Width of the dialog's content, in points.
+const WIDTH: f32 = 520.0;
 
 /// Seconds a request waits when it carries no `timeout_secs` (the TUI's
 /// default).
@@ -73,28 +89,29 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let permission = request.permission.clone();
     let preview = permission_preview(request, &app.cwd_path);
     let palette = crate::palette::palette_for(app, ctx);
-    modal(ctx, "codemason_permission_dialog", PERMISSION_TITLE, |ui| {
-        ui.label(format!("Permission: {permission}"));
-        match &preview {
-            Some(PermissionPreview::Diffs(diffs)) => {
-                ui.label(CHANGES_LABEL);
-                egui::ScrollArea::both()
-                    .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for diff in diffs {
-                            crate::panels::diff::full_diff_ui(ui, diff, &palette);
-                        }
-                    });
-            }
-            Some(PermissionPreview::Command(command)) => {
-                ui.label(COMMAND_LABEL);
-                egui::Frame::NONE
-                    .fill(palette.raised1)
-                    .stroke(egui::Stroke::new(1.0, palette.border))
-                    .corner_radius(crate::metrics::radius::SM)
-                    .inner_margin(crate::metrics::space::SM)
-                    .show(ui, |ui| {
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_permission_dialog",
+        PERMISSION_TITLE,
+        WIDTH,
+        |ui| {
+            dialog_body(ui, &palette, &format!("Permission: {permission}"));
+            match &preview {
+                Some(PermissionPreview::Diffs(diffs)) => {
+                    ui.label(CHANGES_LABEL);
+                    egui::ScrollArea::both()
+                        .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for diff in diffs {
+                                crate::panels::diff::full_diff_ui(ui, diff, &palette);
+                            }
+                        });
+                }
+                Some(PermissionPreview::Command(command)) => {
+                    ui.label(COMMAND_LABEL);
+                    preview_card(ui, &palette, |ui| {
                         // A long heredoc scrolls, so the answer buttons stay
                         // in view.
                         egui::ScrollArea::vertical()
@@ -107,34 +124,27 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                                 );
                             });
                     });
+                }
+                None => {
+                    ui.label("Details:");
+                    egui::ScrollArea::vertical()
+                        .id_salt("permission_detail")
+                        .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
+                        .show(ui, |ui| {
+                            ui.monospace(&detail);
+                        });
+                }
             }
-            None => {
-                ui.label("Details:");
-                egui::ScrollArea::vertical()
-                    .id_salt("permission_detail")
-                    .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
-                    .show(ui, |ui| {
-                        ui.monospace(&detail);
-                    });
+            material_hint(ui, &palette, &countdown);
+            if queued > 1 {
+                material_hint(ui, &palette, &format!("{queued} queued"));
             }
-        }
-        ui.weak(countdown);
-        if queued > 1 {
-            ui.weak(format!("{queued} queued"));
-        }
-        ui.add_space(crate::metrics::space::SM);
-        ui.add_enabled_ui(answerable, |ui| {
-            key_buttons(
-                ui,
-                &[
-                    (ALLOW_ONCE, plain(Key::Char('y'))),
-                    (ALWAYS_ALLOW, plain(Key::Char('a'))),
-                    (DENY, plain(Key::Char('n'))),
-                ],
-            );
-        });
-        ui.weak("Press y to allow, a to always allow, n to deny");
-    });
+            ui.add_space(space::LG);
+            actions(ui, &palette, answerable);
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, HINT);
+        },
+    );
     // The countdown changes every second; disabled buttons wake sooner.
     ctx.request_repaint_after(if answerable {
         Duration::from_secs(1)
@@ -142,6 +152,35 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         Duration::from_millis(100)
     });
     true
+}
+
+/// Draw the preview in a filled card: the surface a Material dialog uses for
+/// the content it is asking about.
+fn preview_card(ui: &mut egui::Ui, palette: &Palette, add_contents: impl FnOnce(&mut egui::Ui)) {
+    card_frame(CardKind::Filled, palette).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.visuals_mut().panel_fill = rgb(palette.m3.surface_container_highest);
+        add_contents(ui);
+    });
+}
+
+/// Draw the three answers, right to left: `Allow once` (filled) rightmost,
+/// then `Always allow` (tonal), then `Deny` (text). Each sends its TUI key,
+/// and all three are disabled until app-core lets the request be answered.
+fn actions(ui: &mut egui::Ui, palette: &Palette, answerable: bool) {
+    dialog_actions(ui, |ui| {
+        ui.add_enabled_ui(answerable, |ui| {
+            if button(ui, palette, ButtonKind::Filled, None, ALLOW_ONCE).clicked() {
+                send_key(ui.ctx(), plain(Key::Char('y')));
+            }
+            if button(ui, palette, ButtonKind::Tonal, None, ALWAYS_ALLOW).clicked() {
+                send_key(ui.ctx(), plain(Key::Char('a')));
+            }
+            if button(ui, palette, ButtonKind::Text, None, DENY).clicked() {
+                send_key(ui.ctx(), plain(Key::Char('n')));
+            }
+        });
+    });
 }
 
 /// The TUI's countdown text: `(m:ss remaining)`, or `(EXPIRED)`.

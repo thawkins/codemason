@@ -124,11 +124,19 @@ pub enum Icon {
     Connectors,
     /// MCP servers (`dns`).
     Mcp,
+    /// Cut (`content_cut`).
+    Cut,
+    /// Paste (`content_paste`).
+    Paste,
+    /// A message's Markdown source (`markdown`).
+    Markdown,
+    /// Quote in reply (`format_quote`).
+    Quote,
 }
 
 impl Icon {
     /// Every icon.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 51] = [
         Self::Read,
         Self::Edit,
         Self::Command,
@@ -176,6 +184,10 @@ impl Icon {
         Self::Plugins,
         Self::Connectors,
         Self::Mcp,
+        Self::Cut,
+        Self::Paste,
+        Self::Markdown,
+        Self::Quote,
     ];
 
     /// The icon's character in the Material Symbols font.
@@ -229,6 +241,10 @@ impl Icon {
             Self::Plugins => "\u{e87b}",
             Self::Connectors => "\u{e9f4}",
             Self::Mcp => "\u{e875}",
+            Self::Cut => "\u{e14e}",
+            Self::Paste => "\u{e14f}",
+            Self::Markdown => "\u{f552}",
+            Self::Quote => "\u{e244}",
         }
     }
 
@@ -283,6 +299,10 @@ impl Icon {
             Self::Plugins => "plg",
             Self::Connectors => "con",
             Self::Mcp => "mcp",
+            Self::Cut => "cut",
+            Self::Paste => "pst",
+            Self::Markdown => "md",
+            Self::Quote => "qt",
         }
     }
 }

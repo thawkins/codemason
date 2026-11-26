@@ -5,7 +5,8 @@
 mod support_material;
 
 use codemason_gui::material::text_field::{HEIGHT, label_floats, outlined_text_field};
-use egui_kittest::kittest::Queryable;
+use egui::accesskit::Role;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 #[test]
 fn test_material_text_field_label_floats_when_focused_or_filled() {
@@ -60,6 +61,36 @@ fn test_material_text_field_padding_click_focuses_the_editor() {
         harness.run();
     }
     assert!(harness.get_by_label("Session name").is_focused());
+}
+
+#[test]
+fn test_material_text_field_secret_variant_masks_its_text() {
+    let palette = support_material::palette();
+    let mut harness = support_material::builder()
+        .with_size(egui::vec2(400.0, 160.0))
+        .build_ui_state(
+            move |ui, text: &mut String| {
+                codemason_gui::material::text_field::outlined_secret_field(
+                    ui, &palette, "Answer", text, None, false,
+                );
+            },
+            String::new(),
+        );
+    // The password editor reports its role and never its text.
+    let field = harness.get_by_role_and_label(Role::PasswordInput, "Answer");
+    field.focus();
+    field.type_text("s3cret");
+    harness.run();
+    assert_eq!(harness.state(), "s3cret");
+    let node = harness
+        .get_by_role_and_label(Role::PasswordInput, "Answer")
+        .accesskit_node()
+        .value()
+        .unwrap_or_default();
+    assert!(
+        !node.contains("s3cret"),
+        "the field never reports the secret: {node}"
+    );
 }
 
 #[test]

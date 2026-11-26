@@ -19,6 +19,7 @@ use codemason_gui::Shell;
 use codemason_gui::dialogs::confirm::{
     MEMORY_CLEAR_TITLE, MEMORY_DELETE_TITLE, NO, YES, memory_view_title, row_action_title,
 };
+use codemason_gui::dialogs::output_view::CLOSE as VIEW_CLOSE;
 use codemason_gui::dock::PaneId;
 use codemason_gui::keys::default_keymap;
 use codemason_gui::panels::agents::AGENTS_LABEL;
@@ -299,6 +300,16 @@ fn test_memory_panel_enter_opens_the_memory() {
     assert!(shown(&rig, Role::Dialog, &title));
     rig.harness.get_by_label("Category: fact");
     tap(&mut rig, egui::Key::Escape);
+    rig.harness.run();
+    assert!(rig.harness.state().app().memory_view.is_none());
+    assert!(!shown(&rig, Role::Dialog, &title));
+
+    // The view's one action is a Material button, and it closes the view.
+    tap(&mut rig, egui::Key::Enter);
+    assert!(shown(&rig, Role::Dialog, &title));
+    rig.harness
+        .get_by_role_and_label(Role::Button, VIEW_CLOSE)
+        .click();
     rig.harness.run();
     assert!(rig.harness.state().app().memory_view.is_none());
     assert!(!shown(&rig, Role::Dialog, &title));

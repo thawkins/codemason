@@ -65,11 +65,15 @@ use egui::{
 
 use crate::dialogs::session_menu;
 use crate::icons::{Icon, icon_label};
+use crate::material::menu::menu_frame;
 use crate::palette::Palette;
 use crate::styled_text::drawable;
 
 /// Accessible label of the session list.
 pub const SESSIONS_LABEL: &str = "Sessions";
+
+/// Accessible label of the request popup's list.
+pub const REQUESTS_LABEL: &str = "Pull and merge requests";
 
 /// How much larger a section heading is drawn than a session row's title.
 ///
@@ -736,6 +740,13 @@ fn popup_target(
 /// Draw the request popup for `requests` beside `row`, and open the
 /// request clicked in it.
 ///
+/// The popup is a Material menu surface ([`menu_frame`]) holding one
+/// [`list_item`] per request: its title is the item's headline, its state,
+/// repository and number the supporting line, and its diff size the trailing
+/// text. The eye and the state glyph are painted into the item's leading and
+/// trailing room, so the rows are the same items the rest of the window
+/// lists with.
+///
 /// # Returns
 ///
 /// The popup's rectangle.
@@ -753,23 +764,27 @@ fn request_popup(
         .fixed_pos(row.right_top() + Vec2::new(4.0, 0.0))
         .constrain(true)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            menu_frame(palette).show(ui, |ui| {
                 ui.set_width(POPUP_WIDTH);
-                let entry = request_entry_height(ui);
-                ScrollArea::vertical()
-                    // One scroll state per session, so a long history
-                    // scrolled in one popup does not open another
-                    // session's popup part-way down.
-                    .id_salt(("sessions_request_popup_scroll", session_id))
-                    .max_height(entry * POPUP_ROWS)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        for entry in requests {
-                            if request_entry(ui, entry, palette).clicked() {
-                                chosen = Some(entry.request.web_url.clone());
+                let entry = request_entry_height();
+                let list = ui.vertical(|ui| {
+                    ScrollArea::vertical()
+                        // One scroll state per session, so a long history
+                        // scrolled in one popup does not open another
+                        // session's popup part-way down.
+                        .id_salt(("sessions_request_popup_scroll", session_id))
+                        .max_height(entry * POPUP_ROWS)
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            for entry in requests {
+                                if request_entry(ui, entry, palette).clicked() {
+                                    chosen = Some(entry.request.web_url.clone());
+                                }
                             }
-                        }
-                    });
+                        });
+                });
+                list.response
+                    .widget_info(|| WidgetInfo::labeled(Role::List, true, REQUESTS_LABEL));
             });
         });
     if let Some(url) = chosen
@@ -780,11 +795,9 @@ fn request_popup(
     response.response.rect
 }
 
-/// Height of one request in the popup: two lines and their padding.
-fn request_entry_height(ui: &egui::Ui) -> f32 {
-    let body = ui.text_style_height(&egui::TextStyle::Body);
-    let small = ui.text_style_height(&egui::TextStyle::Small);
-    body + small + crate::metrics::space::SM.mul_add(2.0, crate::metrics::space::XS)
+/// Height of one request in the popup: one two-line [`list_item`].
+fn request_entry_height() -> f32 {
+    crate::material::list::TWO_LINE_HEIGHT
 }
 
 /// One request as the popup lists it.
@@ -822,113 +835,63 @@ fn paint_eye(painter: &egui::Painter, rect: Rect, colour: Color32) {
     painter.circle_filled(centre, s * 0.14, colour);
 }
 
-/// One request in the popup: its title (with an eye at the right while
-/// Auto-fix watches it), then its state glyph and word, repository and
-/// number, and its diff size (`+120 -7`) when it is known. A click opens it.
+/// One request in the popup, as a two-line [`list_item`]: its title is the
+/// headline, its state word, repository and number the supporting line, and
+/// its diff size (`+120 -7`) when it is known the trailing text. The
+/// trailing slot holds the request's state glyph, coloured by its state, and
+/// an eye while Auto-fix watches it. A click opens the request.
+///
+/// The item's accessible name says everything the row shows - the repository
+/// and number, the title, the state, the diff size and the Auto-fix watch -
+/// because the last two are painted rather than read from a label.
 fn request_entry(ui: &mut egui::Ui, entry: &RequestEntry, palette: &Palette) -> egui::Response {
     let RequestEntry {
         request,
         stats,
         watched,
     } = entry;
-    let stats = *stats;
-    use crate::metrics::space;
-    let size = Vec2::new(ui.available_width(), request_entry_height(ui));
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let number = request_number(request);
-    let mut size_words = stats.map_or_else(String::new, |s| {
-        format!(", {} added, {} removed", s.additions, s.deletions)
-    });
-    if *watched {
-        size_words.push_str(", watched by Auto-fix");
-    }
-    response.widget_info(|| {
-        WidgetInfo::labeled(
-            Role::Link,
-            true,
-            format!(
-                "{} {number}: {} ({}{size_words})",
-                request.repo, request.title, request.state
-            ),
-        )
-    });
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
-    // Keyboard focus is highlighted like the pointer, so Tab shows which
-    // request Enter opens.
-    if response.hovered() || response.has_focus() {
-        ui.painter()
-            .rect_filled(rect, crate::metrics::radius::XS, palette.selection);
-    }
-    let inner = rect.shrink2(Vec2::new(space::SM, space::SM));
-    let body = ui.text_style_height(&egui::TextStyle::Body);
-    // The eye sits at the title line's right end; the title is cut before it.
-    let eye_width = if *watched { body + space::SM } else { 0.0 };
-    if *watched {
-        let eye = Rect::from_min_size(
-            egui::pos2(inner.right() - body, inner.top()),
-            Vec2::splat(body),
-        );
-        paint_eye(ui.painter(), eye, palette.accent);
-    }
-    let title = egui::WidgetText::from(RichText::new(&request.title).color(palette.text))
-        .into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            inner.width() - eye_width,
-            egui::TextStyle::Body,
-        );
-    let title_height = title.size().y;
-    ui.painter().galley(inner.left_top(), title, palette.text);
-    let small = ui.text_style_height(&egui::TextStyle::Small);
-    let line = Rect::from_min_size(
-        inner.left_top() + Vec2::new(0.0, title_height + space::XS),
-        Vec2::new(inner.width(), small),
+    let supporting = format!(
+        "{}  \u{b7}  {} {number}",
+        state_word(&request.state),
+        request.repo
     );
+    let diff = stats.map(|s| format!("+{} -{}", s.additions, s.deletions));
+    let mut name = format!("{} {number}: {}", request.repo, request.title);
+    let mut details = request.state.clone();
+    if let Some(stats) = stats {
+        details.push_str(&format!(
+            ", {} added, {} removed",
+            stats.additions, stats.deletions
+        ));
+    }
+    if *watched {
+        details.push_str(", watched by Auto-fix");
+    }
+    name.push_str(&format!(" ({details})"));
     let colour = request_colour(&request.state, palette);
-    paint_pr_glyph(
-        ui.painter(),
-        Rect::from_min_size(line.left_top(), Vec2::splat(small)),
-        colour,
+    let glyph = ui.text_style_height(&egui::TextStyle::Small);
+    let (response, _) = crate::material::list::list_item_with(
+        ui,
+        palette,
+        &request.title,
+        Some(&supporting),
+        diff.as_deref(),
+        false,
+        |ui| {
+            // Right to left: the eye is the outermost mark, the state glyph
+            // inside it. Both are painted, so each is a mark, not a widget
+            // of its own.
+            if *watched {
+                let (eye, _) = ui.allocate_exact_size(Vec2::splat(glyph), egui::Sense::hover());
+                paint_eye(ui.painter(), eye, palette.accent);
+            }
+            let (state, _) = ui.allocate_exact_size(Vec2::splat(glyph), egui::Sense::hover());
+            paint_pr_glyph(ui.painter(), state, colour);
+        },
     );
-    let mut job = egui::text::LayoutJob::default();
-    let font = egui::TextStyle::Small.resolve(ui.style());
-    let format = |colour| egui::TextFormat::simple(font.clone(), colour);
-    job.append(&state_word(&request.state), 0.0, format(colour));
-    job.append(
-        &format!("  \u{b7}  {} {number}", request.repo),
-        0.0,
-        format(palette.muted),
-    );
-    // The diff size sits at the right end; the rest is cut short before it.
-    let size = stats.map(|s| {
-        let mut size = egui::text::LayoutJob::default();
-        size.append(
-            &format!("+{}", s.additions),
-            0.0,
-            format(palette.diff_added),
-        );
-        size.append(
-            &format!(" -{}", s.deletions),
-            0.0,
-            format(palette.diff_removed),
-        );
-        ui.fonts_mut(|f| f.layout_job(size))
-    });
-    let size_width = size.as_ref().map_or(0.0, |g| g.size().x + space::SM);
-    job.wrap =
-        egui::text::TextWrapping::truncate_at_width(line.width() - small - space::XS - size_width);
-    let galley = ui.fonts_mut(|f| f.layout_job(job));
-    ui.painter().galley(
-        line.left_top() + Vec2::new(small + space::XS, 0.0),
-        galley,
-        palette.muted,
-    );
-    if let Some(size) = size {
-        let pos = egui::pos2(line.right() - size.size().x, line.top());
-        ui.painter().galley(pos, size, palette.muted);
-    }
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_label(name));
     response
 }
 

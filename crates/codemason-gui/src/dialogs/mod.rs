@@ -510,32 +510,6 @@ pub(crate) const fn plain(key: Key) -> KeyInput {
     }
 }
 
-/// Draw a modal dialog titled `title`, with the title as its accessible
-/// label (`Role::Dialog`) and as a heading.
-///
-/// The App's key handling decides when the dialog closes, so the modal's own
-/// close requests (Esc, a backdrop click) are not used.
-pub(crate) fn modal<R>(
-    ctx: &egui::Context,
-    id: &str,
-    title: &str,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    egui::Modal::new(Id::unique(id))
-        .show(ctx, |ui| {
-            let inner = ui.vertical(|ui| {
-                ui.heading(title);
-                ui.add_space(crate::metrics::space::XS);
-                add_contents(ui)
-            });
-            inner
-                .response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
-            inner.inner
-        })
-        .inner
-}
-
 /// The room a dialog's heading, labels, buttons and hint usually take, in
 /// points; a scrolling list or preview inside the dialog leaves this much.
 pub(crate) const DIALOG_CHROME: f32 = 200.0;
@@ -574,7 +548,7 @@ const DIALOG_WINDOW_MARGIN: f32 = 80.0;
 ///
 /// Inside, `panel_fill` is the surface's colour, so a Material text field's
 /// floating label cuts its border gap in the right colour. As with
-/// [`modal`], the App's key handling decides when the dialog closes.
+/// [`material_modal`], the App's key handling decides when the dialog closes.
 pub(crate) fn material_modal<R>(
     ctx: &egui::Context,
     palette: &crate::palette::Palette,
@@ -637,7 +611,7 @@ pub(crate) fn material_modal_response<R>(
 /// its own (the content lays out, and scrolls, its own panes).
 ///
 /// The content area is `size`, kept inside the window less the margin
-/// [`material_modal`] leaves. As with [`modal`], the App's key handling
+/// [`material_modal`] leaves. As with [`material_modal`], the App's key handling
 /// decides when the dialog closes.
 pub(crate) fn material_modal_sized<R>(
     ctx: &egui::Context,
@@ -707,6 +681,40 @@ pub(crate) fn material_actions(
     });
 }
 
+/// A right-aligned action row whose buttons each send one or more keys and
+/// take their own enabled state.
+///
+/// [`material_actions`] sends exactly one key per button and can only gate
+/// the confirming one; a dialog that has to move app-core's own cursor
+/// before acting, or that gates several buttons, draws its row here. The
+/// first button is the rightmost.
+///
+/// # Arguments
+///
+/// * `ui` - the dialog's ui.
+/// * `palette` - the colours.
+/// * `buttons` - `(label, kind, keys, enabled)`, rightmost first.
+pub(crate) fn action_row(
+    ui: &mut egui::Ui,
+    palette: &crate::palette::Palette,
+    buttons: &[(&str, crate::material::button::ButtonKind, &[KeyInput], bool)],
+) {
+    use crate::material::button::button;
+    crate::material::dialog::dialog_actions(ui, |ui| {
+        for (label, kind, keys, enabled) in buttons {
+            let pressed = ui
+                .add_enabled_ui(*enabled, |ui| button(ui, palette, *kind, None, label))
+                .inner
+                .clicked();
+            if pressed {
+                for key in *keys {
+                    send_key(ui.ctx(), *key);
+                }
+            }
+        }
+    });
+}
+
 /// A dialog's keyboard hint in the Material small type and
 /// `on_surface_variant`.
 pub(crate) fn material_hint(ui: &mut egui::Ui, palette: &crate::palette::Palette, hint: &str) {
@@ -715,15 +723,4 @@ pub(crate) fn material_hint(ui: &mut egui::Ui, palette: &crate::palette::Palette
             .size(crate::metrics::text_size::SMALL)
             .color(crate::palette::rgb(palette.m3.on_surface_variant)),
     );
-}
-
-/// A row of dialog buttons, each sending its key press when clicked.
-pub(crate) fn key_buttons(ui: &mut egui::Ui, buttons: &[(&str, KeyInput)]) {
-    ui.horizontal(|ui| {
-        for (label, key) in buttons {
-            if ui.button(*label).clicked() {
-                send_key(ui.ctx(), *key);
-            }
-        }
-    });
 }

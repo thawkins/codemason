@@ -8,12 +8,12 @@ mod support;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_app_core::theme_tokens::{ThemeCatalog, ThemeSelection};
 use codemason_gui::Shell;
-use codemason_gui::dialogs::palette::{PALETTE_TITLE, SEARCH_LABEL, search_field_id};
+use codemason_gui::dialogs::palette::{PALETTE_TITLE, ROWS_LABEL, SEARCH_LABEL, search_field_id};
 use codemason_gui::keys::default_keymap;
 use craft_keymap::Platform;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A window with the default Linux keymap and sources attached.
 fn rig() -> (tokio::runtime::Runtime, Harness<'static, Shell>) {
@@ -133,8 +133,11 @@ fn test_action_rows_show_their_key() {
         .events
         .push(egui::Event::Text("toggle log".to_string()));
     harness.run();
-    harness.get_by_label("Toggle Log Panel");
-    harness.get_by_label("Alt+L");
+    // The rows are a Material list; an action's key is its trailing text,
+    // which reaches assistive technology as the row's description.
+    harness.get_by_role_and_label(Role::List, ROWS_LABEL);
+    let row = harness.get_by_role_and_label(Role::ListItem, "Toggle Log Panel");
+    assert_eq!(row.accesskit_node().description().as_deref(), Some("Alt+L"));
 }
 
 #[test]
@@ -167,8 +170,15 @@ fn test_which_key_popup_lists_the_leader_keys_after_a_moment() {
         harness.step();
     }
     harness.get_by_role_and_label(Role::Dialog, WHICH_KEY_TITLE);
-    harness.get_by_label("Choose Model");
-    harness.get_by_label("m");
+    // Each binding is a Material menu item: the action's title is the row
+    // and its key is the trailing text (the row's description), so a long
+    // action name never squeezes the key out of the surface.
+    let row = harness.get_by_role_and_label(Role::MenuItem, "Choose Model");
+    assert_eq!(row.accesskit_node().description().as_deref(), Some("m"));
+    assert!(
+        harness.query_by_label("m").is_none(),
+        "the key is painted, not a widget of its own"
+    );
 }
 
 #[test]
@@ -281,5 +291,46 @@ fn test_enter_in_the_same_frame_as_typing_runs_the_new_query() {
         harness.state().app().theme,
         ThemeSelection::Named("nord".to_string()),
         "Enter ran the row of the query typed with it"
+    );
+}
+
+#[test]
+fn test_palette_rows_are_a_material_list_with_the_hint_as_supporting_text() {
+    let (_rt, mut harness) = rig();
+    open(&mut harness);
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Text("theme nord".to_string()));
+    harness.run();
+    harness.get_by_role_and_label(Role::List, ROWS_LABEL);
+    // The search field is the Material outlined field, announced as a
+    // search box under its own label.
+    harness.get_by_role_and_label(Role::SearchInput, SEARCH_LABEL);
+    harness.get_by_role_and_label(Role::ListItem, "Theme: nord");
+}
+
+#[test]
+fn test_palette_agent_row_carries_its_hint_as_supporting_text() {
+    let (_rt, mut harness) = rig();
+    harness
+        .state_mut()
+        .app_mut()
+        .open_palette_scoped(codemason_app_core::palette::PaletteScope::Agent);
+    harness.run();
+    let hinted = harness
+        .state()
+        .app()
+        .palette_results()
+        .into_iter()
+        .find(|row| row.hint.is_some())
+        .expect("a built-in agent states what it is for");
+    let hint = hinted.hint.expect("checked above");
+    // The hint is the row's supporting line, which a screen reader reads as
+    // part of the row rather than as a separate label.
+    let row = harness.get_by_role_and_label(Role::ListItem, &hinted.title);
+    assert_eq!(
+        row.accesskit_node().description().as_deref(),
+        Some(hint.as_str())
     );
 }

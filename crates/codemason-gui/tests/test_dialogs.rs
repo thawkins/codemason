@@ -23,7 +23,7 @@ use codemason_gui::dialogs::permission::{
     ALLOW_ONCE, ALWAYS_ALLOW, CHANGES_LABEL, COMMAND_LABEL, DENY, PERMISSION_TITLE,
 };
 use codemason_gui::dialogs::provider::{CONTINUE, PROVIDER_CHOICE_LABEL, SELECT_PROVIDER_TITLE};
-use codemason_gui::dialogs::shortcuts::SHORTCUTS_TITLE;
+use codemason_gui::dialogs::shortcuts::{CLOSE as SHORTCUTS_CLOSE, SHORTCUTS_TITLE};
 use codemason_gui::dialogs::{ActiveDialog, active};
 use codemason_gui::keys::default_keymap;
 use codemason_gui::panels::diff::OPEN_DIFF;
@@ -556,6 +556,38 @@ fn test_shortcuts_panel_lists_app_core_shortcuts_and_esc_closes() {
     }
 
     type_key(&mut harness, egui::Key::Escape, None);
+    assert!(!harness.state().app().show_shortcuts);
+    assert!(
+        harness
+            .query_by_role_and_label(Role::Dialog, SHORTCUTS_TITLE)
+            .is_none()
+    );
+}
+
+#[test]
+fn test_shortcuts_panel_rows_are_material_list_items_with_the_key_trailing() {
+    let (_rt, _events, mut harness) = rig(|app| app.show_shortcuts = true);
+    harness.run();
+
+    // The table is a Material list: one item per binding, the description as
+    // the headline and the key chord as its trailing text, which reaches
+    // assistive technology as the row's description.
+    let (keys, description) = codemason_app_core::shortcuts::KEYBINDINGS[0];
+    let row = harness.get_by_role_and_label(Role::ListItem, description);
+    assert_eq!(
+        row.accesskit_node().description().as_deref(),
+        Some(keys),
+        "the chord is the row's trailing text"
+    );
+    for (_, description) in codemason_app_core::shortcuts::KEYBINDINGS {
+        harness.get_by_role_and_label(Role::ListItem, description);
+    }
+
+    // Its one action is a filled Material button, and it sends Esc.
+    harness
+        .get_by_role_and_label(Role::Button, SHORTCUTS_CLOSE)
+        .click();
+    harness.run();
     assert!(!harness.state().app().show_shortcuts);
     assert!(
         harness

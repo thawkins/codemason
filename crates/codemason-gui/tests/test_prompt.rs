@@ -26,7 +26,7 @@ use codemason_gui::panels::queue::{QUEUE_LABEL, QUEUE_MENU_LABEL};
 use craft_keymap::Platform;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A shell over `app` with sources attached, and the runtime driving it.
 ///
@@ -242,6 +242,82 @@ fn test_prompt_at_mention_opens_completion() {
 }
 
 #[test]
+fn test_prompt_mention_completions_are_material_list_options() {
+    let project = scratch_project(
+        "mention-material",
+        &["hello_world.rs", "hello_again.rs", "other.rs"],
+    );
+    let (_rt, mut harness) = rig(|app| app.cwd_path = project);
+    focus_prompt(&mut harness);
+
+    prompt(&harness).type_text("see @hello");
+    harness.run();
+
+    // The popup is one list box of dense options: every row is a
+    // `ListBoxOption`, and the row app-core has highlighted is the selected
+    // one, so the keyboard's row is what assistive technology reads as
+    // chosen.
+    let list = harness.get_by_role_and_label(Role::ListBox, MENTION_LABEL);
+    let selected = harness
+        .state()
+        .app()
+        .file_menu
+        .as_ref()
+        .expect("menu")
+        .selected;
+    let mut marked = Vec::new();
+    for (i, matched) in harness
+        .state()
+        .app()
+        .file_menu
+        .as_ref()
+        .expect("menu")
+        .matches
+        .iter()
+        .enumerate()
+    {
+        let row = list.get_by_role_and_label(Role::ListBoxOption, &matched.display);
+        assert!(
+            row.rect().height() <= codemason_gui::material::list::DENSE_HEIGHT + 0.5,
+            "a completion row is a dense row"
+        );
+        marked.push((i, row.accesskit_node().is_selected()));
+    }
+    assert_eq!(
+        marked
+            .iter()
+            .filter(|(_, is_selected)| *is_selected == Some(true))
+            .map(|(i, _)| *i)
+            .collect::<Vec<_>>(),
+        vec![selected],
+        "only the highlighted row is the selected option"
+    );
+
+    // A click still accepts the row it lands on: the click route into
+    // app-core's acceptance is unchanged by the Material rows.
+    let wanted = harness
+        .state()
+        .app()
+        .file_menu
+        .as_ref()
+        .expect("menu")
+        .matches
+        .iter()
+        .find(|matched| !matched.is_dir)
+        .expect("a file to accept")
+        .display
+        .clone();
+    list.get_by_role_and_label(Role::ListBoxOption, &wanted)
+        .click();
+    harness.run();
+    assert!(
+        harness.state().app().session.input.ends_with(&wanted),
+        "the clicked row was accepted: {}",
+        harness.state().app().session.input
+    );
+}
+
+#[test]
 fn test_prompt_editor_ime_commit_inserts_text() {
     // The bundled test font has no CJK glyphs; the assertions read the text,
     // not the pixels, so tofu is fine here.
@@ -330,6 +406,60 @@ fn test_queue_menu_shows_queued_items() {
         "Esc closes the menu"
     );
     assert!(harness.query_by_label(QUEUE_MENU_LABEL).is_none());
+}
+
+#[test]
+fn test_queue_menu_rows_are_material_items_with_the_cursor_selected() {
+    let (_rt, mut harness) = rig(|app| {
+        busy_with_provider(app);
+        for text in ["first queued", "second queued"] {
+            app.session.input_queue.push_back(QueuedInput {
+                text: text.to_string(),
+                image_paths: Vec::new(),
+            });
+        }
+    });
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Q);
+    harness.run();
+    harness.key_press(egui::Key::ArrowDown);
+    harness.run();
+
+    // The menu is one Material surface whose four rows are menu items, in
+    // app-core's order.
+    let menu = harness.get_by_role_and_label(Role::Menu, QUEUE_MENU_LABEL);
+    let mut items = Vec::new();
+    for row in harness.state().app().queue_menu_labels() {
+        let item = menu.get_by_role_and_label(Role::MenuItem, row);
+        items.push(item.accesskit_node().is_selected());
+    }
+    let cursor = harness.state().app().queue_menu_selected;
+    assert_eq!(
+        items
+            .iter()
+            .enumerate()
+            .filter(|(_, selected)| **selected == Some(true))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>(),
+        vec![cursor],
+        "only the cursor's row is the menu's current row"
+    );
+    // The hint is Material small type rather than the plain weak line.
+    menu.get_by_label("^/v move * Enter select * Esc close");
+
+    // An empty queue leaves `Next` disabled, so a stray Enter cannot act on
+    // it, and the row is disabled in the menu too.
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    harness.state_mut().app_mut().session.input_queue.clear();
+    harness.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Q);
+    harness.run();
+    let menu = harness.get_by_role_and_label(Role::Menu, QUEUE_MENU_LABEL);
+    let next = menu.get_by_role_and_label(Role::MenuItem, "Next");
+    assert!(
+        next.accesskit_node().is_disabled(),
+        "Next is disabled on an empty queue"
+    );
 }
 
 #[test]

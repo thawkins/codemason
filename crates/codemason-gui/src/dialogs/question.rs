@@ -10,13 +10,18 @@
 //!   in the TUI; the keys reach the App through the router. Clicking an
 //!   option moves the highlight (the state the arrows move); a double click
 //!   or Select sends Enter.
-//! - **Free text.** The answer field is a `TextEdit` bound to the App's own
-//!   `pending_question_input`, so typing, a paste and an IME composition are
-//!   applied by the editor (the router leaves a dialog field its typing, and
-//!   the prompt's composer for dialog fields removes the keys the input
-//!   method owns). Enter (the key or Submit) runs the TUI's submit arm,
-//!   which answers with the trimmed text. A secret question masks the field.
+//! - **Free text.** The answer field is a Material outlined field bound to
+//!   the App's own `pending_question_input`, so typing, a paste and an IME
+//!   composition are applied by the editor (the router leaves a dialog field
+//!   its typing, and the prompt's composer for dialog fields removes the keys
+//!   the input method owns). Enter (the key or Submit) runs the TUI's submit
+//!   arm, which answers with the trimmed text. A secret question masks the
+//!   field.
 //! - Esc (or Dismiss) answers with the TUI's dismissal marker.
+//!
+//! The dialog is a Material dialog: the question is its body text, the
+//! options are list items (the highlighted one selected, the default marked
+//! by its trailing text), and Select and Dismiss are its action row.
 //!
 //! app-core answers a question only after it has been the front for
 //! `QUESTION_ANSWER_DELAY` and removes it at once
@@ -34,7 +39,12 @@ use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
 use egui::Id;
 
-use super::{key_buttons, modal, plain, send_key};
+use super::{material_actions, material_hint, material_modal, plain, send_key};
+use crate::material::dialog::dialog_body;
+use crate::material::list::list_item;
+use crate::material::text_field::{field_id, outlined_secret_field, outlined_text_field};
+use crate::metrics::space;
+use crate::palette::palette_for;
 use crate::panels::prompt::prompt_id;
 
 /// Title and accessible label of the dialog.
@@ -46,6 +56,9 @@ pub const OPTIONS_LABEL: &str = "Options";
 /// Accessible label of the free-text answer field.
 pub const ANSWER_LABEL: &str = "Answer";
 
+/// The trailing text marking the option a timed question answers by default.
+pub const DEFAULT_MARK: &str = "(default)";
+
 /// The button that answers with the highlighted option (Enter).
 pub const SELECT_OPTION: &str = "Select";
 
@@ -55,14 +68,24 @@ pub const SUBMIT: &str = "Submit";
 /// The button that dismisses the question (Esc).
 pub const DISMISS: &str = "Dismiss";
 
+/// Width of the dialog's content, in points.
+const WIDTH: f32 = 520.0;
+
+/// The keyboard hint under an option list.
+const OPTIONS_HINT: &str = "Up/Down or j/k to navigate  Enter to select  Esc to dismiss";
+
+/// The keyboard hint under the free-text field.
+const ANSWER_HINT: &str = "Enter to submit  Esc to dismiss";
+
 /// Widget id of the free-text answer field.
 ///
 /// # Returns
 ///
-/// The id of the answer `TextEdit`.
+/// The id of the answer field's editor, which the router and
+/// [`super::show`]'s focus check both name.
 #[must_use]
 pub fn answer_field_id() -> Id {
-    Id::unique("codemason_question_answer")
+    field_id(ANSWER_LABEL)
 }
 
 /// The TUI's countdown suffix of a timed question: `(m:ss to default)`.
@@ -111,6 +134,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let secret = request.secret;
     let countdown = countdown(request.expire_at_ms);
     let selected = app.session.question_selected_index;
+    let palette = palette_for(app, ctx);
     let answer = &mut app.session.pending_question_input;
     let mut clicked: Option<(usize, bool)> = None;
     let moved = ctx.data_mut(|d| {
@@ -118,45 +142,49 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         d.insert_temp(last_selected_id(), selected);
         last != Some(selected)
     });
-    modal(ctx, "codemason_question_dialog", QUESTION_TITLE, |ui| {
-        ui.label(question.as_str());
-        ui.add_space(crate::metrics::space::XS);
-        if options.is_empty() {
-            let field = ui
-                .horizontal(|ui| {
-                    let label = ui.label(ANSWER_LABEL);
-                    let field = ui.add(
-                        egui::TextEdit::singleline(answer)
-                            .id(answer_field_id())
-                            .password(secret)
-                            .desired_width(360.0),
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_question_dialog",
+        QUESTION_TITLE,
+        WIDTH,
+        |ui| {
+            dialog_body(ui, &palette, &question);
+            if options.is_empty() {
+                let field = if secret {
+                    outlined_secret_field(ui, &palette, ANSWER_LABEL, answer, None, false)
+                } else {
+                    outlined_text_field(ui, &palette, ANSWER_LABEL, answer, None, false)
+                };
+                // The answer field takes the typing while the question is
+                // open.
+                if ctx.memory(|m| m.focused().is_none_or(|id| id == prompt_id())) {
+                    field.request_focus();
+                }
+                ui.add_space(space::LG);
+                ui.add_enabled_ui(answerable, |ui| {
+                    material_actions(
+                        ui,
+                        &palette,
+                        &[(SUBMIT, plain(Key::Enter)), (DISMISS, plain(Key::Esc))],
+                        true,
                     );
-                    field.clone().labelled_by(label.id);
-                    field
-                })
-                .inner;
-            // The answer field takes the typing while the question is open.
-            if ctx.memory(|m| m.focused().is_none_or(|id| id == prompt_id())) {
-                field.request_focus();
-            }
-            ui.add_space(crate::metrics::space::SM);
-            ui.add_enabled_ui(answerable, |ui| {
-                key_buttons(
-                    ui,
-                    &[(SUBMIT, plain(Key::Enter)), (DISMISS, plain(Key::Esc))],
-                );
-            });
-            ui.weak("Enter to submit  Esc to dismiss");
-        } else {
-            // Many options scroll, so Select and Dismiss stay in view.
-            let list = egui::ScrollArea::vertical()
-                .id_salt("question_options")
-                .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        for (i, option) in options.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                let row = ui.selectable_label(i == selected, option.as_str());
+                });
+                ui.add_space(space::LG);
+                material_hint(ui, &palette, ANSWER_HINT);
+            } else {
+                // Many options scroll, so Select and Dismiss stay in view.
+                let list = egui::ScrollArea::vertical()
+                    .id_salt("question_options")
+                    .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            for (i, option) in options.iter().enumerate() {
+                                let mark = (i == default).then_some(DEFAULT_MARK);
+                                let row =
+                                    list_item(ui, &palette, option, None, mark, i == selected);
                                 if i == selected && moved {
                                     row.scroll_to_me(None);
                                 }
@@ -165,32 +193,33 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
                                 } else if row.clicked() {
                                     clicked = Some((i, false));
                                 }
-                                if i == default {
-                                    ui.weak("(default)");
-                                }
-                            });
-                        }
-                    })
-                    .response
+                            }
+                        })
+                        .response
+                    });
+                list.inner.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::List, true, OPTIONS_LABEL)
                 });
-            list.inner
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, OPTIONS_LABEL));
-            ui.add_space(crate::metrics::space::SM);
-            ui.add_enabled_ui(answerable, |ui| {
-                key_buttons(
-                    ui,
-                    &[
-                        (SELECT_OPTION, plain(Key::Enter)),
-                        (DISMISS, plain(Key::Esc)),
-                    ],
-                );
-            });
-            ui.weak("Up/Down or j/k to navigate  Enter to select  Esc to dismiss");
-        }
-        if let Some(countdown) = countdown.as_deref() {
-            ui.weak(countdown);
-        }
-    });
+                ui.add_space(space::LG);
+                ui.add_enabled_ui(answerable, |ui| {
+                    material_actions(
+                        ui,
+                        &palette,
+                        &[
+                            (SELECT_OPTION, plain(Key::Enter)),
+                            (DISMISS, plain(Key::Esc)),
+                        ],
+                        true,
+                    );
+                });
+                ui.add_space(space::LG);
+                material_hint(ui, &palette, OPTIONS_HINT);
+            }
+            if let Some(countdown) = countdown.as_deref() {
+                material_hint(ui, &palette, countdown);
+            }
+        },
+    );
     if let Some((i, choose)) = clicked {
         app.session.question_selected_index = i;
         if choose && answerable {

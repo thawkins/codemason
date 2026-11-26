@@ -81,6 +81,47 @@ pub fn outlined_text_field(
     supporting: Option<&str>,
     error: bool,
 ) -> Response {
+    field(ui, palette, label, text, false, supporting, error)
+}
+
+/// [`outlined_text_field`] for a field whose text is a secret: the editor
+/// masks what is typed and what it holds, and refuses to copy it
+/// (`egui`'s password mode), while the field keeps the same look and the
+/// same [`field_id`].
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; the field fills its available width.
+/// * `palette` - the colours.
+/// * `label` - the field's label, also its accessible name.
+/// * `text` - the text being edited.
+/// * `supporting` - optional supporting (or error) text under the field.
+/// * `error` - whether the field is in the error state.
+///
+/// # Returns
+///
+/// The response of the text edit inside the field ([`field_id`]).
+pub fn outlined_secret_field(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    text: &mut String,
+    supporting: Option<&str>,
+    error: bool,
+) -> Response {
+    field(ui, palette, label, text, true, supporting, error)
+}
+
+/// Draw the outlined field, masking its text when `password` is set.
+fn field(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    text: &mut String,
+    password: bool,
+    supporting: Option<&str>,
+    error: bool,
+) -> Response {
     let m3 = &palette.m3;
     let width = ui.available_width();
     // The whole field takes clicks (not keyboard focus: Tab goes straight to
@@ -95,6 +136,7 @@ pub fn outlined_text_field(
         .id(field_id(label))
         .frame(Frame::NONE)
         .font(egui::FontId::proportional(INPUT_SIZE))
+        .password(password)
         .text_color(on_surface)
         .desired_width(input.width());
     let response = ui.place(input, edit);

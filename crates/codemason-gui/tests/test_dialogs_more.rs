@@ -15,8 +15,9 @@ mod support;
 
 use codemason_agent::event::Event;
 use codemason_app_core::app::{
-    App, ConfigSavePickerState, HistoryPickerState, LoopSetupField, PendingForceCleanup,
-    PlanApprovalState, QUESTION_ANSWER_DELAY, RollbackOfferState,
+    App, ConfigSavePickerState, ContextAction, HistoryPickerState, LoopSetupField,
+    PendingForceCleanup, PlanApprovalState, QUESTION_ANSWER_DELAY, RollbackOfferState,
+    SelectionPane,
 };
 use codemason_app_core::geometry::Area;
 use codemason_app_core::log_channel::tui_log_channel;
@@ -25,17 +26,21 @@ use codemason_app_core::session_menu::{MenuAction, MenuItem, MenuTarget, Session
 use codemason_gui::Shell;
 use codemason_gui::dialogs::banner::{BANNER_LABEL, DISMISS_BANNER};
 use codemason_gui::dialogs::confirm::{
-    APPROVE, FORCE_CLEANUP_TITLE, KEEP_CHANGES, NO, NOTICE_OK, PLAN_TITLE, ROLLBACK_TITLE,
-    ROUTER_SAVE_TITLE, db_prune_title,
+    APPROVE, COMPACT_PRUNE_TITLE, FORCE_CLEANUP_TITLE, KEEP_CHANGES, NO, NOTICE_OK, PLAN_TITLE,
+    ROLLBACK_TITLE, ROUTER_SAVE_TITLE, YES, db_prune_title,
 };
-use codemason_gui::dialogs::loop_setup::{LOOP_TITLE, START};
+use codemason_gui::dialogs::context_menu::{CONTEXT_MENU_LABEL, item_label};
+use codemason_gui::dialogs::loop_setup::{AGENTS_LABEL, CHECKPOINTS_LABEL, LOOP_TITLE, START};
 use codemason_gui::dialogs::pickers::{
-    APPLY_THEME, CANCEL_THEME, CONFIG_SAVES_TITLE, HISTORY_TITLE, SELECT_ENTRY, THEME_TITLE,
+    APPLY_THEME, CANCEL_THEME, CONFIG_SAVES_TITLE, ENTRIES_LABEL, HISTORY_TITLE, SELECT_ENTRY,
+    THEME_TITLE,
 };
 use codemason_gui::dialogs::properties::{
     BACKEND_LABEL, CANCEL, CHOICES_LABEL, DESCRIPTION_LABEL, MODEL_LABEL, SAVE, properties_title,
 };
-use codemason_gui::dialogs::question::{ANSWER_LABEL, QUESTION_TITLE, SELECT_OPTION};
+use codemason_gui::dialogs::question::{
+    ANSWER_LABEL, DEFAULT_MARK, DISMISS, OPTIONS_LABEL, QUESTION_TITLE, SELECT_OPTION,
+};
 use codemason_gui::dialogs::session_menu::SESSION_MENU_TITLE;
 use codemason_gui::dialogs::{ActiveDialog, active};
 use codemason_gui::keys::default_keymap;
@@ -302,6 +307,92 @@ fn test_question_double_enter_answers_once() {
 }
 
 #[test]
+fn test_question_options_are_a_material_list_with_the_default_marked() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    ask(&events, "q-10", &["red", "green", "blue"]);
+    harness.run();
+    wait_shown(&mut harness);
+
+    let list = harness
+        .query_by_role_and_label(Role::List, OPTIONS_LABEL)
+        .expect("the options are a Material list");
+    assert!(list.rect().width() > 0.0);
+
+    // The first option is the one app-core highlights and the default, so it
+    // is the selected row and carries the default mark as its trailing text.
+    let selected = harness.get_by_role_and_label(Role::ListItem, "red");
+    assert_eq!(selected.accesskit_node().is_selected(), Some(true));
+    assert_eq!(
+        selected.accesskit_node().description().as_deref(),
+        Some(DEFAULT_MARK),
+        "the default option is marked"
+    );
+    for other in ["green", "blue"] {
+        let row = harness.get_by_role_and_label(Role::ListItem, other);
+        assert_ne!(row.accesskit_node().is_selected(), Some(true), "{other}");
+        assert!(
+            row.accesskit_node().description().is_none(),
+            "{other} is not marked"
+        );
+    }
+}
+
+#[test]
+fn test_question_options_and_buttons_are_disabled_until_answerable() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    ask(&events, "q-11", &["yes", "no"]);
+    harness.run();
+    assert!(
+        dialog_shown(&harness, QUESTION_TITLE),
+        "the question is drawn before it can be answered"
+    );
+    assert!(
+        harness
+            .get_by_label(SELECT_OPTION)
+            .accesskit_node()
+            .is_disabled(),
+        "Select waits for app-core's answer delay"
+    );
+    assert!(
+        harness.get_by_label(DISMISS).accesskit_node().is_disabled(),
+        "Dismiss waits too"
+    );
+
+    wait_shown(&mut harness);
+    assert!(
+        !harness
+            .get_by_label(SELECT_OPTION)
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(!harness.get_by_label(DISMISS).accesskit_node().is_disabled());
+}
+
+#[test]
+fn test_question_free_text_answer_field_masks_a_secret_question() {
+    let (_rt, events, mut harness) = rig(|_| {});
+    events
+        .send(Event::QuestionRequested {
+            session_id: SESSION.to_string(),
+            request_id: "q-12".to_string(),
+            question: "Token?".to_string(),
+            options: Vec::new(),
+            default_index: None,
+            secret: true,
+        })
+        .expect("send question");
+    harness.run();
+    wait_shown(&mut harness);
+    // The password editor reports its role and never its text.
+    assert!(
+        harness
+            .query_by_role_and_label(Role::PasswordInput, ANSWER_LABEL)
+            .is_some(),
+        "a secret question masks its answer field"
+    );
+}
+
+#[test]
 fn test_rollback_dialog_keep_changes_declines() {
     let (_rt, _events, mut harness) = rig(|app| {
         app.session.pending_rollback = Some(RollbackOfferState {
@@ -431,6 +522,55 @@ fn test_db_prune_dialog_no_cancels_and_keys_move_the_choice() {
 }
 
 #[test]
+fn test_db_prune_dialog_is_a_material_row_with_the_confirming_button_rightmost() {
+    let (_rt, _events, mut harness) = rig(|app| app.open_db_prune_confirm(30));
+    harness.run();
+    assert!(dialog_shown(&harness, &db_prune_title(30)));
+
+    // Both answers are Material buttons on one right-aligned row, and the
+    // confirming one (Yes) sits to the right of the cancelling one (No).
+    let yes = harness.get_by_role_and_label(Role::Button, YES).rect();
+    let no = harness.get_by_role_and_label(Role::Button, NO).rect();
+    assert!(
+        yes.left() > no.right(),
+        "Yes {yes:?} should be right of No {no:?}"
+    );
+
+    // Yes still moves app-core's own cursor before confirming, so the
+    // Yes/No choice stays app-core's.
+    assert!(!harness.state().app().db_prune_confirm_is_yes());
+    harness.get_by_label(YES).click();
+    harness.run();
+    let app = harness.state().app();
+    assert!(!app.db_prune_confirm_open, "Yes runs the prune");
+    assert_eq!(app.status, "db: pruned 0");
+}
+
+#[test]
+fn test_compact_prune_dialog_no_cancels_and_yes_deletes() {
+    let (_rt, _events, mut harness) = rig(|app| app.open_compact_prune_confirm());
+    harness.run();
+    assert!(dialog_shown(&harness, COMPACT_PRUNE_TITLE));
+
+    harness.get_by_label(NO).click();
+    harness.run();
+    assert!(
+        !harness.state().app().compact_prune_confirm_open,
+        "No cancels"
+    );
+
+    harness.state_mut().app_mut().open_compact_prune_confirm();
+    harness.run();
+    type_key(&mut harness, egui::Key::ArrowLeft, None);
+    assert!(harness.state().app().compact_prune_confirm_is_yes());
+    harness.get_by_label(YES).click();
+    harness.run();
+    let app = harness.state().app();
+    assert!(!app.compact_prune_confirm_open, "Yes prunes");
+    assert_eq!(app.status, "compact: pruned 0");
+}
+
+#[test]
 fn test_loop_dialog_rejects_empty_goal() {
     let (_rt, _events, mut harness) = rig(codemason_app_core::app::open_loop_setup);
     harness.run();
@@ -474,6 +614,111 @@ fn test_loop_dialog_typing_fills_the_goal_and_esc_keeps_the_draft() {
     assert!(app.loop_setup.is_none());
     assert!(app.loop_setup_draft.is_some(), "Esc keeps the values");
     assert_eq!(app.session.input, "");
+}
+
+#[test]
+fn test_loop_dialog_draws_material_fields_a_list_and_a_chip() {
+    let (_rt, _events, mut harness) = rig(codemason_app_core::app::open_loop_setup);
+    harness.run();
+    assert!(dialog_shown(&harness, LOOP_TITLE));
+
+    // The seven key-driven fields are read-only Material fields whose value
+    // is the App's buffer; the goal starts empty and `max steps` carries the
+    // config default.
+    assert_eq!(
+        harness.get_by_label("goal").value().as_deref(),
+        Some(""),
+        "the goal is an outlined field showing the App's buffer"
+    );
+    assert_eq!(
+        harness.get_by_label("max steps").value().as_deref(),
+        Some("512"),
+        "the config default is shown, not a second editor"
+    );
+
+    // The agent picker is a labelled Material list; app-core's selected
+    // agent is the selected row.
+    harness.get_by_role_and_label(Role::List, AGENTS_LABEL);
+    let (selected_name, _) = harness
+        .state()
+        .app()
+        .loop_setup
+        .as_ref()
+        .and_then(|s| s.agents.get(s.selected_agent).cloned())
+        .expect("the dialog has agents");
+    let row = harness.get_by_role_and_label(Role::ListItem, &selected_name);
+    assert_eq!(row.accesskit_node().is_selected(), Some(true));
+
+    // The checkpoints switch is a filter chip reporting its own state.
+    let chip = harness.get_by_label(CHECKPOINTS_LABEL);
+    assert_eq!(
+        chip.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "checkpoints default on"
+    );
+}
+
+#[test]
+fn test_loop_dialog_chip_toggles_checkpoints_through_app_core() {
+    let (_rt, _events, mut harness) = rig(codemason_app_core::app::open_loop_setup);
+    harness.run();
+    let checkpoints = |harness: &Harness<'static, Shell>| {
+        harness
+            .state()
+            .app()
+            .loop_setup
+            .as_ref()
+            .map(|s| s.checkpoints)
+    };
+    assert_eq!(checkpoints(&harness), Some(true));
+
+    harness.get_by_label(CHECKPOINTS_LABEL).click();
+    harness.run();
+
+    assert_eq!(
+        checkpoints(&harness),
+        Some(false),
+        "a click sends Space, so app-core toggles it"
+    );
+    assert_eq!(
+        harness
+            .state()
+            .app()
+            .loop_setup
+            .as_ref()
+            .map(|s| s.active_field),
+        Some(LoopSetupField::Checkpoints),
+        "the click moves the active field to the chip first"
+    );
+}
+
+#[test]
+fn test_loop_dialog_agent_row_click_moves_the_highlight_only() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        codemason_app_core::app::open_loop_setup(app);
+        if let Some(state) = app.loop_setup.as_mut() {
+            state.selected_agent = 0;
+        }
+    });
+    harness.run();
+    let names: Vec<String> = harness
+        .state()
+        .app()
+        .loop_setup
+        .as_ref()
+        .map(|s| s.agents.iter().map(|(name, _)| name.clone()).collect())
+        .unwrap_or_default();
+    assert!(names.len() > 1, "the roster has a second agent: {names:?}");
+
+    harness
+        .get_by_role_and_label(Role::ListItem, &names[1])
+        .click();
+    harness.run();
+
+    let app = harness.state().app();
+    let state = app.loop_setup.as_ref().expect("the dialog stays open");
+    assert_eq!(state.selected_agent, 1, "the click moves the highlight");
+    assert!(state.error.is_none(), "and starts nothing");
 }
 
 /// An open properties dialog for project `demo`.
@@ -708,6 +953,19 @@ fn test_history_picker_click_and_select_fills_the_prompt() {
     harness.run();
     assert!(dialog_shown(&harness, HISTORY_TITLE));
 
+    // The entries are a Material list of list items, the highlight marked
+    // as the selected row.
+    harness.get_by_role_and_label(Role::List, ENTRIES_LABEL);
+    let rows = harness.get_all_by_role(Role::ListItem).count();
+    assert_eq!(rows, 2, "one list item per entry");
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::ListItem, "newest")
+            .accesskit_node()
+            .is_selected(),
+        Some(true)
+    );
+
     harness.get_by_label("older").click();
     harness.run();
     harness.get_by_label(SELECT_ENTRY).click();
@@ -813,6 +1071,32 @@ fn test_config_save_picker_esc_cancels() {
     let app = harness.state().app();
     assert!(app.config_save_picker.is_none());
     assert_eq!(app.status, "config list: cancelled");
+}
+
+#[test]
+fn test_run_cost_banner_is_a_material_snackbar_with_a_dismiss_action() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.session.run_cost_banner = Some("* run complete * 10+20 tokens *".to_string());
+        app.session.run_cost_banner_at = Some(std::time::Instant::now());
+    });
+    harness.run();
+    // The banner keeps `BANNER_LABEL` as its accessible name (a
+    // `Role::Status`, the summary read under it) and Dismiss as its one
+    // action, which is what a Material snackbar is.
+    harness.get_by_role_and_label(Role::Status, BANNER_LABEL);
+    harness.get_by_role_and_label(Role::Button, DISMISS_BANNER);
+    assert!(
+        harness
+            .query_by_label_contains("* run complete * 10+20 tokens *")
+            .is_some(),
+        "the summary is the snackbar's message"
+    );
+    assert!(
+        harness
+            .query_by_role_and_label(Role::MenuItem, DISMISS_BANNER)
+            .is_none(),
+        "the action is a button, not a menu row"
+    );
 }
 
 #[test]
@@ -1112,4 +1396,57 @@ fn test_db_prune_dialog_keys_work_with_the_prompt_focused() {
     let app = harness.state().app();
     assert!(!app.db_prune_confirm_open, "Enter on Yes runs the prune");
     assert_eq!(app.session.input, "");
+}
+
+#[test]
+fn test_context_menu_rows_are_material_items_with_their_icons_and_state() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.session.input = "hello world".to_string();
+        app.session.input_cursor = 11;
+        app.open_context_menu(0, 0, SelectionPane::Input, true);
+    });
+    harness.run();
+    assert_eq!(
+        active(harness.state().app()),
+        Some(ActiveDialog::ContextMenu)
+    );
+
+    // The menu is one Material menu surface holding a row per action: the
+    // label is the row (its icon is painted) and app-core's enabled state
+    // and cursor come through, so the chrome adds nothing app-core did not
+    // decide.
+    harness.get_by_role_and_label(Role::MenuListPopup, CONTEXT_MENU_LABEL);
+    let menu = {
+        let app = harness.state().app();
+        app.context_menu.clone().expect("menu open")
+    };
+    assert_eq!(menu.items.len(), 3, "Cut, Copy and Paste on the prompt");
+    for (action, enabled) in &menu.items {
+        let row = harness.get_by_role_and_label(Role::MenuItem, item_label(*action));
+        assert_eq!(
+            !row.accesskit_node().is_disabled(),
+            *enabled,
+            "{} mirrors app-core's enabled state",
+            item_label(*action)
+        );
+    }
+    let on_cursor = item_label(menu.items[menu.selected].0);
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::MenuItem, on_cursor)
+            .accesskit_node()
+            .is_selected(),
+        Some(true),
+        "the row app-core's cursor is on is the selected item"
+    );
+
+    // A disabled action is not chosen by a click, as the plain disabled
+    // button was not: nothing runs and the prompt keeps its text.
+    assert!(!menu.items[2].1, "Paste is disabled with no clipboard");
+    harness
+        .get_by_role_and_label(Role::MenuItem, item_label(ContextAction::Paste))
+        .click();
+    harness.run();
+    let app = harness.state().app();
+    assert_eq!(app.session.input, "hello world", "nothing was pasted");
 }

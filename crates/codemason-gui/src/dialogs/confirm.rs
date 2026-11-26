@@ -25,12 +25,23 @@
 //! answer clears it locally at once and a second Enter or click finds
 //! nothing to answer; no queue sits behind it.
 //!
+//! Each is a Material dialog: the title is its headline, its text is
+//! `dialog_body`, and its answers are one right-aligned action row with the
+//! confirming action filled and rightmost and the cancelling one a text
+//! button. A Yes/No choice stays app-core's: app-core's cursor decides what
+//! Enter does, so the row still moves the choice to the button pressed
+//! (Right) before it sends Enter, and a hint names the selected option.
+//!
 //! Dependencies: `codemason-app-core` and `egui`.
 
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::{Key, KeyInput};
 
-use super::{key_buttons, modal, plain};
+use super::{action_row, material_actions, material_hint, material_modal, plain};
+use crate::material::button::ButtonKind;
+use crate::material::dialog::dialog_body;
+use crate::metrics::space;
+use crate::palette::Palette;
 
 /// Title of the rollback offer.
 pub const ROLLBACK_TITLE: &str = "Roll back the loop's changes?";
@@ -104,6 +115,9 @@ const ENTER: KeyInput = plain(Key::Enter);
 /// See [`ENTER`].
 const ESC: KeyInput = plain(Key::Esc);
 
+/// Width of a confirmation's content, in points.
+const WIDTH: f32 = 440.0;
+
 /// Draw the post-loop rollback offer (`App::session.pending_rollback`).
 ///
 /// # Arguments
@@ -118,25 +132,49 @@ pub fn show_rollback(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(offer) = app.session.pending_rollback.as_ref() else {
         return false;
     };
-    modal(ctx, "codemason_rollback_dialog", ROLLBACK_TITLE, |ui| {
-        ui.label(format!(
-            "The loop ended ({}) after {} iteration(s).",
-            offer.status, offer.iterations
-        ));
-        if !offer.diffstat.is_empty() {
-            ui.label(offer.diffstat.as_str());
-        }
-        egui::ScrollArea::vertical()
-            .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
-            .show(ui, |ui| {
-                for file in &offer.files {
-                    ui.monospace(file.as_str());
-                }
-            });
-        ui.add_space(crate::metrics::space::SM);
-        key_buttons(ui, &[(ROLL_BACK, ENTER), (KEEP_CHANGES, ESC)]);
-        ui.weak("Enter rolls back to the pre-loop snapshot  Esc keeps the changes");
-    });
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_rollback_dialog",
+        ROLLBACK_TITLE,
+        WIDTH,
+        |ui| {
+            dialog_body(
+                ui,
+                &palette,
+                &format!(
+                    "The loop ended ({}) after {} iteration(s).",
+                    offer.status, offer.iterations
+                ),
+            );
+            if !offer.diffstat.is_empty() {
+                ui.label(offer.diffstat.as_str());
+                ui.add_space(space::MD);
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("rollback_files")
+                .max_height(super::body_height(ctx, 0.4, super::DIALOG_CHROME))
+                .show(ui, |ui| {
+                    for file in &offer.files {
+                        ui.monospace(file.as_str());
+                    }
+                });
+            ui.add_space(space::LG);
+            material_actions(
+                ui,
+                &palette,
+                &[(ROLL_BACK, ENTER), (KEEP_CHANGES, ESC)],
+                true,
+            );
+            ui.add_space(space::LG);
+            material_hint(
+                ui,
+                &palette,
+                "Enter rolls back to the pre-loop snapshot  Esc keeps the changes",
+            );
+        },
+    );
     true
 }
 
@@ -162,31 +200,45 @@ pub fn show_plan_approval(ctx: &egui::Context, app: &mut App) -> bool {
     } else {
         &[plain(Key::Right), ENTER]
     };
-    modal(ctx, "codemason_plan_dialog", PLAN_TITLE, |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(super::body_height(ctx, 0.6, super::DIALOG_CHROME))
-            .show(ui, |ui| {
-                ui.label(state.plan_text.as_str());
-            });
-        ui.add_space(crate::metrics::space::SM);
-        let cursor = if state.cursor_approve {
-            APPROVE
-        } else {
-            REJECT
-        };
-        ui.weak(format!("Selected: {cursor}"));
-        ui.horizontal(|ui| {
-            if ui.button(APPROVE).clicked() {
-                for key in approve {
-                    super::send_key(ui.ctx(), *key);
-                }
-            }
-            if ui.button(REJECT).clicked() {
-                super::send_key(ui.ctx(), plain(Key::Char('r')));
-            }
-        });
-        ui.weak("Left/Right choose  Enter confirm  r or Esc reject");
-    });
+    let palette = crate::palette::palette_for(app, ctx);
+    let cursor = if state.cursor_approve {
+        APPROVE
+    } else {
+        REJECT
+    };
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_plan_dialog",
+        PLAN_TITLE,
+        WIDTH,
+        |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("plan_text")
+                .max_height(super::body_height(ctx, 0.6, super::DIALOG_CHROME))
+                .show(ui, |ui| {
+                    ui.label(state.plan_text.as_str());
+                });
+            ui.add_space(space::LG);
+            // Approve moves app-core's cursor to itself first (Right) unless
+            // it is already there, so its own Next/Previous arm confirms.
+            action_row(
+                ui,
+                &palette,
+                &[
+                    (APPROVE, ButtonKind::Filled, approve, true),
+                    (REJECT, ButtonKind::Text, &[plain(Key::Char('r'))], true),
+                ],
+            );
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, &format!("Selected: {cursor}"));
+            material_hint(
+                ui,
+                &palette,
+                "Left/Right choose  Enter confirm  r or Esc reject",
+            );
+        },
+    );
     true
 }
 
@@ -205,21 +257,25 @@ pub fn show_force_cleanup(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(pending) = app.session.pending_forcecleanup.as_ref() else {
         return false;
     };
-    modal(
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
         ctx,
+        &palette,
         "codemason_forcecleanup_dialog",
         FORCE_CLEANUP_TITLE,
+        WIDTH,
         |ui| {
-            ui.label(format!("Team: {}", pending.team_name));
+            dialog_body(ui, &palette, &format!("Team: {}", pending.team_name));
             if !pending.active_members.is_empty() {
                 ui.label("Active teammates:");
                 for member in &pending.active_members {
-                    ui.label(format!("  - {member}"));
+                    ui.monospace(format!("  - {member}"));
                 }
             }
-            ui.add_space(crate::metrics::space::SM);
-            key_buttons(ui, &[(CONFIRM, ENTER), (CANCEL, ESC)]);
-            ui.weak("Enter confirm  Esc cancel");
+            ui.add_space(space::LG);
+            material_actions(ui, &palette, &[(CONFIRM, ENTER), (CANCEL, ESC)], true);
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, "Enter confirm  Esc cancel");
         },
     );
     true
@@ -283,22 +339,31 @@ pub fn show_notice(ctx: &egui::Context, app: &mut App) -> bool {
     }
     // The App keeps the TUI's border padding around the title.
     let title = app.notice_title.trim();
-    modal(ctx, "codemason_notice_dialog", title, |ui| {
-        ui.label(app.notice_message.as_str());
-        if let Some(detail) = app.notice_detail.as_deref() {
-            // A stack trace or log scrolls on its own, so OK stays in view.
-            egui::ScrollArea::both()
-                .id_salt("notice_detail")
-                .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.monospace(detail);
-                });
-        }
-        ui.add_space(crate::metrics::space::SM);
-        key_buttons(ui, &[(NOTICE_OK, ENTER)]);
-        ui.weak("Enter or Esc closes");
-    });
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_notice_dialog",
+        title,
+        WIDTH,
+        |ui| {
+            dialog_body(ui, &palette, &app.notice_message);
+            if let Some(detail) = app.notice_detail.as_deref() {
+                // A stack trace or log scrolls on its own, so OK stays in view.
+                egui::ScrollArea::both()
+                    .id_salt("notice_detail")
+                    .max_height(super::body_height(ctx, 0.5, super::DIALOG_CHROME))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.monospace(detail);
+                    });
+            }
+            ui.add_space(space::LG);
+            material_actions(ui, &palette, &[(NOTICE_OK, ENTER)], true);
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, "Enter or Esc closes");
+        },
+    );
     true
 }
 
@@ -322,21 +387,23 @@ pub fn show_db_prune(ctx: &egui::Context, app: &mut App) -> bool {
     }
     let title = db_prune_title(app.db_prune_confirm_days.unwrap_or_default());
     let yes = app.db_prune_confirm_is_yes();
-    let toggle = plain(Key::Right);
-    modal(ctx, "codemason_db_prune_dialog", &title, |ui| {
-        ui.weak(format!("Selected: {}", if yes { YES } else { NO }));
-        ui.horizontal(|ui| {
-            for (label, is_yes) in [(YES, true), (NO, false)] {
-                if ui.button(label).clicked() {
-                    if is_yes != yes {
-                        super::send_key(ui.ctx(), toggle);
-                    }
-                    super::send_key(ui.ctx(), ENTER);
-                }
-            }
-        });
-        ui.weak("Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels");
-    });
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_db_prune_dialog",
+        &title,
+        WIDTH,
+        |ui| {
+            yes_no_actions(ui, &palette, yes);
+            ui.add_space(space::LG);
+            material_hint(
+                ui,
+                &palette,
+                "Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels",
+            );
+        },
+    );
     true
 }
 
@@ -363,24 +430,21 @@ pub fn show_compact_prune(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     }
     let yes = app.compact_prune_confirm_is_yes();
-    let toggle = plain(Key::Right);
-    modal(
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
         ctx,
+        &palette,
         "codemason_compact_prune_dialog",
         COMPACT_PRUNE_TITLE,
+        WIDTH,
         |ui| {
-            ui.weak(format!("Selected: {}", if yes { YES } else { NO }));
-            ui.horizontal(|ui| {
-                for (label, is_yes) in [(YES, true), (NO, false)] {
-                    if ui.button(label).clicked() {
-                        if is_yes != yes {
-                            super::send_key(ui.ctx(), toggle);
-                        }
-                        super::send_key(ui.ctx(), ENTER);
-                    }
-                }
-            });
-            ui.weak("Left/Right move * Enter on Yes deletes * Enter on No cancels * Esc cancels");
+            yes_no_actions(ui, &palette, yes);
+            ui.add_space(space::LG);
+            material_hint(
+                ui,
+                &palette,
+                "Left/Right move * Enter on Yes deletes * Enter on No cancels * Esc cancels",
+            );
         },
     );
     true
@@ -410,18 +474,33 @@ pub fn row_action_title(app: &App) -> Option<String> {
 /// Yes and No buttons over a two-option app-core dialog whose choice
 /// Right toggles: the button first moves the choice to itself, then sends
 /// Enter, which acts on the choice.
-fn yes_no_buttons(ui: &mut egui::Ui, yes_selected: bool) {
-    ui.weak(format!("Selected: {}", if yes_selected { YES } else { NO }));
-    ui.horizontal(|ui| {
-        for (label, is_yes) in [(YES, true), (NO, false)] {
-            if ui.button(label).clicked() {
-                if is_yes != yes_selected {
-                    super::send_key(ui.ctx(), plain(Key::Right));
-                }
-                super::send_key(ui.ctx(), ENTER);
-            }
-        }
-    });
+fn yes_no_actions(ui: &mut egui::Ui, palette: &Palette, yes_selected: bool) {
+    let enter = plain(Key::Enter);
+    let right_then_enter = [plain(Key::Right), enter];
+    let yes_keys: &[KeyInput] = if yes_selected {
+        &[enter]
+    } else {
+        &right_then_enter
+    };
+    let no_keys: &[KeyInput] = if yes_selected {
+        &right_then_enter
+    } else {
+        &[enter]
+    };
+    material_hint(
+        ui,
+        palette,
+        &format!("Selected: {}", if yes_selected { YES } else { NO }),
+    );
+    ui.add_space(space::MD);
+    action_row(
+        ui,
+        palette,
+        &[
+            (YES, ButtonKind::Filled, yes_keys, true),
+            (NO, ButtonKind::Text, no_keys, true),
+        ],
+    );
 }
 
 /// Draw the `/memory clear` confirmation (`App::memory_clear_confirm_open`).
@@ -441,13 +520,21 @@ pub fn show_memory_clear(ctx: &egui::Context, app: &mut App) -> bool {
         return false;
     }
     let yes = app.memory_clear_confirm_is_yes();
-    modal(
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
         ctx,
+        &palette,
         "codemason_memory_clear_dialog",
         MEMORY_CLEAR_TITLE,
+        WIDTH,
         |ui| {
-            yes_no_buttons(ui, yes);
-            ui.weak("Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels");
+            yes_no_actions(ui, &palette, yes);
+            ui.add_space(space::LG);
+            material_hint(
+                ui,
+                &palette,
+                "Left/Right move * Enter on Yes performs * Enter on No cancels * Esc cancels",
+            );
         },
     );
     true
@@ -469,16 +556,20 @@ pub fn show_memory_delete(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(pending) = app.pending_memory_delete.as_ref() else {
         return false;
     };
-    modal(
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
         ctx,
+        &palette,
         "codemason_memory_delete_dialog",
         MEMORY_DELETE_TITLE,
+        WIDTH,
         |ui| {
-            ui.label(format!("Memory ID: {}", pending.id));
-            ui.weak(format!("Preview: {}", pending.preview));
-            ui.add_space(crate::metrics::space::SM);
-            key_buttons(ui, &[(CONFIRM, ENTER), (CANCEL, ESC)]);
-            ui.weak("Enter confirm  Esc cancel");
+            dialog_body(ui, &palette, &format!("Memory ID: {}", pending.id));
+            material_hint(ui, &palette, &format!("Preview: {}", pending.preview));
+            ui.add_space(space::LG);
+            material_actions(ui, &palette, &[(CONFIRM, ENTER), (CANCEL, ESC)], true);
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, "Enter confirm  Esc cancel");
         },
     );
     true
@@ -504,13 +595,30 @@ pub fn show_row_action(ctx: &egui::Context, app: &mut App) -> bool {
     };
     let body = pending.action.body();
     let yes = app.row_action_confirm_is_yes();
-    modal(ctx, "codemason_row_action_dialog", &title, |ui| {
-        ui.label(body);
-        ui.add_space(crate::metrics::space::SM);
-        yes_no_buttons(ui, yes);
-        ui.weak(codemason_app_core::app::ROW_ACTION_TOGGLE_HINT);
-        ui.weak(codemason_app_core::app::ROW_ACTION_OUTCOME_HINT);
-    });
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_row_action_dialog",
+        &title,
+        WIDTH,
+        |ui| {
+            dialog_body(ui, &palette, &body);
+            ui.add_space(space::LG);
+            yes_no_actions(ui, &palette, yes);
+            ui.add_space(space::LG);
+            material_hint(
+                ui,
+                &palette,
+                codemason_app_core::app::ROW_ACTION_TOGGLE_HINT,
+            );
+            material_hint(
+                ui,
+                &palette,
+                codemason_app_core::app::ROW_ACTION_OUTCOME_HINT,
+            );
+        },
+    );
     true
 }
 
@@ -548,23 +656,38 @@ pub fn show_memory_view(ctx: &egui::Context, app: &mut App) -> bool {
     };
     let row = &view.row;
     let title = memory_view_title(row.id, &row.category);
-    modal(ctx, "codemason_memory_view_dialog", &title, |ui| {
-        ui.label(format!("ID: {}", row.id));
-        ui.label(format!("Category: {}", row.category));
-        ui.label(format!("Confidence: {:.2}", row.confidence));
-        ui.label(format!("Source: {}", row.source));
-        ui.label(format!("Updated: {}", row.updated_at));
-        ui.add_space(crate::metrics::space::XS);
-        ui.weak("Content:");
-        // Five metadata lines sit above the content.
-        egui::ScrollArea::vertical()
-            .max_height(super::body_height(ctx, 0.6, MEMORY_VIEW_CHROME))
-            .show(ui, |ui| {
-                ui.label(row.content.as_str());
-            });
-        ui.add_space(crate::metrics::space::SM);
-        key_buttons(ui, &[(super::output_view::CLOSE, ESC)]);
-        ui.weak("Esc close");
-    });
+    let palette = crate::palette::palette_for(app, ctx);
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_memory_view_dialog",
+        &title,
+        WIDTH,
+        |ui| {
+            material_hint(ui, &palette, &format!("ID: {}", row.id));
+            material_hint(ui, &palette, &format!("Category: {}", row.category));
+            material_hint(ui, &palette, &format!("Confidence: {:.2}", row.confidence));
+            material_hint(ui, &palette, &format!("Source: {}", row.source));
+            material_hint(ui, &palette, &format!("Updated: {}", row.updated_at));
+            ui.add_space(space::MD);
+            ui.label("Content:");
+            // Five metadata lines sit above the content.
+            egui::ScrollArea::vertical()
+                .id_salt("memory_view_content")
+                .max_height(super::body_height(ctx, 0.6, MEMORY_VIEW_CHROME))
+                .show(ui, |ui| {
+                    ui.label(row.content.as_str());
+                });
+            ui.add_space(space::LG);
+            // A read-only view has one action, and it is the emphasised one.
+            action_row(
+                ui,
+                &palette,
+                &[(super::output_view::CLOSE, ButtonKind::Filled, &[ESC], true)],
+            );
+            ui.add_space(space::LG);
+            material_hint(ui, &palette, "Esc close");
+        },
+    );
     true
 }

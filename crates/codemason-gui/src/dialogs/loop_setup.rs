@@ -17,17 +17,27 @@
 //! fields; binding text editors to them would give two editors of one
 //! field.)
 //!
-//! This dialog draws the form as the App holds it, the active field marked
-//! as the TUI marks it. Clicking an agent moves the agent highlight (the
-//! state Up/Down move); clicking the checkpoints value moves to that field
-//! and sends Space. Start sends Enter and Cancel sends Esc.
+//! The form is drawn as a Material dialog: each text field is an outlined
+//! read-only field ([`outlined_value`]) showing what the App holds, the
+//! active one drawn focused (with the caret the TUI draws as `> `), the
+//! agent picker is a Material list with the highlight on the selected agent,
+//! and the checkpoints switch is a filter chip. Clicking an agent moves the
+//! agent highlight (the state Up/Down move); clicking the chip moves to that
+//! field and sends Space. Start sends Enter and Cancel sends Esc.
 //!
 //! Dependencies: `codemason-app-core` and `egui`.
 
 use codemason_app_core::app::{App, LoopSetupField};
 use codemason_app_core::input_event::Key;
 
-use super::{key_buttons, modal, plain, send_key};
+use super::{
+    DIALOG_CHROME, body_height, material_actions, material_hint, material_modal, plain, send_key,
+};
+use crate::material::chip::{ChipKind, chip};
+use crate::material::list::list_item;
+use crate::material::text_field::outlined_value;
+use crate::metrics::{space, text_size};
+use crate::palette::{palette_for, rgb};
 
 /// Title and accessible label of the dialog (the TUI's border title).
 pub const LOOP_TITLE: &str = "/loop setup";
@@ -43,6 +53,12 @@ pub const AGENTS_LABEL: &str = "Loop agent";
 
 /// The checkpoints toggle.
 pub const CHECKPOINTS_LABEL: &str = "checkpoints";
+
+/// Width of the dialog's content, in points.
+const WIDTH: f32 = 480.0;
+
+/// Tallest the agent list grows before it scrolls, in points.
+const AGENT_LIST_HEIGHT: f32 = 3.0 * crate::material::list::TWO_LINE_HEIGHT;
 
 /// The text fields in display order, with the TUI's labels.
 const TEXT_FIELDS: [(&str, LoopSetupField); 7] = [
@@ -95,11 +111,6 @@ pub fn prepare(ctx: &egui::Context, app: &App) {
     }
 }
 
-/// The TUI's active-field marker.
-fn marker(active: bool) -> &'static str {
-    if active { "> " } else { "  " }
-}
-
 /// What a click in the dialog asks for.
 enum Click {
     Agent(usize),
@@ -120,49 +131,120 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(state) = app.loop_setup.as_ref() else {
         return false;
     };
+    let palette = palette_for(app, ctx);
     let mut click: Option<Click> = None;
-    modal(ctx, "codemason_loop_dialog", LOOP_TITLE, |ui| {
-        ui.strong("Start a goal-driven loop");
-        let agent_active = state.active_field == LoopSetupField::Agent;
-        let agents = ui.horizontal_wrapped(|ui| {
-            ui.monospace(format!("{}agent", marker(agent_active)));
-            for (i, (name, _)) in state.agents.iter().enumerate() {
-                if ui
-                    .selectable_label(i == state.selected_agent, name.as_str())
-                    .clicked()
-                {
-                    click = Some(Click::Agent(i));
-                }
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_loop_dialog",
+        LOOP_TITLE,
+        WIDTH,
+        |ui| {
+            material_hint(ui, &palette, "Start a goal-driven loop");
+            ui.add_space(space::SM);
+            // The agent picker: a Material list, capped so a long agent
+            // roster scrolls instead of pushing the form off the dialog.
+            let height = AGENT_LIST_HEIGHT.min(body_height(ctx, 0.3, DIALOG_CHROME));
+            let list = egui::ScrollArea::vertical()
+                .id_salt("codemason_loop_agents")
+                .max_height(height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (i, (name, description)) in state.agents.iter().enumerate() {
+                            let hint = if description.is_empty() {
+                                None
+                            } else {
+                                Some(description.as_str())
+                            };
+                            if list_item(ui, &palette, name, hint, None, i == state.selected_agent)
+                                .clicked()
+                            {
+                                click = Some(Click::Agent(i));
+                            }
+                        }
+                    })
+                    .response
+                });
+            list.inner
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, AGENTS_LABEL));
+            ui.add_space(space::LG);
+            // The form: the goal on its own line, the rest two to a row, so
+            // all seven fields and the actions fit a normal window.
+            let (goal_label, goal_field) = TEXT_FIELDS[0];
+            outlined_value(
+                ui,
+                &palette,
+                goal_label,
+                state.field_ref(goal_field).map_or("", |f| f.text()),
+                state.active_field == goal_field,
+                None,
+                false,
+            );
+            ui.add_space(space::MD);
+            for pair in TEXT_FIELDS[1..].chunks(2) {
+                ui.columns(2, |columns| {
+                    for (column, (label, field)) in columns.iter_mut().zip(pair) {
+                        outlined_value(
+                            column,
+                            &palette,
+                            label,
+                            state.field_ref(*field).map_or("", |f| f.text()),
+                            state.active_field == *field,
+                            None,
+                            false,
+                        );
+                    }
+                });
+                ui.add_space(space::MD);
             }
-        });
-        agents
-            .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::List, true, AGENTS_LABEL));
-        egui::Grid::new("codemason_loop_fields")
-            .num_columns(2)
-            .show(ui, |ui| {
-                for (label, field) in TEXT_FIELDS {
-                    let active = state.active_field == field;
-                    ui.monospace(format!("{}{label}", marker(active)));
-                    let text = state.field_ref(field).map_or("", |f| f.text());
-                    ui.monospace(text);
-                    ui.end_row();
-                }
-                let active = state.active_field == LoopSetupField::Checkpoints;
-                ui.monospace(format!("{}{CHECKPOINTS_LABEL}", marker(active)));
-                let value = if state.checkpoints { "on" } else { "off" };
-                if ui.selectable_label(state.checkpoints, value).clicked() {
-                    click = Some(Click::Checkpoints);
-                }
-                ui.end_row();
-            });
-        if let Some(error) = state.error.as_deref() {
-            ui.colored_label(ui.visuals().error_fg_color, format!("error: {error}"));
-        }
-        ui.add_space(crate::metrics::space::SM);
-        key_buttons(ui, &[(START, plain(Key::Enter)), (CANCEL, plain(Key::Esc))]);
-        ui.weak("Tab next field - Up/Down navigate - Enter start - Esc cancel");
-    });
+            let checkpoints_active = state.active_field == LoopSetupField::Checkpoints;
+            if ui
+                .horizontal(|ui| {
+                    chip(
+                        ui,
+                        &palette,
+                        ChipKind::Filter {
+                            selected: state.checkpoints,
+                        },
+                        None,
+                        CHECKPOINTS_LABEL,
+                    )
+                })
+                .inner
+                .clicked()
+            {
+                click = Some(Click::Checkpoints);
+            }
+            if checkpoints_active {
+                // The active row is the chip's, whose own state carries the
+                // focus mark; the hint says what Space does.
+                material_hint(ui, &palette, "Space toggles the checkpoints");
+            }
+            if let Some(error) = state.error.as_deref() {
+                ui.add_space(space::SM);
+                ui.label(
+                    egui::RichText::new(format!("error: {error}"))
+                        .size(text_size::BODY)
+                        .color(rgb(palette.m3.error)),
+                );
+            }
+            ui.add_space(space::LG);
+            material_actions(
+                ui,
+                &palette,
+                &[(START, plain(Key::Enter)), (CANCEL, plain(Key::Esc))],
+                true,
+            );
+            ui.add_space(space::MD);
+            material_hint(
+                ui,
+                &palette,
+                "Tab next field - Up/Down navigate - Enter start - Esc cancel",
+            );
+        },
+    );
     match click {
         Some(Click::Agent(i)) => {
             if let Some(state) = app.loop_setup.as_mut() {

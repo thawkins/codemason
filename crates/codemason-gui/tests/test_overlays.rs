@@ -17,18 +17,21 @@ use codemason_agent::event::Event;
 use codemason_agent::mcp::{DiscoveredMcpServer, McpDiscoverySource};
 use codemason_agent::message::Message;
 use codemason_app_core::app::{
-    App, BackendPanelRow, BackendPanelState, McpDiscoverState, OutputViewLineCache,
+    App, BackendPanelRow, BackendPanelState, ContextAction, McpDiscoverState, OutputViewLineCache,
     OutputViewState, OutputViewTarget, PluginStoreBrowser, PluginsListState, SelectionPane,
 };
 use codemason_app_core::clipboard::ClipboardTestOverrideGuard;
 use codemason_app_core::log_channel::tui_log_channel;
 use codemason_connectors::CatalogueBrowser;
 use codemason_gui::Shell;
-use codemason_gui::dialogs::context_menu::CONTEXT_MENU_LABEL;
+use codemason_gui::dialogs::context_menu::{CONTEXT_MENU_LABEL, item_label};
 use codemason_gui::dialogs::lists::{
-    BACKENDS_LABEL, CLOSE, MCP_DISCOVER_TITLE, PLUGINS_LIST_TITLE, backend_title,
+    ACTIVE_MARK, BACKENDS_LABEL, CLOSE, MCP_DISCOVER_TITLE, PLUGINS_LIST_TITLE, SERVERS_LABEL,
+    backend_title,
 };
-use codemason_gui::dialogs::output_view::OUTPUT_LABEL;
+use codemason_gui::dialogs::output_view::{
+    CLOSE as VIEW_CLOSE, FOOTER_HINT, NO_OUTPUT, OUTPUT_LABEL,
+};
 use codemason_gui::dialogs::progress::{DOWNLOAD_LABEL, LOADING_LABEL};
 use codemason_gui::dialogs::stores::{CONNECTORS_TITLE, PLUGIN_STORE_TITLE, RESULTS_LABEL};
 use codemason_gui::dialogs::{ActiveDialog, active};
@@ -39,7 +42,7 @@ use codemason_plugins::{PluginListRow, PluginListView, StoreKind};
 use craft_keymap::Platform;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// The session the tests' messages belong to.
@@ -210,6 +213,14 @@ fn test_backend_panel_renders_and_down_moves_the_cursor() {
             .query_by_role_and_label(Role::List, BACKENDS_LABEL)
             .is_some()
     );
+    // The rows are Material list items; the active backend alone carries
+    // the Active badge, and the highlighted row is the selected one.
+    let rows: Vec<_> = harness
+        .query_all_by_role(Role::ListItem)
+        .map(|row| row.accesskit_node().is_selected())
+        .collect();
+    assert_eq!(rows, vec![Some(true), Some(false)]);
+    assert_eq!(harness.query_all_by_label(ACTIVE_MARK).count(), 1);
     harness.get_by_label_contains("docker-connection");
 
     type_key(&mut harness, egui::Key::ArrowDown, None);
@@ -250,6 +261,13 @@ fn test_mcp_discover_renders_and_keys_move_and_close() {
     harness.run();
     assert!(dialog_shown(&harness, MCP_DISCOVER_TITLE));
     harness.get_by_label_contains("beta server");
+    // The servers are a Material list, and an enabled flag reaches the row
+    // as a badge rather than as a "[x]" prefix.
+    harness.get_by_role_and_label(Role::List, SERVERS_LABEL);
+    assert_eq!(harness.query_all_by_role(Role::ListItem).count(), 2);
+    // The enable flag stays in the row text the TUI shows; the active
+    // backend is the only badge in this set of dialogs.
+    harness.get_by_label_contains("[ ] alpha");
 
     type_key(&mut harness, egui::Key::J, Some("j"));
     assert_eq!(
@@ -358,6 +376,14 @@ fn test_model_download_and_loading_windows_follow_agent_events() {
             .is_some()
     );
     harness.get_by_label_contains("Loading models for Local");
+    // The loading window's spinner is the Material circular indicator: a
+    // second progress node inside the card, distinct from the window's own
+    // label, so assistive technology hears both.
+    assert_eq!(
+        harness.query_all_by_role(Role::ProgressIndicator).count(),
+        2,
+        "the card and its spinner"
+    );
 }
 
 /// Select the prompt's characters `start..end` in its editor.
@@ -487,6 +513,55 @@ fn test_output_view_renders_scrolls_with_keys_and_esc_closes() {
 }
 
 #[test]
+fn test_output_view_is_a_material_dialog_with_one_filled_close() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.session.messages = vec![Message::user_text(SESSION, "one line of output")];
+        app.output_view = Some(OutputViewState {
+            target: OutputViewTarget::Session {
+                session_id: SESSION.to_string(),
+                label: "build".to_string(),
+            },
+            scroll_offset: 0,
+            max_scroll: 0,
+            line_cache: OutputViewLineCache::default(),
+        });
+    });
+    harness.run();
+
+    // The overlay is a Material dialog (`Role::Dialog` carrying its title)
+    // holding the transcript, with one action: the filled Close, which sends
+    // Esc through app-core.
+    harness.get_by_role_and_label(Role::Dialog, "Output: build");
+    harness
+        .get_by_role_and_label(Role::Button, VIEW_CLOSE)
+        .click();
+    harness.run();
+    assert!(
+        harness.state().app().output_view.is_none(),
+        "the Material Close closes the overlay"
+    );
+}
+
+#[test]
+fn test_output_view_footer_names_the_keys() {
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.output_view = Some(OutputViewState {
+            target: OutputViewTarget::Session {
+                session_id: SESSION.to_string(),
+                label: "build".to_string(),
+            },
+            scroll_offset: 0,
+            max_scroll: 0,
+            line_cache: OutputViewLineCache::default(),
+        });
+    });
+    harness.run();
+    // An empty target says so, and the key legend stays under the transcript.
+    harness.get_by_label(NO_OUTPUT);
+    harness.get_by_label(FOOTER_HINT);
+}
+
+#[test]
 fn test_context_menu_on_the_transcript_has_nothing_enabled_and_esc_closes() {
     let _clipboard = ClipboardTestOverrideGuard::new("clipboard text");
     let (_rt, _events, mut harness) = rig(|app| {
@@ -517,6 +592,60 @@ fn test_context_menu_on_the_transcript_has_nothing_enabled_and_esc_closes() {
             .query_by_role_and_label(Role::MenuListPopup, CONTEXT_MENU_LABEL)
             .is_none()
     );
+}
+
+#[test]
+fn test_context_menu_is_a_material_menu_with_an_icon_label_and_shortcut() {
+    let _clipboard = ClipboardTestOverrideGuard::new("");
+    let (_rt, _events, mut harness) = rig(|app| {
+        app.session.input = "hello world".to_string();
+        app.session.input_cursor = 11;
+    });
+    harness.run();
+    harness.get_by_label(PROMPT_LABEL).click();
+    harness.run();
+    select_in_prompt(&mut harness, 6, 11);
+    harness.run();
+    harness.get_by_label(PROMPT_LABEL).click_secondary();
+    harness.run();
+
+    // The actions are Material menu items on the one menu surface: each has
+    // its label as its accessible name (its icon is painted, not a widget),
+    // and the row app-core's cursor is on is the selected one.
+    harness.get_by_role_and_label(Role::MenuListPopup, CONTEXT_MENU_LABEL);
+    for action in [
+        ContextAction::Cut,
+        ContextAction::Copy,
+        ContextAction::Paste,
+    ] {
+        harness.get_by_role_and_label(Role::MenuItem, item_label(action));
+    }
+    let on_cursor_action = {
+        let app = harness.state().app();
+        let menu = app.context_menu.as_ref().expect("menu open");
+        menu.items
+            .get(menu.selected)
+            .map(|(action, _)| *action)
+            .expect("an item on the cursor")
+    };
+    let on_cursor = harness.get_by_role_and_label(Role::MenuItem, item_label(on_cursor_action));
+    assert_eq!(
+        on_cursor.accesskit_node().is_selected(),
+        Some(true),
+        "the keyboard's row is the selected item"
+    );
+    // A disabled action is disabled in the menu too, so assistive technology
+    // hears it, and a click on it only closes the menu.
+    let paste = harness.get_by_role_and_label(Role::MenuItem, item_label(ContextAction::Paste));
+    assert!(
+        paste.accesskit_node().is_disabled(),
+        "Paste is disabled with an empty clipboard"
+    );
+
+    // The action's own keys still drive it: Up/Down move the highlight and
+    // Esc closes, through app-core, untouched by the Material chrome.
+    type_key(&mut harness, egui::Key::Escape, None);
+    assert!(harness.state().app().context_menu.is_none());
 }
 
 #[test]

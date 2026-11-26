@@ -9,6 +9,9 @@
 //! disclosure triangle, an optional colour swatch, a headline and trailing
 //! value columns aligned at the right edge. An expandable row is clickable.
 //!
+//! [`dense_item_option`] draws the same row as one option of a list box: it
+//! is clickable and reports whether it is the selected one.
+//!
 //! [`avatar_list_item`] draws a taller, three-line row for browsing
 //! entries: a letter avatar, the headline with a muted subtitle, a one-line
 //! supporting text, a meta line the caller fills (chips, badges), and a
@@ -86,6 +89,49 @@ pub fn list_item(
     trailing: Option<&str>,
     selected: bool,
 ) -> Response {
+    list_item_with(
+        ui,
+        palette,
+        headline,
+        supporting,
+        trailing,
+        selected,
+        |_| (),
+    )
+    .0
+}
+
+/// Draw a list item with a trailing slot for a widget (a badge, an action
+/// button) beside the text.
+///
+/// The text column stops before the slot, so a row with a wide slot cuts
+/// its headline with an ellipsis instead of running under it. The slot's
+/// widgets are drawn after the item, so a click on one is the slot's, not
+/// the item's.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; the item fills its available width.
+/// * `palette` - the colours.
+/// * `headline` - the item's text, also its accessible name.
+/// * `supporting` - an optional second line under the headline.
+/// * `trailing` - optional trailing text, left of the slot.
+/// * `selected` - whether the item is the selected one.
+/// * `slot` - draws the trailing slot; its value is returned.
+///
+/// # Returns
+///
+/// The item's response (`clicked()` and `double_clicked()` report clicks on
+/// the item), and what `slot` returned.
+pub fn list_item_with<R>(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    headline: &str,
+    supporting: Option<&str>,
+    trailing: Option<&str>,
+    selected: bool,
+    slot: impl FnOnce(&mut egui::Ui) -> R,
+) -> (Response, R) {
     let m3 = &palette.m3;
     let height = if supporting.is_some() {
         TWO_LINE_HEIGHT
@@ -106,8 +152,29 @@ pub fn list_item(
             node.set_description(description.join(", "));
         }
     });
+    // The fill and the state layer go under the text and the slot; they are
+    // painted last, once the slot's width is known.
+    let background = ui.painter().add(Shape::Noop);
+    // The slot is laid out first, for its width, in a right-to-left ui at
+    // the row's right edge.
+    let mut slot_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                egui::pos2(rect.center().x, rect.top()),
+                egui::pos2(rect.right() - PADDING, rect.bottom()),
+            ))
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    let trailed = slot(&mut slot_ui);
+    let slot_rect = slot_ui.min_rect();
+    // An empty slot leaves its ui's min rect at the right edge, zero-sized.
+    let slot_width = if slot_rect.size() == Vec2::ZERO {
+        0.0
+    } else {
+        (rect.right() - PADDING - slot_rect.left()).max(0.0) + TRAILING_GAP
+    };
     if !ui.is_rect_visible(rect) {
-        return response;
+        return (response, trailed);
     }
     let content = content_colour(
         ui,
@@ -119,16 +186,10 @@ pub fn list_item(
         }),
     );
     let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
-    let corner = CornerRadius::same(radius::SM);
-    if selected {
-        ui.painter()
-            .rect_filled(rect, corner, rgb(m3.secondary_container));
-    }
-    paint_state_layer(ui, &response, corner, content);
     let trail =
         trailing.map(|t| text_galley(ui, t, egui::FontId::proportional(text_size::SMALL), variant));
     let trail_width = trail.as_ref().map_or(0.0, |t| t.size().x + TRAILING_GAP);
-    let text_right = rect.right() - PADDING - trail_width;
+    let text_right = rect.right() - PADDING - slot_width - trail_width;
     let clip = rect.with_max_x(text_right.max(rect.left()));
     // Text wider than the row is cut with an ellipsis, and hovering shows
     // it whole.
@@ -162,16 +223,36 @@ pub fn list_item(
     }
     if let Some(trail) = trail {
         let pos = egui::pos2(
-            rect.right() - PADDING - trail.size().x,
+            rect.right() - PADDING - slot_width - trail.size().x,
             rect.center().y - trail.size().y / 2.0,
         );
         ui.painter().galley(pos, trail, variant);
     }
-    if cut {
-        let full = supporting.map_or_else(|| headline.to_owned(), |s| format!("{headline}\n{s}"));
-        return response.on_hover_text(full);
+    let corner = CornerRadius::same(radius::SM);
+    let mut shapes = Vec::new();
+    if selected {
+        shapes.push(Shape::rect_filled(
+            rect,
+            corner,
+            rgb(m3.secondary_container),
+        ));
     }
-    response
+    let opacity = state_opacity(&response);
+    if opacity > 0.0 && ui.is_enabled() {
+        shapes.push(Shape::rect_filled(
+            rect,
+            corner,
+            content.gamma_multiply(opacity),
+        ));
+    }
+    ui.painter().set(background, Shape::Vec(shapes));
+    let response = if cut {
+        let full = supporting.map_or_else(|| headline.to_owned(), |s| format!("{headline}\n{s}"));
+        response.on_hover_text(full)
+    } else {
+        response
+    };
+    (response, trailed)
 }
 
 /// Draw a dense legend row.
@@ -205,10 +286,65 @@ pub fn dense_item(
     headline: &str,
     trailing: &[&str],
 ) -> Response {
+    dense_row(
+        ui, palette, indent, disclosure, swatch, headline, trailing, None,
+    )
+}
+
+/// Draw a dense row as one option of a list box: [`dense_item`]'s row, made
+/// clickable and marked when it is the selected option (filled with
+/// `secondary_container`, as a selected [`list_item`] is).
+///
+/// The row reports [`Role::ListBoxOption`], so a list of them reads as the
+/// options of the list box the caller labels.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; the row fills its available width.
+/// * `palette` - the colours.
+/// * `indent` - space before the row's content, in points.
+/// * `headline` - the row's text, also its accessible name.
+/// * `selected` - whether the row is the option the list box has selected.
+///
+/// # Returns
+///
+/// The row's response; `clicked()` reports a click on it.
+pub fn dense_item_option(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    indent: f32,
+    headline: &str,
+    selected: bool,
+) -> Response {
+    dense_row(
+        ui,
+        palette,
+        indent,
+        Disclosure::None,
+        None,
+        headline,
+        &[],
+        Some(selected),
+    )
+}
+
+/// Draw a dense row: [`dense_item`]'s layout, as a plain row when `option`
+/// is `None` and as a list-box option carrying its selection otherwise.
+fn dense_row(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    indent: f32,
+    disclosure: Disclosure,
+    swatch: Option<Color32>,
+    headline: &str,
+    trailing: &[&str],
+    option: Option<bool>,
+) -> Response {
     let m3 = &palette.m3;
-    let sense = match disclosure {
-        Disclosure::None => Sense::hover(),
-        Disclosure::Collapsed | Disclosure::Expanded => Sense::click(),
+    let sense = if option.is_some() || disclosure != Disclosure::None {
+        Sense::click()
+    } else {
+        Sense::hover()
     };
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), DENSE_HEIGHT), sense);
@@ -216,10 +352,24 @@ pub fn dense_item(
         .chain(trailing.iter().copied())
         .collect::<Vec<_>>()
         .join("  ");
-    response.widget_info(|| WidgetInfo::labeled(Role::ListItem, ui.is_enabled(), &name));
+    match option {
+        Some(selected) => response.widget_info(|| {
+            WidgetInfo::selected(Role::ListBoxOption, ui.is_enabled(), selected, &name)
+        }),
+        None => {
+            response.widget_info(|| WidgetInfo::labeled(Role::ListItem, ui.is_enabled(), &name))
+        }
+    }
     if disclosure != Disclosure::None {
         ui.ctx().accesskit_node_builder(response.id, |node| {
             node.set_expanded(disclosure == Disclosure::Expanded);
+        });
+    }
+    if let Some(selected) = option {
+        // egui passes `selected` on for tabs and options only; a list-box
+        // option states it itself, so assistive technology hears it.
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_selected(selected);
         });
     }
     if !ui.is_rect_visible(rect) {
@@ -227,7 +377,14 @@ pub fn dense_item(
     }
     let content = content_colour(ui, palette, rgb(m3.on_surface));
     let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
-    if disclosure != Disclosure::None {
+    if option == Some(true) {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(radius::XS),
+            rgb(m3.secondary_container),
+        );
+    }
+    if option.is_some() || disclosure != Disclosure::None {
         paint_state_layer(ui, &response, CornerRadius::same(radius::XS), content);
     }
     let centre_y = rect.center().y;

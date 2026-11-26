@@ -179,6 +179,7 @@ impl eframe::App for Gallery {
             ui.ctx(),
             &palette,
             egui::Id::unique("gallery_snackbar"),
+            "Saved",
             "Session saved",
             Some("Undo"),
         );

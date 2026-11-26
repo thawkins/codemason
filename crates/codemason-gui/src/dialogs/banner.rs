@@ -1,9 +1,9 @@
 //! The run-cost banner (`App::session.run_cost_banner`): the one-line
-//! summary a finished run leaves near the top of the window.
+//! summary a finished run leaves at the bottom of the window.
 //!
-//! It is not a modal. As in the TUI (`render_run_cost_banner`) it sits above
-//! everything else, at the top, until the next key press or until it
-//! expires (`App::poll_timers`, which the shell runs every frame).
+//! It is not a modal. As in the TUI (`render_run_cost_banner`) it stays up
+//! until the next key press or until it expires (`App::poll_timers`, which
+//! the shell runs every frame).
 //!
 //! The next key press dismisses it the way app-core's `dispatch_key` does:
 //! a plain character dismisses it and still types, any other key is used up
@@ -12,15 +12,22 @@
 //! [`prepare`] applies the rule first: a plain character clears the banner
 //! and stays for the editor; any other first key press is taken out of the
 //! input and sent to `App::handle_key`, which dismisses the banner with it.
-//! The Dismiss button sends Esc.
+//! The Dismiss action sends Esc.
 //!
-//! Dependencies: `codemason-app-core` and `egui`.
+//! The banner is a Material snackbar ([`snackbar`]): a transient notice with
+//! one action, in the `inverse_surface` colour, at the bottom centre of the
+//! window.
+//!
+//! Dependencies: `codemason-app-core`, `egui`, and this crate's Material
+//! feedback.
 
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
 
 use super::{plain, send_key};
 use crate::keys::{is_key_text, to_key_input};
+use crate::material::feedback::snackbar;
+use crate::palette::palette_for;
 
 /// Accessible label of the banner.
 pub const BANNER_LABEL: &str = "Run summary";
@@ -82,21 +89,21 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(text) = app.session.run_cost_banner.as_deref() else {
         return false;
     };
-    egui::Area::new(egui::Id::unique("codemason_run_cost_banner"))
-        .order(egui::Order::Tooltip)
-        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 8.0))
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                let row = ui.horizontal(|ui| {
-                    ui.strong(text);
-                    if ui.small_button(DISMISS_BANNER).clicked() {
-                        send_key(ui.ctx(), plain(Key::Esc));
-                    }
-                });
-                row.response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Status, true, BANNER_LABEL)
-                });
-            });
-        });
+    let palette = palette_for(app, ctx);
+    // A snackbar, as Material shows a transient notice: the run summary is
+    // its message and Dismiss its action. Its accessible name stays
+    // `BANNER_LABEL`, so the summary itself is what assistive technology
+    // hears under it.
+    let dismissed = snackbar(
+        ctx,
+        &palette,
+        egui::Id::unique("codemason_run_cost_banner"),
+        BANNER_LABEL,
+        text,
+        Some(DISMISS_BANNER),
+    );
+    if dismissed {
+        send_key(ctx, plain(Key::Esc));
+    }
     true
 }

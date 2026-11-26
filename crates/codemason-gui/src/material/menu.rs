@@ -3,7 +3,8 @@
 //! [`menu_frame`] is the frame a menu's items are drawn in (a
 //! `surface_container` fill at elevation 2 with extra-small corners), and
 //! [`menu_item`] draws one 48-point item with an optional leading icon and
-//! trailing text such as a shortcut.
+//! trailing text such as a shortcut, and [`menu_item_selected`] draws one as
+//! the menu's current row, the one a key press runs.
 //!
 //! Dependencies: `egui`, and this crate's palette, icons and metrics.
 
@@ -69,6 +70,32 @@ pub fn menu_item(
     label: &str,
     trailing: Option<&str>,
 ) -> Response {
+    menu_item_at(ui, palette, icon, label, trailing, false)
+}
+
+/// Draw a menu item as the menu's current row: the one the keyboard would
+/// run, filled like a selected list item.
+///
+/// The arguments and the returned response are those of [`menu_item`].
+pub fn menu_item_selected(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    trailing: Option<&str>,
+) -> Response {
+    menu_item_at(ui, palette, icon, label, trailing, true)
+}
+
+/// Draw a menu item, highlighted when `selected`.
+fn menu_item_at(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    trailing: Option<&str>,
+    selected: bool,
+) -> Response {
     let m3 = &palette.m3;
     let content = content_colour(ui, palette, rgb(m3.on_surface));
     let variant = content_colour(ui, palette, rgb(m3.on_surface_variant));
@@ -80,11 +107,26 @@ pub fn menu_item(
     let natural = PADDING.mul_add(2.0, icon_width + text.size().x + trail_width);
     let width = natural.max(MIN_WIDTH).max(ui.available_width());
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ITEM_HEIGHT), Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(Role::MenuItem, ui.is_enabled(), label));
+    response.widget_info(|| WidgetInfo::selected(Role::MenuItem, ui.is_enabled(), selected, label));
+    // egui passes `selected` on for tabs and options only; a menu item states
+    // it itself, so assistive technology hears the menu's current row. The
+    // trailing shortcut is painted, not added, so it is the row's description
+    // (as a list item's trailing text is).
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_selected(selected);
+        if let Some(trailing) = trailing {
+            node.set_description(trailing);
+        }
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    paint_state_layer(ui, &response, CornerRadius::ZERO, content);
+    if selected {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::ZERO, rgb(m3.secondary_container));
+    } else {
+        paint_state_layer(ui, &response, CornerRadius::ZERO, content);
+    }
     let mut x = rect.left() + PADDING;
     if let Some(icon) = icon {
         let glyph = icon_galley(ui, icon, ICON_SIZE, variant);

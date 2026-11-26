@@ -568,7 +568,7 @@ impl Shell {
         let now = ui.input(|i| i.time);
         if let Some(waited) = self.keys.leader_waited(now) {
             if waited >= dialogs::which_key::WHICH_KEY_DELAY {
-                dialogs::which_key::show(ui.ctx(), &self.keys.leader_entries());
+                dialogs::which_key::show(ui.ctx(), &palette, &self.keys.leader_entries());
             }
             // Wake to show the popup, and to end the wait at its timeout.
             let next = if waited < dialogs::which_key::WHICH_KEY_DELAY {

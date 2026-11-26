@@ -30,6 +30,12 @@
 //! the router, as in the TUI. A left click outside the menu closes it, as
 //! in the TUI.
 //!
+//! The menu is drawn on a Material menu surface ([`menu_frame`]) with one
+//! [`menu_item`] per action: the action's icon leads, its label follows and
+//! its shortcut trails, and the row app-core's cursor is on is drawn as the
+//! menu's selected item. An item app-core disabled is drawn disabled, as
+//! before.
+//!
 //! Running an item is the one GUI step: the selection the items act on is
 //! the egui prompt editor's, which app-core does not see (its own
 //! `execute_context_action` reads the terminal's cell selection). So Enter
@@ -43,18 +49,25 @@
 //! selection exactly as for Ctrl+X/C/V. A disabled item only closes the
 //! menu, as app-core's Enter does.
 //!
-//! Dependencies: `codemason-app-core` (the menu state, the clipboard) and
-//! `egui`.
+//! Dependencies: `codemason-app-core` (the menu state, the clipboard),
+//! `egui`, and this crate's Material menu.
 
 use codemason_app_core::app::{App, ContextAction, SelectionPane};
 use codemason_app_core::input_event::Key;
 use egui::Id;
 
 use super::{plain, send_key};
+use crate::icons::Icon;
+use crate::material::menu::{menu_frame, menu_item, menu_item_selected};
+use crate::palette::palette_for;
 use crate::panels::prompt::prompt_id;
 
 /// Accessible label of the menu.
 pub const CONTEXT_MENU_LABEL: &str = "Context menu";
+
+/// Narrowest the menu surface is drawn, in points: a menu is wider than the
+/// label that opened it, so its items do not crowd the pointer.
+const SURFACE_MIN_WIDTH: f32 = 180.0;
 
 /// The item labels, as the TUI shows them.
 #[must_use]
@@ -65,6 +78,19 @@ pub fn item_label(action: ContextAction) -> &'static str {
         ContextAction::Paste => "Paste",
         ContextAction::CopyMarkdown => "Copy as Markdown",
         ContextAction::QuoteReply => "Quote in reply",
+    }
+}
+
+/// The action's leading icon, or `None` for one with no icon in the bundled
+/// face.
+#[must_use]
+pub fn item_icon(action: ContextAction) -> Option<Icon> {
+    match action {
+        ContextAction::Cut => Some(Icon::Cut),
+        ContextAction::Copy => Some(Icon::Copy),
+        ContextAction::Paste => Some(Icon::Paste),
+        ContextAction::CopyMarkdown => Some(Icon::Markdown),
+        ContextAction::QuoteReply => Some(Icon::Quote),
     }
 }
 
@@ -430,6 +456,7 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(menu) = app.context_menu.as_ref() else {
         return false;
     };
+    let palette = palette_for(app, ctx);
     let at = ctx
         .data(|d| d.get_temp::<egui::Pos2>(anchor_id()))
         .unwrap_or_else(|| ctx.content_rect().center());
@@ -438,11 +465,26 @@ pub fn show(ctx: &egui::Context, app: &mut App) -> bool {
         .order(egui::Order::Foreground)
         .fixed_pos(at)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            // The actions are a Material menu: an icon and label per row,
+            // with the row the keyboard is on drawn as the selected item, as
+            // the plain selectable buttons were.
+            menu_frame(&palette).show(ui, |ui| {
+                ui.set_min_width(SURFACE_MIN_WIDTH);
+                ui.spacing_mut().item_spacing.y = 0.0;
                 let inner = ui.vertical(|ui| {
                     for (i, &(action, enabled)) in menu.items.iter().enumerate() {
-                        let item = egui::Button::selectable(i == menu.selected, item_label(action));
-                        if ui.add_enabled(enabled, item).clicked() {
+                        let icon = item_icon(action);
+                        let label = item_label(action);
+                        let clicked = ui
+                            .add_enabled_ui(enabled, |ui| {
+                                if i == menu.selected {
+                                    menu_item_selected(ui, &palette, icon, label, None).clicked()
+                                } else {
+                                    menu_item(ui, &palette, icon, label, None).clicked()
+                                }
+                            })
+                            .inner;
+                        if clicked {
                             chosen = Some((action, enabled));
                         }
                     }

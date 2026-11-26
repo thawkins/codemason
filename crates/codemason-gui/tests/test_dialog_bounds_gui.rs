@@ -127,3 +127,23 @@ fn test_dialog_bounds_long_notice_detail_keeps_ok_in_a_small_window() {
     let ok = harness.get_by_role_and_label(Role::Button, "OK").rect();
     assert!(inside_window(ok), "OK {ok:?} in window {WINDOW:?}");
 }
+
+#[test]
+fn test_dialog_bounds_long_picker_list_keeps_its_actions_in_a_small_window() {
+    use codemason_app_core::app::HistoryPickerState;
+    use codemason_gui::dialogs::pickers::{CLOSE, HISTORY_TITLE};
+    let (_rt, mut harness) = rig(|app| {
+        app.history_picker = Some(HistoryPickerState {
+            entries: (0..60).map(|i| format!("entry {i}")).collect(),
+            selected: 59,
+            scroll_offset: 0,
+        });
+    });
+    harness.run();
+    let dialog = harness
+        .get_by_role_and_label(Role::Dialog, HISTORY_TITLE)
+        .rect();
+    assert!(inside_window(dialog), "dialog {dialog:?} in {WINDOW:?}");
+    let close = harness.get_by_role_and_label(Role::Button, CLOSE).rect();
+    assert!(inside_window(close), "Close {close:?} in {WINDOW:?}");
+}

@@ -91,6 +91,9 @@ use crate::icons::Icon;
 use crate::keys::{Focus, is_key_text, is_prompt_app_key, is_prompt_edit_key, to_key_input};
 use crate::material;
 use crate::material::icon_button::{IconButtonKind, icon_button_inline};
+use crate::material::list::dense_item_option;
+use crate::material::menu::menu_frame;
+use crate::palette::Palette;
 use crate::panels::messages::{COLLAPSE_ALL_LABEL, SCROLL_TO_BOTTOM_LABEL};
 
 /// Accessible label of the prompt input.
@@ -703,6 +706,7 @@ fn push_app_cursor(ctx: &egui::Context, id: Id, cursor: usize) {
 /// The App's open completion menu, `@` mentions or `/` commands, in a
 /// popup above the prompt at `anchor`. A click accepts an entry as Tab does.
 fn completion_popup(ui: &egui::Ui, app: &mut App, anchor: egui::Rect) {
+    let palette = crate::palette::palette_for(app, ui.ctx());
     let clicked = if let Some(menu) = app.file_menu.as_ref() {
         let rows: Vec<String> = menu.matches.iter().map(|m| m.display.clone()).collect();
         let shown = CompletionList {
@@ -712,7 +716,7 @@ fn completion_popup(ui: &egui::Ui, app: &mut App, anchor: egui::Rect) {
             first: menu.scroll_offset,
             empty: "No matching files",
         };
-        shown.show(ui, anchor)
+        shown.show(ui, anchor, &palette)
     } else if let Some(menu) = app.slash_menu.as_ref() {
         let rows: Vec<String> = menu
             .matches
@@ -728,7 +732,7 @@ fn completion_popup(ui: &egui::Ui, app: &mut App, anchor: egui::Rect) {
             first: menu.selected.saturating_sub(COMPLETION_ROWS - 1),
             empty: "No matching commands",
         };
-        shown.show(ui, anchor)
+        shown.show(ui, anchor, &palette)
     } else {
         None
     };
@@ -759,26 +763,40 @@ struct CompletionList<'a> {
 impl CompletionList<'_> {
     /// Draw the list in a popup above `anchor`.
     ///
+    /// The popup is a Material menu surface ([`menu_frame`]) of dense list
+    /// options ([`dense_item_option`]): the highlighted row is the selected
+    /// option, and the rows are cut to [`COMPLETION_ROWS`] so the popup never
+    /// grows past them.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - the ui the popup is anchored to; the popup floats over the
+    ///   window.
+    /// * `anchor` - the prompt's visible rectangle, which the popup sits above.
+    /// * `palette` - the colours.
+    ///
     /// # Returns
     ///
     /// The index of a clicked row, if any.
-    fn show(&self, ui: &egui::Ui, anchor: egui::Rect) -> Option<usize> {
+    fn show(&self, ui: &egui::Ui, anchor: egui::Rect, palette: &Palette) -> Option<usize> {
         let mut clicked = None;
         egui::Area::new(Id::unique("codemason_completion_popup"))
             .order(egui::Order::Foreground)
             .fixed_pos(anchor.left_top())
             .pivot(egui::Align2::LEFT_BOTTOM)
             .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                menu_frame(palette).show(ui, |ui| {
                     let list = ui.vertical(|ui| {
                         let rows = self.rows.iter().enumerate();
                         for (i, row) in rows.skip(self.first).take(COMPLETION_ROWS) {
-                            if ui.selectable_label(i == self.selected, row).clicked() {
+                            if dense_item_option(ui, palette, 0.0, row, i == self.selected)
+                                .clicked()
+                            {
                                 clicked = Some(i);
                             }
                         }
                         if self.rows.is_empty() {
-                            ui.weak(self.empty);
+                            crate::dialogs::material_hint(ui, palette, self.empty);
                         }
                     });
                     list.response.widget_info(|| {

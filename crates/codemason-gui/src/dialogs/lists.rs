@@ -9,18 +9,25 @@
 //!   highlighted backend, Esc closes.
 //!
 //! The keys reach the App through the router, as in the TUI. These dialogs
-//! draw the rows as the TUI does; a click moves the highlight (the state
-//! the arrows move), and the buttons send the key that does the same thing:
-//! Toggle sends Space, Switch sends Enter, Close sends Esc.
+//! draw the rows as Material list items ([`super::pickers::entry_list_with`],
+//! shared with the pickers); a click moves the highlight (the state the
+//! arrows move), and the action row sends the key that does the same thing:
+//! Toggle sends Space, Switch sends Enter, Close sends Esc. The `/backend`
+//! rows carry a `badge` on the active backend.
 //!
-//! Dependencies: `codemason-app-core` and `egui`.
+//! Dependencies: `codemason-app-core`, `codemason-agent`, `egui` and this
+//! crate's Material list, badge and palette.
 
 use codemason_agent::mcp::McpDiscoverySource;
 use codemason_app_core::app::App;
 use codemason_app_core::input_event::Key;
 
-use super::pickers::entry_list;
-use super::{key_buttons, modal, plain};
+use super::pickers::entry_list_with;
+use super::{action_row, material_hint, material_modal, plain};
+use crate::material::badge::{BadgeTone, badge};
+use crate::material::button::ButtonKind;
+use crate::metrics::space;
+use crate::palette::palette_for;
 
 /// Title of the `/mcp discover` dialog, as the TUI's heading.
 pub const MCP_DISCOVER_TITLE: &str = "MCP Server Discovery";
@@ -37,6 +44,9 @@ pub const PLUGINS_LABEL: &str = "Plugins";
 /// Accessible label of the `/backend` rows.
 pub const BACKENDS_LABEL: &str = "Backends";
 
+/// The badge the active `/backend` row carries.
+pub const ACTIVE_MARK: &str = "Active";
+
 /// The button that toggles the highlighted row (Space).
 pub const TOGGLE: &str = "Toggle";
 
@@ -45,6 +55,9 @@ pub const SWITCH: &str = "Switch";
 
 /// The button that closes a list dialog (Esc).
 pub const CLOSE: &str = "Close";
+
+/// Width of a list dialog's content, in points.
+const WIDTH: f32 = 440.0;
 
 /// The `/backend` title, naming the active backend's kind, as the TUI's.
 #[must_use]
@@ -94,29 +107,65 @@ pub fn show_mcp_discover(ctx: &egui::Context, app: &mut App) -> bool {
             format!("{marker} {}  {}  {source}", srv.id, srv.name)
         })
         .collect();
+    let hints = vec![None; rows.len()];
     let selected = state.selected;
     let feedback = state.feedback.clone();
+    let palette = palette_for(app, ctx);
     let mut clicked = None;
-    modal(ctx, "codemason_mcp_discover", MCP_DISCOVER_TITLE, |ui| {
-        if rows.is_empty() {
-            ui.label("No MCP servers detected.");
-            ui.weak(
-                "Install MCP servers via npm (e.g. @modelcontextprotocol/server-filesystem) \
-                 or place configs in ~/.config/codemason/servers/ and retry.",
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_mcp_discover",
+        MCP_DISCOVER_TITLE,
+        WIDTH,
+        |ui| {
+            if rows.is_empty() {
+                material_hint(ui, &palette, "No MCP servers detected.");
+                ui.add_space(space::SM);
+                material_hint(
+                    ui,
+                    &palette,
+                    "Install MCP servers via npm (e.g. \
+                     @modelcontextprotocol/servers/server-filesystem) or place configs in \
+                     ~/.config/codemason/servers/ and retry.",
+                );
+            } else {
+                clicked = entry_list_with(
+                    ui,
+                    &palette,
+                    SERVERS_LABEL,
+                    &rows,
+                    &hints,
+                    selected,
+                    |_, _| (),
+                );
+            }
+            if let Some(feedback) = &feedback {
+                ui.add_space(space::SM);
+                material_hint(ui, &palette, feedback);
+            }
+            ui.add_space(space::LG);
+            action_row(
+                ui,
+                &palette,
+                &[
+                    (
+                        TOGGLE,
+                        ButtonKind::Filled,
+                        &[plain(Key::Char(' '))],
+                        !rows.is_empty(),
+                    ),
+                    (CLOSE, ButtonKind::Text, &[plain(Key::Esc)], true),
+                ],
             );
-        } else {
-            clicked = entry_list(ui, SERVERS_LABEL, &rows, selected);
-        }
-        if let Some(feedback) = &feedback {
-            ui.label(feedback);
-        }
-        ui.add_space(crate::metrics::space::SM);
-        ui.add_enabled_ui(!rows.is_empty(), |ui| {
-            key_buttons(ui, &[(TOGGLE, plain(Key::Char(' ')))]);
-        });
-        key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
-        ui.weak("Up/Down navigate * Space enable/disable * Esc close");
-    });
+            ui.add_space(space::MD);
+            material_hint(
+                ui,
+                &palette,
+                "Up/Down navigate * Space enable/disable * Esc close",
+            );
+        },
+    );
     if let Some((i, _)) = clicked
         && let Some(state) = app.mcp_discover.as_mut()
     {
@@ -139,35 +188,67 @@ pub fn show_plugins_list(ctx: &egui::Context, app: &mut App) -> bool {
     let Some(state) = app.plugins_list.as_ref() else {
         return false;
     };
-    let view = &state.view;
-    let rows = view.body.clone();
-    let header = view.header.clone();
+    let rows = state.view.body.clone();
+    let header = state.view.header.clone();
     let heading = state.heading.clone();
-    let attribution = view.attribution.clone();
+    let attribution = state.view.attribution.clone();
+    let hints = vec![None; rows.len()];
     let selected = state.selected;
     let feedback = state.feedback.clone();
+    let palette = palette_for(app, ctx);
     let mut clicked = None;
-    modal(ctx, "codemason_plugins_list", PLUGINS_LIST_TITLE, |ui| {
-        if let Some(heading) = &heading {
-            ui.strong(heading);
-        }
-        if !attribution.is_empty() {
-            ui.weak(&attribution);
-        }
-        if let Some(header) = &header {
-            ui.monospace(header);
-        }
-        clicked = entry_list(ui, PLUGINS_LABEL, &rows, selected);
-        if let Some(feedback) = &feedback {
-            ui.label(feedback);
-        }
-        ui.add_space(crate::metrics::space::SM);
-        ui.add_enabled_ui(!rows.is_empty(), |ui| {
-            key_buttons(ui, &[(TOGGLE, plain(Key::Char(' ')))]);
-        });
-        key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
-        ui.weak("Up/Down navigate * Space enable/disable * Esc close");
-    });
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_plugins_list",
+        PLUGINS_LIST_TITLE,
+        WIDTH,
+        |ui| {
+            if let Some(heading) = &heading {
+                material_hint(ui, &palette, heading);
+            }
+            if !attribution.is_empty() {
+                material_hint(ui, &palette, &attribution);
+            }
+            if let Some(header) = &header {
+                ui.monospace(header);
+            }
+            ui.add_space(space::SM);
+            clicked = entry_list_with(
+                ui,
+                &palette,
+                PLUGINS_LABEL,
+                &rows,
+                &hints,
+                selected,
+                |_, _| (),
+            );
+            if let Some(feedback) = &feedback {
+                ui.add_space(space::SM);
+                material_hint(ui, &palette, feedback);
+            }
+            ui.add_space(space::LG);
+            action_row(
+                ui,
+                &palette,
+                &[
+                    (
+                        TOGGLE,
+                        ButtonKind::Filled,
+                        &[plain(Key::Char(' '))],
+                        !rows.is_empty(),
+                    ),
+                    (CLOSE, ButtonKind::Text, &[plain(Key::Esc)], true),
+                ],
+            );
+            ui.add_space(space::MD);
+            material_hint(
+                ui,
+                &palette,
+                "Up/Down navigate * Space enable/disable * Esc close",
+            );
+        },
+    );
     if let Some((i, _)) = clicked
         && let Some(state) = app.plugins_list.as_mut()
     {
@@ -199,34 +280,60 @@ pub fn show_backend_panel(ctx: &egui::Context, app: &mut App) -> bool {
         .rows
         .iter()
         .map(|row| {
-            let marker = if row.active { " [active]" } else { "" };
             let detail = row
                 .detail
                 .as_deref()
                 .map(|d| format!(" - {d}"))
                 .unwrap_or_default();
             format!(
-                "{}  {}  {}  {}{marker}{detail}",
+                "{}  {}  {}  {}{detail}",
                 row.id, row.kind, row.health, row.connection
             )
         })
         .collect();
+    let active: Vec<bool> = state.rows.iter().map(|row| row.active).collect();
+    let hints = vec![None; rows.len()];
     let selectable = state
         .rows
         .get(state.cursor)
         .is_some_and(|row| row.is_selectable());
     let cursor = state.cursor;
     let title = backend_title(active_kind);
+    let palette = palette_for(app, ctx);
     let mut clicked = None;
-    modal(ctx, "codemason_backend_panel", &title, |ui| {
-        clicked = entry_list(ui, BACKENDS_LABEL, &rows, cursor);
-        ui.add_space(crate::metrics::space::SM);
-        ui.add_enabled_ui(selectable, |ui| {
-            key_buttons(ui, &[(SWITCH, plain(Key::Enter))]);
-        });
-        key_buttons(ui, &[(CLOSE, plain(Key::Esc))]);
-        ui.weak("Up/Down move * Enter switch * Esc close");
-    });
+    material_modal(
+        ctx,
+        &palette,
+        "codemason_backend_panel",
+        &title,
+        WIDTH,
+        |ui| {
+            clicked = entry_list_with(
+                ui,
+                &palette,
+                BACKENDS_LABEL,
+                &rows,
+                &hints,
+                cursor,
+                |i, ui| {
+                    if active[i] {
+                        badge(ui, &palette, BadgeTone::Primary, ACTIVE_MARK);
+                    }
+                },
+            );
+            ui.add_space(space::LG);
+            action_row(
+                ui,
+                &palette,
+                &[
+                    (SWITCH, ButtonKind::Filled, &[plain(Key::Enter)], selectable),
+                    (CLOSE, ButtonKind::Text, &[plain(Key::Esc)], true),
+                ],
+            );
+            ui.add_space(space::MD);
+            material_hint(ui, &palette, "Up/Down move * Enter switch * Esc close");
+        },
+    );
     if let Some((i, _)) = clicked
         && let Some(state) = app.backend_panel.as_mut()
     {

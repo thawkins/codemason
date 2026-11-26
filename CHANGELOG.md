@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed: every GUI dialog is now drawn with the Material components, finishing the migration in `docs/plans/MATERIALDIALOGS.md`. The permission and agent-question dialogs, the eleven confirmations, the list and picker dialogs, the command palette, the `/loop` setup, the `?` keyboard shortcuts panel and the tool-output overlay all sit on the `surface_container_high` dialog surface with a headline, outlined fields, Material list items, an `on_surface_variant` hint and right-aligned filled/text actions. The non-modal surfaces moved too: the run-cost banner is a snackbar, the model loading and download windows are labelled progress indicators, the which-key popup and right-click menu are Material menus, and the `Alt+Q` queue menu, the session request popup and the prompt completions are Material menu and list surfaces. Buttons still send the same key presses through `dialogs::send_key`, so every keyboard path and app-core's own cursor are unchanged; clicks are an added route only. The plain `modal()` and `key_buttons` helpers are gone.
+
+### Added
+
+- Added: `crates/codemason-gui/tests/test_material_dialogs.rs`, a table-driven sweep that opens each dialog `dialogs::ActiveDialog` can return and asserts the surface carries its role and title constant (`Role::Dialog` for a Material dialog, `Role::Menu` for the session menu and `Role::MenuListPopup` for the right-click menu). The per-variant `match` is exhaustive, so a dialog added without a Material frame fails to compile or fails the sweep.
+
 ## [1.0.183] - 2026-11-23
 
 The Agent tab gains a Swarm dialog, GUI dialogs and ribbon tabs stay reachable in
