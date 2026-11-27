@@ -2137,7 +2137,8 @@ def report(root: pathlib.Path = ROOT) -> dict[str, object]:
     result: dict[str, object] = {
         "ok": False,
         "error": None,
-        "root": str(root),
+        # POSIX form on every OS, so a consumer can match `target/temp/...`.
+        "root": pathlib.Path(root).as_posix(),
         "hits": [],
         "problems": [],
         "success": success_line(),
