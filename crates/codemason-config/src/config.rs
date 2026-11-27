@@ -2364,11 +2364,22 @@ impl Config {
     /// Resolve the global config directory (`<config_dir>/codemason`) using the
     /// same platform-aware logic as [`Config::load`] and [`Config::save`].
     ///
+    /// An absolute `XDG_CONFIG_HOME` selects the base directory on every
+    /// platform. `dirs::config_dir()` honours it only on Linux, so without this
+    /// a process that redirects it (as the tests do) would still read and write
+    /// the real `%APPDATA%` or `~/Library/Application Support` config on
+    /// Windows and macOS. A blank or relative value is ignored, as the XDG
+    /// base-directory spec requires.
+    ///
     /// Returns `None` when the platform config directory cannot be determined
     /// (e.g. `XDG_CONFIG_HOME` unset on a headless Linux box).
     #[must_use]
     pub fn global_config_dir() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("codemason"))
+        read_env("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(dirs::config_dir)
+            .map(|d| d.join("codemason"))
     }
 
     /// Resolve the canonical base directory for all codemason global state.

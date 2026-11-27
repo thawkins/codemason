@@ -5366,8 +5366,8 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             // ~/Library/Application Support/codemason/codemason.json on macOS,
             // %APPDATA%\codemason\codemason.json on Windows).
             "config" => {
-                let config_dir = match dirs::config_dir() {
-                    Some(d) => d.join("codemason"),
+                let config_dir = match codemason_config::Config::global_config_dir() {
+                    Some(d) => d,
                     None => {
                         self.append_assistant_text(
                             "From: /init config\n[err] **Cannot determine the global config \
@@ -13497,9 +13497,8 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 // Find the config file path
                 let cwd = self.cwd_path.clone();
                 let project_config = cwd.join(".codemason").join("codemason.json");
-                let config_dir = dirs::config_dir()
-                    .unwrap_or_else(|| cwd.clone())
-                    .join("codemason");
+                let config_dir = codemason_config::Config::global_config_dir()
+                    .unwrap_or_else(|| cwd.join("codemason"));
                 let global_config = config_dir.join("codemason.json");
 
                 let config_path = if project_config.exists() {

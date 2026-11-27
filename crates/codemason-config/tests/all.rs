@@ -79,6 +79,9 @@ mod test_gcf_config;
 #[path = "test_github_token.rs"]
 mod test_github_token;
 
+#[path = "test_global_config_dir_xdg.rs"]
+mod test_global_config_dir_xdg;
+
 #[path = "test_i18n_catalog.rs"]
 mod test_i18n_catalog;
 
