@@ -81,6 +81,7 @@ Evidence:
 | AG-01..04, 06, 07 | Hook and child-process limits: pre-tool hooks ignored `timeout_secs` and blocked a runtime worker; timed-out hooks leaked the process; a >128 KiB (32 K chars on Windows) tool input made the spawn fail so guard hooks were skipped; stdin-vs-stdout deadlock; verification killed bash only and lost output on one non-UTF-8 byte; a verbose probe was killed as hung. Found on the way: Git for Windows' `binbash.exe` is a launcher, so killing it left scripts running. | One `child_process::run_with_deadline` (AG-18): concurrent stdin, drained pipes, process-tree kill (process group / `taskkill /T`); pre-hooks on the blocking pool; env values over 64 KiB (16 KiB Windows) become empty + `_TRUNCATED=1`. | batch 2 |
 | AG-05, AG-08, AG-13, CO-14 | A trigger with a length-changing lowercase char (U+212A) panicked; `timeout_secs = u64::MAX` overflowed the wait deadline and panicked; a typo'd teammate `memory` scope silently meant none; Bedrock `region`/`profile`/`endpoint_url` were never forwarded and Bedrock compaction ran on the default model. | ASCII case folding; `tool::deadline_after` saturates; unknown scope is an error; `Config::provider_client_options` forwards every provider option plus the model at all three client sites. | batch 3 |
 | CO-05, CO-06, CO-12 | An Anthropic `event: error` frame (`overloaded_error`) was swallowed, so the turn looked truncated and the provider message was lost (anthropic and azure_resource copies); copilot and huggingface merged index-less parallel tool calls onto stream 0; the Ollama Cloud done frame (final text, `context` token ids) was logged at INFO. | `"error"` arm yields `StreamEvent::Error`; `StreamKey::from_frame` keys by id when `index` is absent; the done frame logs `done_reason` and eval counts only. | batch 4 |
+| TL-01, 02, 03, 04, 09, 12, 14, 25 | Background output stopped at the first non-UTF-8 byte; the git clone directory guard missed Windows rooted/prefixed paths; glob reset its root per level so `src/**/*.rs` missed nested files; git_status mis-parsed porcelain v2 and never reported conflicts; README fetch always failed on github.com (cross-origin download_url); multi_edit ("atomic") left earlier files edited after a failure; rm followed symlinks; fetch truncation kept one char too few. Also found: apply_patch's header check was Windows-blind (later check still refused it). | Lossy capped line reader; root/prefix rejection; glob keeps the root; v2/short parsers by field count; raw-media README on the API origin; staged temp-and-rename writes; `symlink_metadata`; `nth(max_chars)`. | batch 5, `c0f6004` |
 
 ### 2b. Open: high
 
@@ -92,13 +93,8 @@ Evidence:
 
 | ID | Defect | Where | V |
 |----|--------|-------|---|
-| TL-02 | The `git_clone` destination check is text-only. On Windows `\x` and `C:x` pass, and a symlinked directory escapes everywhere. | `tools-vcs/src/git/mod.rs` | C |
-| TL-03 | The glob recursion resets the root at every level, so `src/**/*.rs` misses nested files and nested hits come back as bare names. | `tools-core/src/glob.rs` (`collect_matches(sub, sub, ..)`) | R (traced) |
-| TL-04 | Porcelain v2 path = `line[4..]` (the whole record), and v2 `u` lines are never parsed, so the conflicted list is always empty. `short:true` uses v1 and is parsed as v2. | `tools-vcs/src/git/git_status.rs` | R (traced) |
 | TL-06 | The tool-adapter event forwarders subscribe after the tool starts and are aborted on return, so events are lost. The out-forwarder has no session filter. | `agent/src/tool/mod.rs` adapters | C |
 | TL-08 | The model-supplied `max_length` and `timeout` in webfetch have no ceiling. | `tools-extended/src/webfetch.rs` | C |
-| TL-09 | The github.com README `download_url` (raw.githubusercontent.com) is refused as cross-origin, and the error is swallowed, so `/reverse` README is always empty. | `tools-vcs/src/github/client.rs`; `app-core/.../reverse.rs` | C |
-| TL-12 | multiedit writes files one at a time. After a failure, the earlier files stay changed and are not reported, and the "atomic" doc is false. | `tools-core/src/multiedit.rs` | C |
 | RS-01 | `parse_command_markdown` advances `line.len()+1` but `lines()` strips `\r`. On CRLF (the Windows default) the body leaks fence bytes and can panic mid-codepoint. It also parses the user's own commands. | `plugins/src/manifest.rs` | R (traced) |
 | RS-02 | A CRLF `RESEARCH.md` looks frontmatter-less, so placeholder frontmatter is prepended to the whole file. | `research/src/io.rs` `find_yaml_open` | C |
 | RS-06 | The rate-limit window resets at `elapsed_secs >= RATE_LIMIT_PER_MINUTE`, so the request count is used as seconds. It is a fixed window, not the "rolling" one the comment claims. | `server/src/routes/mod.rs` | R (traced) |
@@ -122,11 +118,8 @@ Evidence:
 | RS-07 | `/auto/{id}` returns 404/503 before the secret check, so ids can be enumerated; one shared `"webhook"` rate key. |
 | RS-09 | Derived `Default` on the open-access client gives a zero timeout (no callers today). |
 | RS-14 | The clarify regex's trailing `\b` binds only to the last alternative. |
-| TL-01 | The bg reader stops at the first non-UTF-8 byte, so output is truncated (the hang is refuted); no per-line limit. |
 | TL-05, TL-10, TL-11, TL-13, TL-16 | Unbounded reads that cost memory only. Every tool result is cut to 12k chars before the model (`agent/src/session/history.rs` `MAX_TOOL_RESULT_CHARS_FOR_LLM`), so "floods the model" is refuted. |
-| TL-14 | `rm` on a dangling symlink reports "File not found". |
 | TL-15 | A poisoned containment-cache lock fails open (practically unreachable). |
-| TL-25 | `truncate` keeps `max_chars - 1`. |
 | UI-02 | Input history is one global file, rewritten in full with plain `fs::write`; two windows erase each other's history. |
 | UI-03 | `/websearch` results go through one shared slot, so the result is lost or lands in the wrong session. |
 | UI-06 | `/init config` checks `exists()` and then writes (microsecond race). |
@@ -243,7 +236,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | **Done** (see commit "fix(agent): one deadline-bounded child runner") |
 | 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | **Done** (commit "fix(agent): batch 3 panics and Bedrock options") |
 | 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | **Done** (commit "fix(llm): batch 4 stream frame handling") |
-| 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | Approved |
+| 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | **Done** (`6a71107` + commit "fix(tools): batch 5 git and fetch correctness") |
 | 6. Network/SSRF + caps | TL-07 (trailing dot, CGNAT, NAT64), TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | The same messages for allowed URLs and archives | `test_mf_security*`, `test_add`, `test_connector_install`, `test_automation_surface` | Approved (the resolver-pinning half of TL-07 is M; included) |
 | 7. Research / plugins / server / UI bugs | RS-01, RS-02, RS-03, RS-06, RS-08, RS-09, RS-14, UI-02, UI-03, UI-04, UI-06 | LF / ASCII behaviour unchanged; 429 text unchanged | CRLF fixtures per parser; rate-window test; spinner test | Approved |
 | 8. Perf | RS-16, RS-17, RS-18, TL-16 | Same results | crate suites | Approved |
