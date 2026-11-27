@@ -598,7 +598,7 @@ pub fn init_suite_mode(
                 .collect(),
             initialized_at_utc: Utc::now().to_rfc3339(),
             dataset_dir: DATASET_DIR.to_string(),
-            case_file: case_file.display().to_string(),
+            case_file: manifest_path_string(&case_file),
             case_count: fixtures.len(),
             status: "ready".to_string(),
             manifest_version: MANIFEST_VERSION,
@@ -833,7 +833,7 @@ fn manifest_file_for_path(data_root: &Path, relative_path: &Path) -> Result<Benc
     let metadata = std::fs::metadata(&full_path)
         .with_context(|| format!("stat benchmark file {}", full_path.display()))?;
     Ok(BenchDataFile {
-        relative_path: relative_path.display().to_string(),
+        relative_path: manifest_path_string(relative_path),
         sha256: sha256_file(&full_path)?,
         bytes: metadata.len(),
     })
@@ -1563,3 +1563,15 @@ fn init_bigcodebench(language: &str) -> Result<Vec<BenchCaseFixture>> {
 #[cfg(test)]
 #[path = "../tests/inline/data_tests.rs"]
 mod tests;
+
+/// A manifest path, always `/`-separated.
+///
+/// Manifest paths are validated by `codemason_types::guard`, which rejects a
+/// backslash, so a Windows `Path::display()` (`dataset\cases.jsonl`) would make
+/// the manifest `/bench init` just wrote fail its own verification.
+fn manifest_path_string(path: &Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}

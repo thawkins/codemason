@@ -2163,9 +2163,9 @@ impl App {
                         .unwrap_or(&path_abs)
                         .to_path_buf();
                     let display = if is_dir {
-                        format!("{}/", rel.to_string_lossy())
+                        format!("{}/", slash_path(&rel))
                     } else {
-                        rel.to_string_lossy().to_string()
+                        slash_path(&rel)
                     };
                     entries.push(FileMenuEntry {
                         display,
@@ -2181,7 +2181,7 @@ impl App {
                 let parent_display = if parent.as_os_str().is_empty() {
                     "../".to_string()
                 } else {
-                    format!("{}/", parent.to_string_lossy())
+                    format!("{}/", slash_path(parent))
                 };
                 entries.insert(
                     0,
@@ -2265,4 +2265,12 @@ impl App {
             },
         );
     }
+}
+
+/// `path` joined with `/` on every OS, matching the other file-menu entries.
+fn slash_path(path: &std::path::Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }

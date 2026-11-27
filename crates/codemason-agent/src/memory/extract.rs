@@ -272,7 +272,9 @@ impl ExtractionEngine {
             .strip_prefix(working_dir)
             .unwrap_or(Path::new(path))
             .to_string_lossy()
-            .to_string();
+            // `/`-separated on every OS, so the `tests/` and module-path
+            // checks below also match a Windows `tests\x.rs`.
+            .replace('\\', "/");
 
         let mut tags: Vec<String> = Vec::new();
         let mut content_parts: Vec<String> = Vec::new();

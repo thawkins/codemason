@@ -406,7 +406,10 @@ async fn scan_npm_global() -> (Option<PathBuf>, Vec<DiscoveredMcpServer>) {
 
 /// Get the npm global prefix directory.
 async fn get_npm_prefix() -> Option<PathBuf> {
-    let output = tokio::process::Command::new("npm")
+    // Resolve through `PATH`/`PATHEXT`: on Windows npm is installed as
+    // `npm.cmd`, which a bare `Command::new("npm")` never finds.
+    let npm = which::which("npm").unwrap_or_else(|_| PathBuf::from("npm"));
+    let output = tokio::process::Command::new(npm)
         .args(["prefix", "-g"])
         .output()
         .await

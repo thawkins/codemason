@@ -1346,6 +1346,7 @@ dependencies = [
  "ctor",
  "dashmap",
  "dirs",
+ "dunce",
  "flate2",
  "fs2",
  "futures",
@@ -1383,6 +1384,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "which",
  "wiremock",
 ]
 

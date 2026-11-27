@@ -5653,7 +5653,10 @@ impl App {
             // Resolve file:// URI
             let candidate = if let Some(rest) = trimmed.strip_prefix("file://") {
                 Some(percent_decode_path(rest))
-            } else if trimmed.starts_with('/') || trimmed.starts_with('.') {
+            } else if std::path::Path::new(trimmed).is_absolute()
+                || trimmed.starts_with('/')
+                || trimmed.starts_with('.')
+            {
                 // Plain absolute or relative path
                 Some(std::path::PathBuf::from(trimmed))
             } else {

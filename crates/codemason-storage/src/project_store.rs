@@ -559,7 +559,9 @@ impl Storage {
     /// Returns an error if the query fails.
     pub fn prunable_session_worktrees(&self, project_id: &str) -> Result<Vec<(String, String)>> {
         let conn = lock_conn_read!(self)?;
-        // `substr` rather than `LIKE`: a path may contain `%` or `_`.
+        // `substr` rather than `LIKE`: a path may contain `%` or `_`. A
+        // subdirectory is matched after either separator, so a Windows
+        // `worktree\src` session also keeps the worktree in use.
         let mut stmt = conn.prepare_cached(
             "SELECT id, worktree FROM sessions s \
              WHERE project_id = ?1 AND archived_at IS NOT NULL AND worktree IS NOT NULL \
@@ -568,7 +570,7 @@ impl Storage {
                  AND (live.worktree = s.worktree \
                       OR live.directory = s.worktree \
                       OR substr(live.directory, 1, length(s.worktree) + 1) \
-                         = s.worktree || '/')) \
+                         IN (s.worktree || '/', s.worktree || '\\'))) \
              ORDER BY id",
         )?;
         let rows = stmt
@@ -593,7 +595,7 @@ impl Storage {
         conn.execute(
             "UPDATE sessions SET directory = ?2 \
              WHERE directory = ?1 \
-                OR substr(directory, 1, length(?1) + 1) = ?1 || '/'",
+                OR substr(directory, 1, length(?1) + 1) IN (?1 || '/', ?1 || '\\')",
             params![worktree, fallback_directory],
         )?;
         conn.execute(

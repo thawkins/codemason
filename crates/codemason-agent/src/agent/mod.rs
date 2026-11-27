@@ -1906,8 +1906,16 @@ fn resolve_include(
     depth: usize,
 ) -> String {
     // Reject absolute paths outright - they can never be under a project
-    // root and would let an instruction file read arbitrary files.
-    if Path::new(target).is_absolute() {
+    // root and would let an instruction file read arbitrary files. On Windows
+    // `/etc/x` (rooted) and `C:x` (drive-relative) are not `is_absolute()` yet
+    // still leave the project, so a root or a drive prefix is rejected too.
+    let target_path = Path::new(target);
+    if target_path.has_root()
+        || matches!(
+            target_path.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+    {
         tracing::warn!(
             include_target = target,
             "instruction @<path> rejected: absolute paths are not allowed"

@@ -783,7 +783,9 @@ fn container_path(workspace: &str, raw: &str) -> anyhow::Result<String> {
             "path '{trimmed}' escapes the container workspace '{workspace}' via '..' (FR-035)"
         );
     }
-    if path.is_absolute() {
+    // An in-container path is POSIX: `/etc/passwd` is absolute there even
+    // though a Windows host `Path::is_absolute()` says it is not.
+    if trimmed.starts_with('/') {
         let workspace_prefix = format!("{workspace}/");
         if trimmed == workspace || trimmed.starts_with(&workspace_prefix) {
             return Ok(trimmed.to_string());
