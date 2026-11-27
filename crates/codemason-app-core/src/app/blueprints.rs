@@ -55,8 +55,8 @@ pub fn list_installed_blueprints(working_dir: &Path) -> Vec<BlueprintInfo> {
     }
 
     // Global fallback: legacy `~/.codemason/blueprints/teams/`.
-    if let Some(home) = dirs::home_dir() {
-        let bp_root = home.join(".codemason").join("blueprints").join("teams");
+    if let Some(legacy) = codemason_config::user_dirs::legacy_home_dir() {
+        let bp_root = legacy.join("blueprints").join("teams");
         if bp_root.is_dir() {
             collect_blueprints(&bp_root, "global", &mut seen_names, &mut out);
         }
