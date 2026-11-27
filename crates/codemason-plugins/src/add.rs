@@ -40,7 +40,7 @@
 //! renamed into place so a failure never leaves a half-written plugin in the
 //! store.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use sha2::Digest as _;
 
@@ -50,6 +50,9 @@ use crate::descriptor::detect_dialect;
 use crate::error::{IoError, PluginError};
 use crate::manifest::{ParsedManifest, parse_plugin_dir};
 use crate::store::{StoreDirs, StoreLedger};
+use codemason_surface::archive::{ArchiveKind, ExtractError, ExtractLimits};
+
+pub use codemason_surface::git_source::{GitSource, parse_git_source};
 
 /// Maximum accepted archive size: 50 MiB (FR-010 size cap).
 pub const MAX_ARCHIVE_BYTES: u64 = 50 * 1024 * 1024;
@@ -66,6 +69,13 @@ pub const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 /// The byte caps do not bound the entry count: zero-byte entries cost nothing
 /// against them, yet each one is a file created in the store.
 pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
+/// The caps every plugin archive extraction enforces (RS-10).
+const EXTRACT_LIMITS: ExtractLimits = ExtractLimits {
+    max_entry_bytes: MAX_ARCHIVE_BYTES,
+    max_total_bytes: MAX_EXTRACTED_BYTES,
+    max_entries: MAX_ARCHIVE_ENTRIES,
+};
 
 /// Wall-clock budget for one plugin archive download (ANTIPAT M19).
 ///
@@ -406,115 +416,10 @@ fn classify_extract_failure(err: ExtractError) -> AddError {
         ExtractError::UnsafePath(p) => AddError::UnsafePath(p),
         ExtractError::Io(io) => AddError::Io(IoError::new(io)),
         ExtractError::Message(msg) => AddError::Io(IoError::message(msg)),
+        ExtractError::EntryTooLarge { format, name, .. } => AddError::Io(IoError::message(
+            format!("{format} entry {name} decompressed past the size cap"),
+        )),
     }
-}
-
-/// A parsed `git+<https-url>#<ref>[:<subpath>]` source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitSource {
-    /// The `https` repository remote.
-    pub url: String,
-    /// The ref to check out; `None` uses the remote default branch (HEAD).
-    pub ref_name: Option<String>,
-    /// A repository-relative subdirectory to install; `None` installs the root.
-    pub subpath: Option<String>,
-}
-
-/// Parse a `git+<https-url>#<ref>[:<subpath>]` source string.
-///
-/// Only `https://` remotes are accepted for a store-supplied source; a
-/// `file://` remote is additionally accepted so a local git mirror can be
-/// installed, mirroring the local-directory source the same command already
-/// accepts. Every other scheme (ssh, git, http) returns `None`, so it can never
-/// reach the clone (FR-024).
-///
-/// An unsafe ref is dropped (the default branch is used instead), but an
-/// unsafe `:<subpath>` (leading `/` or `-`, a `..` segment, or a character
-/// outside `[A-Za-z0-9._/-]`) refuses the whole source with `None`.
-#[must_use]
-pub fn parse_git_source(source: &str) -> Option<GitSource> {
-    let rest = source.strip_prefix("git+")?;
-    let (url, fragment) = match rest.split_once('#') {
-        Some((url, fragment)) => (url, Some(fragment)),
-        None => (rest, None),
-    };
-    if url.trim().is_empty() || !(url.starts_with("https://") || url.starts_with("file://")) {
-        return None;
-    }
-    let (ref_name, subpath) = match fragment {
-        None => (None, None),
-        Some(fragment) => match fragment.split_once(':') {
-            Some((r, path)) => {
-                let subpath = git_subpath(path);
-                // A subpath that was given but fails validation refuses the
-                // whole source: dropping it would mean "install the entire
-                // repository", which is not what the source asked for.
-                if subpath.is_none() && !path.trim().trim_start_matches("./").is_empty() {
-                    return None;
-                }
-                (git_ref(r), subpath)
-            }
-            None => (git_ref(fragment), None),
-        },
-    };
-    Some(GitSource {
-        url: url.to_string(),
-        ref_name,
-        subpath,
-    })
-}
-
-/// A git ref, treating an empty value or `HEAD` as "the default branch".
-///
-/// The ref is validated against a safe charset before it can reach `git`:
-/// a `git+` source is untrusted content (it is emitted from a marketplace
-/// document fetched over the network or typed by a social-engineered user),
-/// and `git` parses a leading `-` as an *option*, not a positional. Options
-/// such as `--upload-pack=<cmd>` execute a program, which escapes the plugin
-/// sandbox entirely (SEC-codemason-plugins-001). Anything that is not
-/// `[A-Za-z0-9._/-]+` - and anything beginning with `-` - is refused.
-fn git_ref(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("HEAD") {
-        None
-    } else if is_safe_git_argument(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-/// A repository-relative subpath, normalised without a leading `./`.
-///
-/// Validated with the same charset as [`git_ref`]: the subpath reaches
-/// `git sparse-checkout set <subpath>`, where a leading `-` would again be
-/// parsed as an option (SEC-codemason-plugins-001). An absolute subpath is
-/// dropped too: `repo_dir.join("/x")` would name `/x` itself, outside the
-/// clone.
-fn git_subpath(raw: &str) -> Option<String> {
-    let trimmed = raw.trim().trim_start_matches("./");
-    if trimmed.is_empty() {
-        None
-    } else if is_safe_git_argument(trimmed) && !trimmed.contains("..") && !trimmed.starts_with('/')
-    {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-/// Return `true` when `value` is safe to hand to `git` as a positional
-/// argument: a non-empty `[A-Za-z0-9._/-]` string that does not begin with
-/// `-` (which git would parse as an option) and contains no `..` segment.
-///
-/// See SEC-codemason-plugins-001: without this gate, a `git+` ref of
-/// `--upload-pack=/bin/sh -c true` reaches `Command::new("git")` and executes
-/// a program with the user's privileges.
-///
-/// Delegates to the shared [`codemason_tools_core::guard::is_safe_operand`]
-/// (SECTASKS MS-05 T-068) and adds this crate's stricter `..` rule.
-fn is_safe_git_argument(value: &str) -> bool {
-    codemason_tools_core::guard::is_safe_operand(value) && !value.contains("..")
 }
 
 /// Materialise a marketplace-inline manifest for a manifest-less stub.
@@ -836,44 +741,6 @@ fn download_and_extract(url: &str, staging: &Path) -> Result<PathBuf, AddError> 
     extract_archive(&bytes, kind, staging).map_err(classify_extract_failure)
 }
 
-/// Which archive format a package uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArchiveKind {
-    Zip,
-    TarGz,
-}
-
-impl ArchiveKind {
-    fn from_path(name: &str) -> Option<Self> {
-        let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".tar.gz") {
-            return Some(Self::TarGz);
-        }
-        match Path::new(&lower)
-            .extension()
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref()
-            .and_then(|e| e.to_str())
-        {
-            Some("zip") => Some(Self::Zip),
-            Some("tgz") => Some(Self::TarGz),
-            _ => None,
-        }
-    }
-}
-
-/// Extraction failure (converted to [`AddError`] at the module boundary).
-///
-/// The `Io` arm keeps the structured [`std::io::Error`] so its source chain
-/// survives the conversion to [`AddError::Io`] (ANTIPAT M15); a failure that
-/// only has an already-formatted detail uses `Message`.
-#[derive(Debug)]
-enum ExtractError {
-    UnsafePath(String),
-    Io(std::io::Error),
-    Message(String),
-}
-
 /// Extract a local archive file into `staging`, returning the extraction root.
 fn extract_archive_into(file: &Path, staging: &Path) -> Result<PathBuf, ExtractError> {
     let Some(kind) = ArchiveKind::from_path(&file.to_string_lossy()) else {
@@ -906,146 +773,9 @@ fn extract_archive(
         )));
     }
     std::fs::create_dir_all(staging).map_err(ExtractError::Io)?;
-    match kind {
-        ArchiveKind::Zip => extract_zip(bytes, staging),
-        ArchiveKind::TarGz => extract_tar_gz(bytes, staging),
-    }
-    .map(|()| staging.to_path_buf())
-}
-
-fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
-    use std::io::{Cursor, Read as _};
-
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
-        .map_err(|e| ExtractError::Message(format!("zip open: {e}")))?;
-    // RS-05: bound the entry count; zero-byte entries cost nothing against the
-    // byte caps below.
-    if archive.len() > MAX_ARCHIVE_ENTRIES {
-        return Err(ExtractError::Message(format!(
-            "archive has {} entries, over the {MAX_ARCHIVE_ENTRIES} entry cap",
-            archive.len()
-        )));
-    }
-    // ANTIPAT M17: the per-entry cap does not bound the total, so track a
-    // running total across every entry and abort past MAX_EXTRACTED_BYTES.
-    let mut total: u64 = 0;
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| ExtractError::Message(format!("zip entry {i}: {e}")))?;
-        let name = entry
-            .name()
-            .map_err(|e| ExtractError::Message(format!("zip entry {i} name: {e}")))?
-            .to_string();
-        if entry.is_dir() {
-            continue;
-        }
-        let rel = safe_relative_path(&name)?;
-        let dest = staging.join(&rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(ExtractError::Io)?;
-        }
-        // Bound the read itself: the per-entry cap or the remaining total
-        // headroom, plus one byte so an oversized entry is detected without
-        // first decompressing all of it into memory.
-        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
-        let mut body = Vec::new();
-        (&mut entry)
-            .take(MAX_ARCHIVE_BYTES.min(remaining).saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|e| ExtractError::Message(format!("zip entry {name}: {e}")))?;
-        if body.len() as u64 > MAX_ARCHIVE_BYTES {
-            return Err(ExtractError::Message(format!(
-                "zip entry {name} decompressed past the size cap"
-            )));
-        }
-        total = total.saturating_add(body.len() as u64);
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(ExtractError::Message(format!(
-                "archive decompressed past the {MAX_EXTRACTED_BYTES} byte total cap"
-            )));
-        }
-        std::fs::write(&dest, &body).map_err(ExtractError::Io)?;
-    }
-    Ok(())
-}
-
-fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
-    use std::io::{Cursor, Read as _};
-
-    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
-    let mut archive = tar::Archive::new(decoder);
-    let entries = archive
-        .entries()
-        .map_err(|e| ExtractError::Message(format!("tar entries: {e}")))?;
-    // ANTIPAT M17: bound the total decompressed size across all entries.
-    let mut total: u64 = 0;
-    for (count, entry) in entries.enumerate() {
-        // RS-05: bound the entry count; zero-byte entries cost nothing
-        // against the byte caps below.
-        if count >= MAX_ARCHIVE_ENTRIES {
-            return Err(ExtractError::Message(format!(
-                "archive has more than {MAX_ARCHIVE_ENTRIES} entries"
-            )));
-        }
-        let mut entry = entry.map_err(|e| ExtractError::Message(format!("tar entry: {e}")))?;
-        let path = entry
-            .path()
-            .map_err(|e| ExtractError::Message(format!("tar entry path: {e}")))?
-            .to_path_buf();
-        let name = path.to_string_lossy().replace('\\', "/");
-        let rel = safe_relative_path(&name)?;
-        if !(entry.header().entry_type().is_file()) {
-            continue;
-        }
-        let dest = staging.join(&rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(ExtractError::Io)?;
-        }
-        // Bound the read itself: the per-entry cap or the remaining total
-        // headroom, plus one byte so an oversized entry is detected without
-        // first decompressing all of it into memory.
-        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
-        let mut body = Vec::new();
-        (&mut entry)
-            .take(MAX_ARCHIVE_BYTES.min(remaining).saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|e| ExtractError::Message(format!("tar entry {name}: {e}")))?;
-        if body.len() as u64 > MAX_ARCHIVE_BYTES {
-            return Err(ExtractError::Message(format!(
-                "tar entry {name} decompressed past the size cap"
-            )));
-        }
-        total = total.saturating_add(body.len() as u64);
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(ExtractError::Message(format!(
-                "archive decompressed past the {MAX_EXTRACTED_BYTES} byte total cap"
-            )));
-        }
-        std::fs::write(&dest, &body).map_err(ExtractError::Io)?;
-    }
-    Ok(())
-}
-
-/// Reject absolute paths and any path containing a `..` component; normalise
-/// separators. Returns the sanitised relative path on success.
-fn safe_relative_path(name: &str) -> Result<PathBuf, ExtractError> {
-    let normalised = name.replace('\\', "/");
-    let rel = Path::new(&normalised);
-    if rel.is_absolute() {
-        return Err(ExtractError::UnsafePath(name.to_string()));
-    }
-    for component in rel.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            // ParentDir escapes the store; RootDir/Prefix are absolute
-            // (handled above, but keep the match exhaustive).
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(ExtractError::UnsafePath(name.to_string()));
-            }
-        }
-    }
-    Ok(rel.to_path_buf())
+    // RS-10: the shared bounded extractor (codemason-surface).
+    codemason_surface::archive::extract(bytes, kind, staging, EXTRACT_LIMITS)
+        .map(|()| staging.to_path_buf())
 }
 
 /// When an archive wraps the plugin in one top-level folder with no manifest

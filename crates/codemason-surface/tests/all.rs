@@ -6,6 +6,8 @@
 //! `AGENTS.md` ("Test Layout") and
 //! `docs/reports/testconsolidation-review.md`.
 
+#[path = "test_surface_archive.rs"]
+mod test_surface_archive;
 #[path = "test_surface_config_splice.rs"]
 mod test_surface_config_splice;
 #[path = "test_surface_harness_extra.rs"]

@@ -23,7 +23,9 @@
 
 #![deny(unsafe_code)]
 
+pub mod archive;
 pub mod config_splice;
+pub mod git_source;
 pub mod harness;
 pub mod help;
 pub mod manifest;

@@ -16,6 +16,9 @@ path = "tests/all.rs"
 [dependencies]
 codemason-config = { path = "../codemason-config" }
 codemason-types = { path = "../codemason-types" }
+flate2 = "1"
+tar = "0.4"
+zip = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

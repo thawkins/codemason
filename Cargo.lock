@@ -1761,12 +1761,15 @@ dependencies = [
  "codemason-config",
  "codemason-types",
  "ctor",
+ "flate2",
  "reqwest",
  "serde_json",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "url",
+ "zip",
 ]
 
 [[package]]

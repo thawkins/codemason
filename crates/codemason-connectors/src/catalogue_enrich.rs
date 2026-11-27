@@ -39,7 +39,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use codemason_surface::manifest::{self, NetworkManifestSource as SharedNetworkManifestSource};
-use codemason_types::guard::is_safe_operand;
+// RS-11: the one `git+` parser, shared with `/plugins`.
+use codemason_surface::git_source::parse_git_source;
 
 use crate::descriptor::ConnectorDescriptor;
 
@@ -146,68 +147,6 @@ pub fn catalogue_manifest_urls(source: &str) -> Vec<String> {
         bases.push(url);
     }
     bases
-}
-
-/// A parsed `git+<https-url>#<ref>[:<subpath>]` source.
-struct GitSource {
-    url: String,
-    ref_name: Option<String>,
-    subpath: Option<String>,
-}
-
-/// Parse a `git+` source into its url, ref, and subpath parts.
-///
-/// The guards mirror `codemason_plugins::add::parse_git_source` (SEC-codemason-plugins-001):
-/// only an `https://` or `file://` remote is accepted, and the ref and subpath are
-/// validated with [`is_safe_operand`] (a non-empty `[A-Za-z0-9._/-]` string that does
-/// not begin with `-` and contains no `..`). A `git+` source is untrusted content -
-/// it is emitted from a marketplace document fetched over the network - so a ref of
-/// `--upload-pack=<cmd>` must never be allowed to derive a URL from it.
-fn parse_git_source(source: &str) -> Option<GitSource> {
-    let rest = source.strip_prefix("git+")?;
-    let (url, tail) = match rest.split_once('#') {
-        Some((url, tail)) => (url, Some(tail)),
-        None => (rest, None),
-    };
-    if !(url.starts_with("https://") || url.starts_with("file://")) {
-        return None;
-    }
-    let (ref_name, subpath) = match tail.and_then(|t| t.split_once(':')) {
-        Some((ref_name, subpath)) => (git_ref(ref_name), git_subpath(subpath)),
-        None => (tail.and_then(git_ref), None),
-    };
-    Some(GitSource {
-        url: url.to_string(),
-        ref_name,
-        subpath,
-    })
-}
-
-/// A git ref, treating an empty value or `HEAD` as "the default branch" and
-/// refusing anything that is not safe to hand to `git` as a positional argument
-/// (SEC-codemason-plugins-001). Mirrors `codemason_plugins::add::git_ref`.
-fn git_ref(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("HEAD") {
-        None
-    } else if is_safe_operand(trimmed) && !trimmed.contains("..") {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-/// A repository-relative subpath, normalised without a leading `./` and validated
-/// with the same charset as [`git_ref`]. Mirrors `codemason_plugins::add::git_subpath`.
-fn git_subpath(raw: &str) -> Option<String> {
-    let trimmed = raw.trim().trim_start_matches("./");
-    if trimmed.is_empty() {
-        None
-    } else if is_safe_operand(trimmed) && !trimmed.contains("..") {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
 }
 
 /// Enrich `entries`, reporting each resolved update to `sink`.
