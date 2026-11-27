@@ -673,255 +673,9 @@ macro_rules! lock_conn_read {
 #[path = "project_store.rs"]
 mod project_store;
 
-impl Storage {
-    /// Acquire the internal connection lock for raw SQL access.
-    ///
-    /// Returns a `MutexGuard` that derefs to the `rusqlite::Connection`.
-    /// Intended for migration verification tests that need to inspect
-    /// table schemas directly.
-    #[doc(hidden)]
-    pub fn conn_lock_for_test(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("database lock poisoned: {e}"))
-    }
-
-    /// PERF-069: whether this storage has a dedicated read-only connection.
-    ///
-    /// Returns `true` for file-backed storage that opened its reader
-    /// successfully, `false` for in-memory storage (and any file-backed
-    /// storage whose reader could not be opened), where reads share the
-    /// writer connection.
-    #[must_use]
-    pub fn has_reader(&self) -> bool {
-        self.reader.is_some()
-    }
-
-    /// PERF-004: return whether the `sessions.format_version` column
-    /// exists, using the cached `AtomicBool` when it has already been
-    /// populated (by [`migrate`](Self::migrate) or a prior call).
-    ///
-    /// On the first call after construction - when the flag is still
-    /// `false` - this runs the `pragma_table_info` query once and records
-    /// the result so every subsequent `get_session` / `list_sessions`
-    /// call skips the `SQLite` round-trip.  The schema never loses the
-    /// column after it has been added, so caching is safe.
-    fn has_format_version_cached(&self, conn: &rusqlite::Connection) -> Result<bool> {
-        if self
-            .has_format_version
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            return Ok(true);
-        }
-        let has: bool = conn
-            .prepare_cached(
-                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='format_version'",
-            )?
-            .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-            > 0;
-        self.has_format_version
-            .store(has, std::sync::atomic::Ordering::Relaxed);
-        Ok(has)
-    }
-
-    /// Opens (or creates) a `SQLite` database at the given filesystem path and
-    /// runs migrations to ensure the schema is up to date.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the parent directory cannot be created, the database
-    /// file cannot be opened, or migrations fail.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use codemason_storage::storage::Storage;
-    /// use std::path::Path;
-    ///
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let storage = Storage::open(Path::new("/tmp/codemason-test.db"))?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn open(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-            // SEC-codemason-storage-003 (SECTASKS T-017): the directory holds the
-            // credential table and the full transcript history; keep it 0700.
-            restrict_dir_permissions(parent);
-        }
-        let conn = Connection::open(path)
-            .with_context(|| format!("Failed to open database at {}", path.display()))?;
-        // The database file (created above with the process umask) and its WAL
-        // sidecars must be 0600: the row contents are the credentials.
-        restrict_file_permissions(path);
-        // R-24: generous busy_timeout FIRST, before any pragma that can contend
-        // with another connection. `PRAGMA journal_mode=WAL` on a database that
-        // is still in rollback-journal mode needs a brief exclusive lock to
-        // rewrite the header, and it honours whatever busy handler is installed
-        // when it runs. Setting the timeout afterwards meant the switch used
-        // rusqlite's 5 s default and, when a second codemason process (two CLI
-        // invocations, a concurrent test run) held a read or write lock on the
-        // shared `~/.config/codemason/codemason.db`, `Storage::open` failed outright
-        // with `Error code 5: database is locked` instead of waiting. Ordering
-        // the timeout first makes every subsequent pragma as patient as the
-        // rest of the connection. See `BUSY_TIMEOUT_MS`.
-        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)?;
-        // PERF: Use WAL so background writers (e.g. the FTS warm-up) do not
-        // block concurrent readers on the main thread, and set a busy_timeout
-        // so a transient lock never surfaces as an immediate `DatabaseBusy`
-        // error. Without these, `journal_mode=delete` serialises every reader
-        // behind a writer and startup `get_setting` calls stall for the whole
-        // rebuild.
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        // H-008: `synchronous=NORMAL` (instead of the default FULL) avoids an
-        // fsync on every WAL commit while remaining crash-safe (the WAL is
-        // still durable on checkpoint). This matches the activity-log store.
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        // R-23: explicit WAL auto-checkpoint so the WAL file does not grow to
-        // hundreds of MB. See `WAL_AUTOCHECKPOINT_PAGES`.
-        conn.pragma_update(None, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)?;
-        // R-23: bound the WAL file itself. `wal_autocheckpoint` only schedules
-        // checkpoints; without a size limit a checkpoint that could not
-        // truncate (a concurrent reader held a mark) leaves the file at its
-        // high-water mark forever. See `WAL_JOURNAL_SIZE_LIMIT_BYTES`.
-        conn.pragma_update(None, "journal_size_limit", WAL_JOURNAL_SIZE_LIMIT_BYTES)?;
-        let mut storage = Self {
-            conn: Mutex::new(conn),
-            reader: None,
-            has_format_version: std::sync::atomic::AtomicBool::new(false),
-        };
-        storage.migrate()?;
-        // SEC-codemason-storage-003 (SECTASKS T-041): the WAL sidecars are created
-        // lazily by SQLite on the first write (the migration above), under the
-        // process umask. Re-apply the 0600 restriction now that they exist, so
-        // the sidecar files are not left world-readable.
-        restrict_file_permissions(path);
-        // PERF-069: open the dedicated read-only connection after migration so
-        // the schema is complete. On any failure the reader is left `None` and
-        // reads fall back to sharing the writer connection - a graceful
-        // degradation rather than an `open` failure.
-        storage.reader = Self::open_read_only(path);
-        Ok(storage)
-    }
-
-    /// PERF-069: opens a second, read-only connection to the same database
-    /// file for the read-only query paths. Returns `None` if the connection
-    /// cannot be opened (e.g. the file is not readable), in which case callers
-    /// fall back to the writer connection.
-    ///
-    /// WAL is a persistent database property set by the writer, so a
-    /// read-only connection automatically observes it and never needs to run
-    /// the `journal_mode` pragma (which would require a write). Only the
-    /// connection-local `busy_timeout` is set so a transient lock during a
-    /// checkpoint does not surface as `SQLITE_BUSY`.
-    fn open_read_only(path: &Path) -> Option<Mutex<Connection>> {
-        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_URI
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(path, flags).ok()?;
-        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)
-            .ok()?;
-        Some(Mutex::new(conn))
-    }
-
-    /// R-23: Run a `PRAGMA wal_checkpoint(TRUNCATE)` to truncate the WAL file
-    /// back to zero size.
-    ///
-    /// This is the explicit shutdown/operator checkpoint. It is *not* what
-    /// bounds the WAL during a run: `journal_size_limit` (see
-    /// [`WAL_JOURNAL_SIZE_LIMIT_BYTES`]) is what stops the file retaining the
-    /// high-water mark of a large write burst, because `wal_autocheckpoint`
-    /// alone can never truncate it back down.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the writer connection's lock is poisoned or the
-    /// checkpoint pragma itself fails.
-    pub fn checkpoint_wal(&self) -> Result<()> {
-        let conn = lock_conn!(self)?;
-        conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
-        Ok(())
-    }
-
-    /// Returns the current `journal_mode` (e.g. `"wal"`, `"delete"`) for the
-    /// underlying connection.  Used by tests to assert that a file-backed
-    /// [`open`](Self::open) enables WAL so a background writer never
-    /// serialises concurrent readers.
-    pub fn journal_mode(&self) -> Result<String> {
-        let conn = lock_conn!(self)?;
-        let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-        Ok(mode)
-    }
-
-    /// Opens an ephemeral in-memory database, useful for testing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the in-memory database cannot be created or
-    /// migrations fail.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use codemason_storage::storage::Storage;
-    ///
-    /// let storage = Storage::open_in_memory().unwrap();
-    /// ```
-    pub fn open_in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
-        let storage = Self {
-            conn: Mutex::new(conn),
-            // PERF-069: in-memory databases cannot be shared with a second
-            // connection, so reads share the writer connection.
-            reader: None,
-            has_format_version: std::sync::atomic::AtomicBool::new(false),
-        };
-        storage.migrate()?;
-        Ok(storage)
-    }
-
-    fn migrate(&self) -> Result<()> {
-        let conn = lock_conn!(self)?;
-
-        // Fast path: ensure the `settings` table exists (a single cheap
-        // `CREATE TABLE IF NOT EXISTS`), then check whether the stored
-        // `schema_version` matches [`SCHEMA_VERSION`].  On a warm start this
-        // avoids re-parsing and catalog-checking all 34 `CREATE ... IF NOT
-        // EXISTS` statements and 7 `pragma_table_info` column probes.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-            );",
-        )?;
-        let stored_version: Option<String> = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if stored_version.as_deref() == Some(SCHEMA_VERSION.to_string().as_str()) {
-            // Schema is current - skip the full batch.  The
-            // `format_version` column definitely exists on any DB with this
-            // version, so cache that fact for `get_session` / `list_sessions`.
-            self.has_format_version
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            return Ok(());
-        }
-
-        // Slow path: run the full migration batch atomically. The DDL batch and
-        // the `schema_version` upsert below must commit together: if the batch
-        // applied but the version write were lost, the next open would re-run
-        // migrations against a schema it already believes is old, and a
-        // concurrent open could observe a half-applied schema (FUNC-019).
-        let tx = conn.unchecked_transaction()?;
-
-        tx.execute_batch(
-            "
+/// The full schema: every table and index, all `IF NOT EXISTS`, applied in
+/// one batch by [`Storage::migrate`]'s slow path.
+const SCHEMA_DDL: &str = "
 
             CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -1196,344 +950,616 @@ impl Storage {
             CREATE INDEX IF NOT EXISTS idx_automation_runs_automation
             ON automation_runs(automation_id, started_at DESC);
 
-            ",
+";
+
+/// Columns added to `sessions`, `cron_events` and `todos` after their
+/// tables first shipped (SQLite has no `ADD COLUMN IF NOT EXISTS`).
+/// Records in `has_format_version` whether `sessions.format_version` exists.
+fn add_task_columns(
+    tx: &Connection,
+    has_format_version: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
+    // Idempotent column additions (SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS)
+    for (table, col) in &[("sessions", "format_version"), ("cron_events", "stateful")] {
+        let has_col: bool = tx
+            .prepare_cached(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{col}'"
+            ))?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            let sql = if *table == "sessions" && *col == "format_version" {
+                "ALTER TABLE sessions ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1;"
+            } else if *table == "cron_events" && *col == "stateful" {
+                "ALTER TABLE cron_events ADD COLUMN stateful INTEGER NOT NULL DEFAULT 0;"
+            } else {
+                &format!("ALTER TABLE {table} ADD COLUMN {col} BLOB;")
+            };
+            tx.execute_batch(sql)?;
+        } else if *table == "sessions" && *col == "format_version" {
+            // PERF-004: cache the column existence so get_session /
+            // list_sessions can skip the pragma round-trip on every
+            // call. `migrate` runs exactly once per Storage handle, so
+            // recording the result here is safe.
+            has_format_version.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // todo2tasks T-002: additive migration for the Task model columns.
+    // Adds `active_form`, `owner`, `metadata` (JSON text), and
+    // `blocked_by` (JSON text array) to the `todos` table.  Existing
+    // rows receive safe defaults via ADD COLUMN ... DEFAULT (FR-002):
+    //   active_form -> NULL   (TaskRow.active_form = None)
+    //   owner       -> NULL   (TaskRow.owner = None)
+    //   metadata    -> '{}'    (empty JSON object)
+    //   blocked_by  -> '[]'    (empty JSON array)
+    for (col, default_expr) in &[
+        ("active_form", "NULL"),
+        ("owner", "NULL"),
+        ("metadata", "'{}'"),
+        ("blocked_by", "'[]'"),
+    ] {
+        let has_col: bool = tx
+            .prepare_cached(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('todos') WHERE name='{col}'"
+            ))?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            let sql = format!("ALTER TABLE todos ADD COLUMN {col} TEXT DEFAULT {default_expr};");
+            tx.execute_batch(&sql)?;
+        }
+    }
+    Ok(())
+}
+
+/// Sidebar and request-binding columns and tables (MULTISESSION,
+/// SESSIONMENU), each added only when missing.
+fn add_session_columns(tx: &Connection) -> Result<()> {
+    // MULTISESSION T4.1: pinned sessions and per-project grouping. The
+    // `pinned` flag is additive with a zero default; the partial index
+    // serves the sidebar's per-project, most-recent-first listing.
+    let has_pinned: bool = tx
+        .prepare_cached("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='pinned'")?
+        .query_row([], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+        > 0;
+    if !has_pinned {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_project_updated
+         ON sessions(project_id, updated_at DESC) WHERE archived_at IS NULL;",
+    )?;
+    // MULTISESSION: what created a session (`interactive`, `subagent`,
+    // `teammate`, `skill`, `automation`) and fast child lookup. Rows from
+    // before this column read as `interactive`.
+    let has_kind: bool = tx
+        .prepare_cached("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='kind'")?
+        .query_row([], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+        > 0;
+    if !has_kind {
+        tx.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'interactive';",
         )?;
-        // Idempotent column additions (SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS)
-        for (table, col) in &[("sessions", "format_version"), ("cron_events", "stateful")] {
-            let has_col: bool = tx
-                .prepare_cached(&format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{col}'"
-                ))?
-                .query_row([], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-                > 0;
-            if !has_col {
-                let sql = if *table == "sessions" && *col == "format_version" {
-                    "ALTER TABLE sessions ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1;"
-                } else if *table == "cron_events" && *col == "stateful" {
-                    "ALTER TABLE cron_events ADD COLUMN stateful INTEGER NOT NULL DEFAULT 0;"
-                } else {
-                    &format!("ALTER TABLE {table} ADD COLUMN {col} BLOB;")
-                };
-                tx.execute_batch(sql)?;
-            } else if *table == "sessions" && *col == "format_version" {
-                // PERF-004: cache the column existence so get_session /
-                // list_sessions can skip the pragma round-trip on every
-                // call. `migrate` runs exactly once per Storage handle, so
-                // recording the result here is safe.
-                self.has_format_version
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
+    }
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_parent
+         ON sessions(parent_id) WHERE parent_id IS NOT NULL;",
+    )?;
+    // SESSIONMENU M2: a user-settable "unread" mark that survives a
+    // restart. Rows from before this column read as read.
+    let has_unread: bool = tx
+        .prepare_cached("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='unread'")?
+        .query_row([], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+        > 0;
+    if !has_unread {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    // SESSIONMENU M3: user-defined sidebar sections. A session with no
+    // `section_id` (or one naming a deleted section) shows under its
+    // project.
+    let has_section: bool = tx
+        .prepare_cached(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='section_id'",
+        )?
+        .query_row([], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+        > 0;
+    if !has_section {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN section_id TEXT;")?;
+    }
+    // SESSIONMENU M4: the pull/merge request a session is bound to.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS session_requests (
+             session_id TEXT PRIMARY KEY,
+             forge TEXT NOT NULL,
+             host TEXT NOT NULL,
+             repo TEXT NOT NULL,
+             number INTEGER NOT NULL,
+             title TEXT NOT NULL DEFAULT '',
+             web_url TEXT NOT NULL,
+             head_branch TEXT NOT NULL,
+             state TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );",
+    )?;
+    // SESSIONMENU M5: Auto-fix state on the binding, and the triggers
+    // already acted on (dedup and attempt count, FR-17, FR-19).
+    for (col, ty) in &[
+        ("autofix", "INTEGER NOT NULL DEFAULT 0"),
+        ("autofix_paused", "INTEGER NOT NULL DEFAULT 0"),
+        ("head_sha", "TEXT"),
+        ("last_polled_at", "TEXT"),
+        ("last_trigger", "TEXT"),
+        ("autofix_resumed_at", "TEXT"),
+    ] {
+        let has_col: bool = tx
+            .prepare_cached(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('session_requests') WHERE name='{col}'"
+            ))?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            tx.execute_batch(&format!(
+                "ALTER TABLE session_requests ADD COLUMN {col} {ty};"
+            ))?;
         }
-
-        // todo2tasks T-002: additive migration for the Task model columns.
-        // Adds `active_form`, `owner`, `metadata` (JSON text), and
-        // `blocked_by` (JSON text array) to the `todos` table.  Existing
-        // rows receive safe defaults via ADD COLUMN ... DEFAULT (FR-002):
-        //   active_form -> NULL   (TaskRow.active_form = None)
-        //   owner       -> NULL   (TaskRow.owner = None)
-        //   metadata    -> '{}'    (empty JSON object)
-        //   blocked_by  -> '[]'    (empty JSON array)
-        for (col, default_expr) in &[
-            ("active_form", "NULL"),
-            ("owner", "NULL"),
-            ("metadata", "'{}'"),
-            ("blocked_by", "'[]'"),
-        ] {
-            let has_col: bool = tx
-                .prepare_cached(&format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('todos') WHERE name='{col}'"
-                ))?
-                .query_row([], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-                > 0;
-            if !has_col {
-                let sql =
-                    format!("ALTER TABLE todos ADD COLUMN {col} TEXT DEFAULT {default_expr};");
-                tx.execute_batch(&sql)?;
-            }
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS autofix_events (
+             session_id TEXT NOT NULL,
+             head_sha TEXT NOT NULL,
+             kind TEXT NOT NULL,
+             item_id TEXT NOT NULL,
+             fired_at TEXT NOT NULL,
+             PRIMARY KEY (session_id, head_sha, kind, item_id)
+         );",
+    )?;
+    // Every pull/merge request ever bound to a session (created by a
+    // tool or bound by the user), so the sidebar can count and list them
+    // after the session is rebound. Seeded from the current bindings.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS session_request_history (
+             session_id TEXT NOT NULL,
+             forge TEXT NOT NULL,
+             host TEXT NOT NULL,
+             repo TEXT NOT NULL,
+             number INTEGER NOT NULL,
+             title TEXT NOT NULL DEFAULT '',
+             web_url TEXT NOT NULL,
+             head_branch TEXT NOT NULL,
+             state TEXT NOT NULL,
+             first_seen_at TEXT NOT NULL,
+             PRIMARY KEY (session_id, host, repo, number)
+         );
+         INSERT OR IGNORE INTO session_request_history
+             (session_id, forge, host, repo, number, title, web_url, head_branch, state,
+              first_seen_at)
+             SELECT session_id, forge, host, repo, number, title, web_url, head_branch,
+                    state, updated_at FROM session_requests;",
+    )?;
+    // Each request's diff size (lines added and removed), read from the
+    // forge after the request is recorded; NULL until then.
+    for col in ["additions", "deletions"] {
+        let has_col: bool = tx
+            .prepare_cached(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('session_request_history') \
+                 WHERE name='{col}'"
+            ))?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            tx.execute_batch(&format!(
+                "ALTER TABLE session_request_history ADD COLUMN {col} INTEGER;"
+            ))?;
         }
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sidebar_sections (
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+             created_at TEXT NOT NULL
+         );",
+    )?;
+    Ok(())
+}
 
-        // MULTISESSION T4.1: pinned sessions and per-project grouping. The
-        // `pinned` flag is additive with a zero default; the partial index
-        // serves the sidebar's per-project, most-recent-first listing.
-        let has_pinned: bool = tx
+/// Give sessions their project rows: derive missing project ids, add the
+/// project columns, and re-key legacy work-tree roots (spec `projects`).
+fn migrate_projects(tx: &Connection) -> Result<()> {
+    // Sessions created before project ids were recorded carry ''. Derive
+    // the project from the stored directory once, here, so listing never
+    // touches the filesystem.
+    let unassigned: Vec<(String, String)> = tx
+        .prepare("SELECT id, directory FROM sessions WHERE project_id = ''")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    for (id, directory) in unassigned {
+        tx.execute(
+            "UPDATE sessions SET project_id = ?1 WHERE id = ?2",
+            params![crate::project::project_root(&directory), id],
+        )?;
+    }
+
+    // Spec `projects`: a project is a stored record. `sessions.project_id`
+    // held the work-tree root path up to schema 5; give every distinct
+    // root a project row and point its sessions at the row's id. No git
+    // command runs here: remotes are detected when a project is first
+    // used.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        worktree TEXT NOT NULL UNIQUE,
+        provider_id TEXT,
+        model_id TEXT,
+        remote_kind TEXT,
+        remote_host TEXT,
+        remote_path TEXT,
+        remote_url TEXT,
+        remote_name TEXT,
+        default_branch TEXT,
+        remote_checked INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+        );",
+    )?;
+    for (col, ty) in &[
+        ("branch", "TEXT"),
+        ("worktree", "TEXT"),
+        ("pr_count", "INTEGER"),
+    ] {
+        let has_col: bool = tx
+            .prepare_cached(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='{col}'"
+            ))?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            tx.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {col} {ty};"))?;
+        }
+    }
+    // Project properties (schema 13): a description shown after the
+    // project name, and an execution backend kind that new sessions
+    // copy into `sessions.execution_backend`. NULL means the global one.
+    for (table, col) in &[
+        ("projects", "description"),
+        ("projects", "execution_backend"),
+        ("sessions", "execution_backend"),
+    ] {
+        let has_col: bool = tx
+            .prepare_cached(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{col}'"
+            ))?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} TEXT;"))?;
+        }
+    }
+    let legacy_roots: Vec<String> = tx
+        .prepare(
+            "SELECT DISTINCT project_id FROM sessions \
+             WHERE project_id NOT IN (SELECT id FROM projects)",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut rekeyed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for root in legacy_roots {
+        let project = project_store::ensure_project_on(tx, &root)?;
+        tx.execute(
+            "UPDATE sessions SET project_id = ?1 WHERE project_id = ?2",
+            params![project.id, root],
+        )?;
+        rekeyed.insert(root, project.id);
+    }
+    rekey_sidebar_sections(tx, &rekeyed)?;
+    Ok(())
+}
+
+/// Record [`SCHEMA_VERSION`] and rebuild a legacy message index, inside the
+/// migration transaction.
+fn record_schema_version(tx: &Connection) -> Result<()> {
+    // Record the schema version so the next `Storage::open` (including
+    // the background FTS warmup connection) hits the fast path. Written via
+    // the transaction (not `conn`) so it commits atomically with the DDL
+    // above (FUNC-019).
+    let now = Utc::now().to_rfc3339();
+    tx.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('schema_version', ?1, ?2)",
+        params![SCHEMA_VERSION.to_string(), now],
+    )?;
+
+    // SQLITE T-01: the message index changed from a standalone FTS5 table
+    // (which copied every message body into `messages_fts_content`) to a
+    // contentless table keyed through `message_fts_keys`. A database
+    // written by an earlier version still has the old shape, and the batch
+    // above cannot have replaced it (`CREATE ... IF NOT EXISTS` leaves an
+    // existing vtab alone), so detect and rebuild it here.
+    let legacy_message_fts: bool = tx
+        .prepare_cached(
+            "SELECT COUNT(*) FROM pragma_table_info('messages_fts') WHERE name = 'message_id'",
+        )?
+        .query_row([], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+        > 0;
+    if legacy_message_fts {
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS messages_fts;
+             CREATE VIRTUAL TABLE messages_fts USING fts5(
+                 content,
+                 content = '',
+                 contentless_delete = 1,
+                 tokenize = 'porter unicode61'
+             );",
+        )?;
+    }
+    Ok(())
+}
+
+impl Storage {
+    /// Acquire the internal connection lock for raw SQL access.
+    ///
+    /// Returns a `MutexGuard` that derefs to the `rusqlite::Connection`.
+    /// Intended for migration verification tests that need to inspect
+    /// table schemas directly.
+    #[doc(hidden)]
+    pub fn conn_lock_for_test(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("database lock poisoned: {e}"))
+    }
+
+    /// PERF-069: whether this storage has a dedicated read-only connection.
+    ///
+    /// Returns `true` for file-backed storage that opened its reader
+    /// successfully, `false` for in-memory storage (and any file-backed
+    /// storage whose reader could not be opened), where reads share the
+    /// writer connection.
+    #[must_use]
+    pub fn has_reader(&self) -> bool {
+        self.reader.is_some()
+    }
+
+    /// PERF-004: return whether the `sessions.format_version` column
+    /// exists, using the cached `AtomicBool` when it has already been
+    /// populated (by [`migrate`](Self::migrate) or a prior call).
+    ///
+    /// On the first call after construction - when the flag is still
+    /// `false` - this runs the `pragma_table_info` query once and records
+    /// the result so every subsequent `get_session` / `list_sessions`
+    /// call skips the `SQLite` round-trip.  The schema never loses the
+    /// column after it has been added, so caching is safe.
+    fn has_format_version_cached(&self, conn: &rusqlite::Connection) -> Result<bool> {
+        if self
+            .has_format_version
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(true);
+        }
+        let has: bool = conn
             .prepare_cached(
-                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='pinned'",
+                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='format_version'",
             )?
             .query_row([], |r| r.get::<_, i64>(0))
             .unwrap_or(0)
             > 0;
-        if !has_pinned {
-            tx.execute_batch("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;")?;
-        }
-        tx.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_project_updated
-             ON sessions(project_id, updated_at DESC) WHERE archived_at IS NULL;",
-        )?;
-        // MULTISESSION: what created a session (`interactive`, `subagent`,
-        // `teammate`, `skill`, `automation`) and fast child lookup. Rows from
-        // before this column read as `interactive`.
-        let has_kind: bool = tx
-            .prepare_cached("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='kind'")?
-            .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-            > 0;
-        if !has_kind {
-            tx.execute_batch(
-                "ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'interactive';",
-            )?;
-        }
-        tx.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_parent
-             ON sessions(parent_id) WHERE parent_id IS NOT NULL;",
-        )?;
-        // SESSIONMENU M2: a user-settable "unread" mark that survives a
-        // restart. Rows from before this column read as read.
-        let has_unread: bool = tx
-            .prepare_cached(
-                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='unread'",
-            )?
-            .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-            > 0;
-        if !has_unread {
-            tx.execute_batch("ALTER TABLE sessions ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;")?;
-        }
-        // SESSIONMENU M3: user-defined sidebar sections. A session with no
-        // `section_id` (or one naming a deleted section) shows under its
-        // project.
-        let has_section: bool = tx
-            .prepare_cached(
-                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='section_id'",
-            )?
-            .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-            > 0;
-        if !has_section {
-            tx.execute_batch("ALTER TABLE sessions ADD COLUMN section_id TEXT;")?;
-        }
-        // SESSIONMENU M4: the pull/merge request a session is bound to.
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS session_requests (
-                 session_id TEXT PRIMARY KEY,
-                 forge TEXT NOT NULL,
-                 host TEXT NOT NULL,
-                 repo TEXT NOT NULL,
-                 number INTEGER NOT NULL,
-                 title TEXT NOT NULL DEFAULT '',
-                 web_url TEXT NOT NULL,
-                 head_branch TEXT NOT NULL,
-                 state TEXT NOT NULL,
-                 updated_at TEXT NOT NULL
-             );",
-        )?;
-        // SESSIONMENU M5: Auto-fix state on the binding, and the triggers
-        // already acted on (dedup and attempt count, FR-17, FR-19).
-        for (col, ty) in &[
-            ("autofix", "INTEGER NOT NULL DEFAULT 0"),
-            ("autofix_paused", "INTEGER NOT NULL DEFAULT 0"),
-            ("head_sha", "TEXT"),
-            ("last_polled_at", "TEXT"),
-            ("last_trigger", "TEXT"),
-            ("autofix_resumed_at", "TEXT"),
-        ] {
-            let has_col: bool = tx
-                .prepare_cached(&format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('session_requests') WHERE name='{col}'"
-                ))?
-                .query_row([], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-                > 0;
-            if !has_col {
-                tx.execute_batch(&format!(
-                    "ALTER TABLE session_requests ADD COLUMN {col} {ty};"
-                ))?;
-            }
-        }
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS autofix_events (
-                 session_id TEXT NOT NULL,
-                 head_sha TEXT NOT NULL,
-                 kind TEXT NOT NULL,
-                 item_id TEXT NOT NULL,
-                 fired_at TEXT NOT NULL,
-                 PRIMARY KEY (session_id, head_sha, kind, item_id)
-             );",
-        )?;
-        // Every pull/merge request ever bound to a session (created by a
-        // tool or bound by the user), so the sidebar can count and list them
-        // after the session is rebound. Seeded from the current bindings.
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS session_request_history (
-                 session_id TEXT NOT NULL,
-                 forge TEXT NOT NULL,
-                 host TEXT NOT NULL,
-                 repo TEXT NOT NULL,
-                 number INTEGER NOT NULL,
-                 title TEXT NOT NULL DEFAULT '',
-                 web_url TEXT NOT NULL,
-                 head_branch TEXT NOT NULL,
-                 state TEXT NOT NULL,
-                 first_seen_at TEXT NOT NULL,
-                 PRIMARY KEY (session_id, host, repo, number)
-             );
-             INSERT OR IGNORE INTO session_request_history
-                 (session_id, forge, host, repo, number, title, web_url, head_branch, state,
-                  first_seen_at)
-                 SELECT session_id, forge, host, repo, number, title, web_url, head_branch,
-                        state, updated_at FROM session_requests;",
-        )?;
-        // Each request's diff size (lines added and removed), read from the
-        // forge after the request is recorded; NULL until then.
-        for col in ["additions", "deletions"] {
-            let has_col: bool = tx
-                .prepare_cached(&format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('session_request_history') \
-                     WHERE name='{col}'"
-                ))?
-                .query_row([], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-                > 0;
-            if !has_col {
-                tx.execute_batch(&format!(
-                    "ALTER TABLE session_request_history ADD COLUMN {col} INTEGER;"
-                ))?;
-            }
-        }
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sidebar_sections (
-                 id TEXT PRIMARY KEY,
-                 name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                 created_at TEXT NOT NULL
-             );",
-        )?;
-        // Sessions created before project ids were recorded carry ''. Derive
-        // the project from the stored directory once, here, so listing never
-        // touches the filesystem.
-        let unassigned: Vec<(String, String)> = tx
-            .prepare("SELECT id, directory FROM sessions WHERE project_id = ''")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<std::result::Result<_, _>>()?;
-        for (id, directory) in unassigned {
-            tx.execute(
-                "UPDATE sessions SET project_id = ?1 WHERE id = ?2",
-                params![crate::project::project_root(&directory), id],
-            )?;
-        }
+        self.has_format_version
+            .store(has, std::sync::atomic::Ordering::Relaxed);
+        Ok(has)
+    }
 
-        // Spec `projects`: a project is a stored record. `sessions.project_id`
-        // held the work-tree root path up to schema 5; give every distinct
-        // root a project row and point its sessions at the row's id. No git
-        // command runs here: remotes are detected when a project is first
-        // used.
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            worktree TEXT NOT NULL UNIQUE,
-            provider_id TEXT,
-            model_id TEXT,
-            remote_kind TEXT,
-            remote_host TEXT,
-            remote_path TEXT,
-            remote_url TEXT,
-            remote_name TEXT,
-            default_branch TEXT,
-            remote_checked INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            archived_at TEXT
+    /// Opens (or creates) a `SQLite` database at the given filesystem path and
+    /// runs migrations to ensure the schema is up to date.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent directory cannot be created, the database
+    /// file cannot be opened, or migrations fail.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use codemason_storage::storage::Storage;
+    /// use std::path::Path;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = Storage::open(Path::new("/tmp/codemason-test.db"))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+            // SEC-codemason-storage-003 (SECTASKS T-017): the directory holds the
+            // credential table and the full transcript history; keep it 0700.
+            restrict_dir_permissions(parent);
+        }
+        let conn = Connection::open(path)
+            .with_context(|| format!("Failed to open database at {}", path.display()))?;
+        // The database file (created above with the process umask) and its WAL
+        // sidecars must be 0600: the row contents are the credentials.
+        restrict_file_permissions(path);
+        // R-24: generous busy_timeout FIRST, before any pragma that can contend
+        // with another connection. `PRAGMA journal_mode=WAL` on a database that
+        // is still in rollback-journal mode needs a brief exclusive lock to
+        // rewrite the header, and it honours whatever busy handler is installed
+        // when it runs. Setting the timeout afterwards meant the switch used
+        // rusqlite's 5 s default and, when a second codemason process (two CLI
+        // invocations, a concurrent test run) held a read or write lock on the
+        // shared `~/.config/codemason/codemason.db`, `Storage::open` failed outright
+        // with `Error code 5: database is locked` instead of waiting. Ordering
+        // the timeout first makes every subsequent pragma as patient as the
+        // rest of the connection. See `BUSY_TIMEOUT_MS`.
+        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)?;
+        // PERF: Use WAL so background writers (e.g. the FTS warm-up) do not
+        // block concurrent readers on the main thread, and set a busy_timeout
+        // so a transient lock never surfaces as an immediate `DatabaseBusy`
+        // error. Without these, `journal_mode=delete` serialises every reader
+        // behind a writer and startup `get_setting` calls stall for the whole
+        // rebuild.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // H-008: `synchronous=NORMAL` (instead of the default FULL) avoids an
+        // fsync on every WAL commit while remaining crash-safe (the WAL is
+        // still durable on checkpoint). This matches the activity-log store.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // R-23: explicit WAL auto-checkpoint so the WAL file does not grow to
+        // hundreds of MB. See `WAL_AUTOCHECKPOINT_PAGES`.
+        conn.pragma_update(None, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)?;
+        // R-23: bound the WAL file itself. `wal_autocheckpoint` only schedules
+        // checkpoints; without a size limit a checkpoint that could not
+        // truncate (a concurrent reader held a mark) leaves the file at its
+        // high-water mark forever. See `WAL_JOURNAL_SIZE_LIMIT_BYTES`.
+        conn.pragma_update(None, "journal_size_limit", WAL_JOURNAL_SIZE_LIMIT_BYTES)?;
+        let mut storage = Self {
+            conn: Mutex::new(conn),
+            reader: None,
+            has_format_version: std::sync::atomic::AtomicBool::new(false),
+        };
+        storage.migrate()?;
+        // SEC-codemason-storage-003 (SECTASKS T-041): the WAL sidecars are created
+        // lazily by SQLite on the first write (the migration above), under the
+        // process umask. Re-apply the 0600 restriction now that they exist, so
+        // the sidecar files are not left world-readable.
+        restrict_file_permissions(path);
+        // PERF-069: open the dedicated read-only connection after migration so
+        // the schema is complete. On any failure the reader is left `None` and
+        // reads fall back to sharing the writer connection - a graceful
+        // degradation rather than an `open` failure.
+        storage.reader = Self::open_read_only(path);
+        Ok(storage)
+    }
+
+    /// PERF-069: opens a second, read-only connection to the same database
+    /// file for the read-only query paths. Returns `None` if the connection
+    /// cannot be opened (e.g. the file is not readable), in which case callers
+    /// fall back to the writer connection.
+    ///
+    /// WAL is a persistent database property set by the writer, so a
+    /// read-only connection automatically observes it and never needs to run
+    /// the `journal_mode` pragma (which would require a write). Only the
+    /// connection-local `busy_timeout` is set so a transient lock during a
+    /// checkpoint does not surface as `SQLITE_BUSY`.
+    fn open_read_only(path: &Path) -> Option<Mutex<Connection>> {
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(path, flags).ok()?;
+        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)
+            .ok()?;
+        Some(Mutex::new(conn))
+    }
+
+    /// R-23: Run a `PRAGMA wal_checkpoint(TRUNCATE)` to truncate the WAL file
+    /// back to zero size.
+    ///
+    /// This is the explicit shutdown/operator checkpoint. It is *not* what
+    /// bounds the WAL during a run: `journal_size_limit` (see
+    /// [`WAL_JOURNAL_SIZE_LIMIT_BYTES`]) is what stops the file retaining the
+    /// high-water mark of a large write burst, because `wal_autocheckpoint`
+    /// alone can never truncate it back down.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer connection's lock is poisoned or the
+    /// checkpoint pragma itself fails.
+    pub fn checkpoint_wal(&self) -> Result<()> {
+        let conn = lock_conn!(self)?;
+        conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+        Ok(())
+    }
+
+    /// Returns the current `journal_mode` (e.g. `"wal"`, `"delete"`) for the
+    /// underlying connection.  Used by tests to assert that a file-backed
+    /// [`open`](Self::open) enables WAL so a background writer never
+    /// serialises concurrent readers.
+    pub fn journal_mode(&self) -> Result<String> {
+        let conn = lock_conn!(self)?;
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        Ok(mode)
+    }
+
+    /// Opens an ephemeral in-memory database, useful for testing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the in-memory database cannot be created or
+    /// migrations fail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codemason_storage::storage::Storage;
+    ///
+    /// let storage = Storage::open_in_memory().unwrap();
+    /// ```
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let storage = Self {
+            conn: Mutex::new(conn),
+            // PERF-069: in-memory databases cannot be shared with a second
+            // connection, so reads share the writer connection.
+            reader: None,
+            has_format_version: std::sync::atomic::AtomicBool::new(false),
+        };
+        storage.migrate()?;
+        Ok(storage)
+    }
+
+    fn migrate(&self) -> Result<()> {
+        let conn = lock_conn!(self)?;
+
+        // Fast path: ensure the `settings` table exists (a single cheap
+        // `CREATE TABLE IF NOT EXISTS`), then check whether the stored
+        // `schema_version` matches [`SCHEMA_VERSION`].  On a warm start this
+        // avoids re-parsing and catalog-checking all 34 `CREATE ... IF NOT
+        // EXISTS` statements and 7 `pragma_table_info` column probes.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
             );",
         )?;
-        for (col, ty) in &[
-            ("branch", "TEXT"),
-            ("worktree", "TEXT"),
-            ("pr_count", "INTEGER"),
-        ] {
-            let has_col: bool = tx
-                .prepare_cached(&format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='{col}'"
-                ))?
-                .query_row([], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-                > 0;
-            if !has_col {
-                tx.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {col} {ty};"))?;
-            }
+        let stored_version: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if stored_version.as_deref() == Some(SCHEMA_VERSION.to_string().as_str()) {
+            // Schema is current - skip the full batch.  The
+            // `format_version` column definitely exists on any DB with this
+            // version, so cache that fact for `get_session` / `list_sessions`.
+            self.has_format_version
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
         }
-        // Project properties (schema 13): a description shown after the
-        // project name, and an execution backend kind that new sessions
-        // copy into `sessions.execution_backend`. NULL means the global one.
-        for (table, col) in &[
-            ("projects", "description"),
-            ("projects", "execution_backend"),
-            ("sessions", "execution_backend"),
-        ] {
-            let has_col: bool = tx
-                .prepare_cached(&format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{col}'"
-                ))?
-                .query_row([], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-                > 0;
-            if !has_col {
-                tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} TEXT;"))?;
-            }
-        }
-        let legacy_roots: Vec<String> = tx
-            .prepare(
-                "SELECT DISTINCT project_id FROM sessions \
-                 WHERE project_id NOT IN (SELECT id FROM projects)",
-            )?
-            .query_map([], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?;
-        let mut rekeyed: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for root in legacy_roots {
-            let project = project_store::ensure_project_on(&tx, &root)?;
-            tx.execute(
-                "UPDATE sessions SET project_id = ?1 WHERE project_id = ?2",
-                params![project.id, root],
-            )?;
-            rekeyed.insert(root, project.id);
-        }
-        rekey_sidebar_sections(&tx, &rekeyed)?;
 
-        // Record the schema version so the next `Storage::open` (including
-        // the background FTS warmup connection) hits the fast path. Written via
-        // the transaction (not `conn`) so it commits atomically with the DDL
-        // above (FUNC-019).
-        let now = Utc::now().to_rfc3339();
-        tx.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('schema_version', ?1, ?2)",
-            params![SCHEMA_VERSION.to_string(), now],
-        )?;
+        // Slow path: run the full migration batch atomically. The DDL batch and
+        // the `schema_version` upsert below must commit together: if the batch
+        // applied but the version write were lost, the next open would re-run
+        // migrations against a schema it already believes is old, and a
+        // concurrent open could observe a half-applied schema (FUNC-019).
+        let tx = conn.unchecked_transaction()?;
 
-        // SQLITE T-01: the message index changed from a standalone FTS5 table
-        // (which copied every message body into `messages_fts_content`) to a
-        // contentless table keyed through `message_fts_keys`. A database
-        // written by an earlier version still has the old shape, and the batch
-        // above cannot have replaced it (`CREATE ... IF NOT EXISTS` leaves an
-        // existing vtab alone), so detect and rebuild it here.
-        let legacy_message_fts: bool = tx
-            .prepare_cached(
-                "SELECT COUNT(*) FROM pragma_table_info('messages_fts') WHERE name = 'message_id'",
-            )?
-            .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-            > 0;
-        if legacy_message_fts {
-            tx.execute_batch(
-                "DROP TABLE IF EXISTS messages_fts;
-                 CREATE VIRTUAL TABLE messages_fts USING fts5(
-                     content,
-                     content = '',
-                     contentless_delete = 1,
-                     tokenize = 'porter unicode61'
-                 );",
-            )?;
-        }
+        tx.execute_batch(SCHEMA_DDL)?;
+        add_task_columns(&tx, &self.has_format_version)?;
+        add_session_columns(&tx)?;
+        migrate_projects(&tx)?;
+        record_schema_version(&tx)?;
+
         // `commit` consumes the transaction, so there is no dangling `tx` to
         // drop here.
         tx.commit()?;
