@@ -60,19 +60,29 @@ Evidence:
 
 ## 2. Defects
 
-### 2a. Fixed in this session (Car 0)
+### 2a. Fixed in this session (Cars 0, 0b, 1)
 
 | ID | Defect | Fix | Commit |
 |----|--------|-----|--------|
 | W-01 | **Tests wrote into the real user config on Windows.** `Config::global_config_dir()` used `dirs::config_dir()`, which honours `XDG_CONFIG_HOME` only on Linux. 50 test files isolate the config through that variable (`grep -rlE 'set_var\("XDG_CONFIG_HOME"' crates/*/tests tests \| wc -l` at `77ae198`). A connectors run overwrote `%APPDATA%\codemason\codemason.json`. | An absolute `XDG_CONFIG_HOME` is honoured on every platform. `--dry-run`, `/init config` and `/config reload` now resolve through the one function. | `4347b45` |
 | W-02 | **Windows path escape:** `validate_relative_component("/etc/passwd")` was accepted, because `is_absolute()` needs a drive prefix on Windows. A connectors archive entry `/etc/passwd` was then joined to `C:\etc\passwd`. | Uses `has_root()`; the comment that said otherwise is corrected. | `77ae198` |
 | W-03 | The `codemason-types` test binary did not compile on Windows (`std::os::fd` behind a runtime `cfg!`). The structure guard compared `\` paths against `/` paths, so it failed on Windows. | `#[cfg(unix)]` gates; separator normalisation. Non-vacuity proof done. | `8e049db` |
+| CO-01 | Six config sections (`stream`, `memory`, `storage`, `agent_perf`, `trigger`, `security_analyzer`) were never merged from the global or project file. | `merge_inner` merges them; the project guard strips the privileged ones. | `3984496` |
+| CO-02 | The credential key was written in place; two first-run processes, or a crash mid-write, minted a second key and orphaned every stored credential. | Temp file + `hard_link` publish (create-if-absent); a damaged key file is left in place. | `86dfcb2` |
+| CO-10 | `restore_snapshot` truncated user files in place; a crash mid-rollback left them empty. | `guard::write_atomic`, keeping the file's permissions and writing through a symlink. | `3fba902` |
+| W-07 | `process_alive` reported a live process as dead on Windows, so a running session was flagged as a crash. | `GetExitCodeProcess == STILL_ACTIVE`. | `5ff13fb` |
+| W-08 | **Agent teams could not be created or updated on Windows**: `sync_all` on a read-only temp handle ("Access is denied"). About 290 agent test failures. | Team store, mailbox and task store open the temp file for write. | `68a3e70` |
+| W-09 | **Tests wrote into the real user profile** (global `codemason.json`, plugin ledger, teams, catalogues) on every platform. | A `ctor` in `tests/common/profile_isolation.rs`, included by every test binary, redirects `XDG_CONFIG_HOME`, `HOME`, `XDG_DATA_HOME` to `target/temp/test-profile/`. | `700196c` |
+| W-10 | **Security (SEC-079 on Windows):** an image placeholder `/etc/passwd` passed the containment check and read `C:\etc\passwd`. | Only plain and `.` components are contained; an unsafe source is never joined onto the base. | `c71ca52` |
+| W-11 | Hooks, verification scripts and `run "!<cmd>"` spawned a bare `sh`/`bash`, so no hook ran on Windows without `sh` on PATH (the gate fell through to the normal permission prompt). | `bash::posix_shell()` / `bash_program()` reuse the Bash tool's Git Bash discovery. | `86ed747` |
+| W-12 | **Data loss on Windows:** worktree prune matched subdirectory sessions with `/` only, so it deleted a checkout a live session in `worktree\src` was using. Also: `\?\` paths handed to git; npm discovery never found `npm.cmd`; `/bench` manifests failed their own path guard; container, `@include`, memory, file-menu and clipboard paths assumed `/`. | Either separator in the in-use SQL; `dunce`; `which`; `/`-joined manifest paths; root/prefix checks. | `dd71af1` |
+| W-13 | The project-teams walk took `~/.codemason` (the legacy global dir) as a project, so projects under home put their teams in the home folder. | The walk stops at the home folder, compared canonically (8.3 short names). | `cf638a8` |
+| W-14 | Embedded skill data was checked out CRLF under `core.autocrlf`, so Windows builds shipped CRLF skill files. | `.gitattributes` pins that directory to LF (narrow form of O-07). | `65a4c2e` |
 
 ### 2b. Open: high
 
 | ID | Defect | Where | V |
 |----|--------|-------|---|
-| CO-01 | `merge_inner` never copies `stream`, `memory`, `storage`, `agent_perf`, `trigger` or `security_analyzer`. Every load starts from defaults, so these six sections are dropped from every layer, including the user's global file. `/security on` saves the setting, but the analyzer always reads `None`. | `config/src/config.rs` `fn merge_inner` | R (grep of the body) |
 | AG-01 | PreToolUse hooks run synchronously inside async dispatch and never read `timeout_secs`. A hung hook blocks a runtime worker with no limit. | `agent/src/hooks/mod.rs` (sync pre-hook); `session/dispatch.rs` call | C |
 | AG-03 | The whole tool input goes into a hook environment variable. Above about 128 KiB (32 K chars on Windows) the spawn fails and the pre-hook falls through to NoDecision, so guard hooks are silently skipped for large writes. | `hooks/mod.rs` env build + spawn-error arm | C |
 | TL-07 | The SSRF trailing-dot fix covers only `localhost`. `metadata.google.internal.` and `x.nip.io.` pass. 100.64/10 and 64:ff9b::/96 are not blocked, and there is no resolved-address check. | `tools-extended/src/masterfetch/security.rs` (`host_lower` vs `host_norm`) | C |
@@ -85,7 +95,6 @@ Evidence:
 | AG-05 | `" then "` is found in `to_lowercase()` and that offset slices the original string. `"\u{212A} then x"` panics. | `agent/src/trigger/dynamic.rs` | R (traced: U+212A is 3 bytes, `k` is 1) |
 | AG-06 | Verification kills bash only, so a grandchild holding the pipe defeats the timeout. `read_to_string` empties the output on one non-UTF-8 byte. | `agent/src/session/verification.rs` | C |
 | AG-08 | `Instant::now() + Duration::from_secs(model_u64)` overflows and panics; the schema sets no maximum. | `tool/wait_agents.rs`, `tool/team_wait.rs` | R (traced) |
-| CO-02 | The credential key file is written non-atomically with no `create_new`. Two processes on first run, or a crash mid-write, mint a new key, and every stored credential becomes undecryptable. | `storage/src/storage.rs` key create | C |
 | CO-05 | Anthropic `event: error` mid-stream falls into `_ => {}`, so the provider's error text is lost (the Azure copy too). | `llm/providers/anthropic.rs`, `azure_resource.rs` | C |
 | CO-14 | Only 3 provider options are forwarded, so Bedrock `region` / `profile` / `endpoint_url` never reach the provider. Compaction falls back to a hard-coded model. | `agent/.../loop_steps.rs` options forward | C |
 | TL-02 | The `git_clone` destination check is text-only. On Windows `\x` and `C:x` pass, and a symlinked directory escapes everywhere. | `tools-vcs/src/git/mod.rs` | C |
@@ -106,6 +115,9 @@ Evidence:
 
 | ID | Defect (narrowed by the verifier where noted) |
 |----|------|
+| W-15 | Six app-core tests fail only in a single-process `cargo test` run (cwd / config races: `test_multisession_new_session_in_a_permitted_path`, `test_project_command_add_registers_permitted_directories_only`, `test_directory_menu_has_back_to_fuzzy_entry`, `test_file_menu_ctrl_backslash_toggles_hidden_filter`, `test_slash_system_sets_prompt`, `test_slash_unknown_command_shows_error`). Each passes alone; every cwd-changing helper holds `global_env_lock`, so the writer is not yet found. Nextest (one process per test) cannot hit it. |
+| W-16 | `image_load::file_uri` on a *relative* path yields `file://shots/x.png`, which `uri_path` and the loader read as the UNC host `\shots\x.png` on Windows (a network read). Production callers checked pass absolute paths; no guard enforces it. |
+| W-17 | 28 agent tests and `scripts/check-test-env-isolation.sh` need `python3`; a Windows box without Python cannot run them, and the guard script cannot run at all. |
 | AG-04 | Hook stdin is written before stdout is drained: a hook that ignores stdin and prints more than 64 KiB deadlocks. |
 | AG-07 | `os_info` probe polls `try_wait` without draining: a probe printing more than 64 KiB is killed at 2 s. |
 | AG-10 | `TaskStore` async fns take a blocking flock and do `std::fs` I/O on the runtime. |
@@ -113,7 +125,6 @@ Evidence:
 | AG-13 | An unknown `MemoryScope` is an error in `custom.rs` but silently `None` in the team tools. |
 | CO-06 | `index.unwrap_or(0)` merges parallel tool calls in copilot and huggingface (refuted for anthropic/azure). |
 | CO-07 | The redaction prefix lists in types `sanitize.rs` and telemetry `sensitive.rs` have drifted. |
-| CO-10 | Rollback restore overwrites user files non-atomically. |
 | CO-12 | ollama_cloud logs the done frame at INFO without `redact_frame`. |
 | CO-09 | `Config::load` fails outright in a read-only cwd with no global config. Creating the default file is deliberate. |
 | RS-03 | Research comparison quotes slice with lowercase offsets, so a quote can come from the wrong sentence after U+0130. |
@@ -129,7 +140,6 @@ Evidence:
 | UI-02 | Input history is one global file, rewritten in full with plain `fs::write`; two windows erase each other's history. |
 | UI-03 | `/websearch` results go through one shared slot, so the result is lost or lands in the wrong session. |
 | UI-06 | `/init config` checks `exists()` and then writes (microsecond race). |
-| W-04 | `legacy_home_dir` / `legacy_data_dir` ignore `HOME` / `XDG_DATA_HOME` on Windows. `test_user_dirs_helpers::test_legacy_dirs_point_at_home_and_data_roots` fails on Windows; 5 test files set `HOME` or `XDG_DATA_HOME` (`grep -rlE 'set_var\("(HOME\|XDG_DATA_HOME)"' crates/*/tests tests` at `4347b45`). **Needs the owner decision O-01.** |
 
 **Refuted:**
 - AG-09: the racy `pending_manager` branch in `team_create.rs` cannot run, because nothing emits that state. It becomes a dead-code row instead.
@@ -207,7 +217,7 @@ Re-derive function lengths by brace counting from the `fn` line, for example `aw
 
 | ID | Question |
 |----|----------|
-| O-01 | W-04: honour `HOME` / `XDG_DATA_HOME` on Windows as well (Git Bash sets `HOME`, so this reaches more users), or give the tests a hidden override? |
+| O-01 | **Decided: honour them** (W-04, `96c08e2`). |
 | O-02 | AG-14: should a teammate keep its custom agent's pinned model, as `task/mod.rs` does, or take the lead's model? |
 | O-03 | CO-19: enforce `agent.<name>.permission`, or document it as a prompt hint only? |
 | O-04 | UI-01: which slash commands must run immediately mid-turn (`/quit`, `/cancel`, ...)? |
@@ -238,7 +248,8 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | Car | IDs | Preserved behavior | Validation | Status |
 |-----|-----|--------------------|-----------|--------|
 | 0. Windows isolation | W-01, W-02, W-03 | Linux paths unchanged; Windows tests stop touching the profile | config 460/460, connectors 377/377, types 438/438, app-core init/reload 20/20; the real config's mtime is unchanged | **Done** (`8e049db`, `77ae198`, `4347b45`) |
-| 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | Approved |
+| 0b. Windows portability | W-04, W-07..W-14 | Unix behaviour unchanged; no assertion weakened (test edits enumerated in `feebc7a`, `9f8446d`) | Windows: agent 401 to 29 failed (28 need python3), app-core 82 to 6 (single-process races, invisible under nextest), gui 2 to 0, storage 427/427; real profile untouched across full runs | **Done** (`5ff13fb`..`cf638a8`) |
+| 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | **Done** (`3984496`, `86dfcb2`, `3fba902`) |
 | 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | Approved |
 | 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | Approved |
 | 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | Approved |
