@@ -170,7 +170,28 @@ pub fn restore_snapshot(snapshot: &Snapshot) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)?;
+        restore_file(path, content)?;
+    }
+    Ok(())
+}
+
+/// Replace one user file with `content` atomically (audit CO-10).
+///
+/// An in-place `std::fs::write` truncates first, so a crash or a full disk
+/// mid-restore left the user's file empty or half-written. The content goes
+/// through `guard::write_atomic` (temp file, sync, rename) instead. That
+/// helper creates the temp file owner-only, so the file's own permissions are
+/// put back afterwards, and a symlink is resolved so its target is replaced,
+/// not the link.
+fn restore_file(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    let target = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path)?,
+        _ => path.to_path_buf(),
+    };
+    let permissions = std::fs::metadata(&target).ok().map(|m| m.permissions());
+    codemason_types::guard::write_atomic(&target, content)?;
+    if let Some(permissions) = permissions {
+        std::fs::set_permissions(&target, permissions)?;
     }
     Ok(())
 }

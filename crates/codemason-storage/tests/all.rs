@@ -110,6 +110,8 @@ mod test_settings_and_file_storage;
 mod test_sidebar_sections;
 #[path = "test_snapshot_expand.rs"]
 mod test_snapshot_expand;
+#[path = "test_snapshot_restore.rs"]
+mod test_snapshot_restore;
 #[path = "test_storage_transactions.rs"]
 mod test_storage_transactions;
 #[path = "test_task_crud.rs"]
