@@ -83,6 +83,7 @@ Evidence:
 | CO-05, CO-06, CO-12 | An Anthropic `event: error` frame (`overloaded_error`) was swallowed, so the turn looked truncated and the provider message was lost (anthropic and azure_resource copies); copilot and huggingface merged index-less parallel tool calls onto stream 0; the Ollama Cloud done frame (final text, `context` token ids) was logged at INFO. | `"error"` arm yields `StreamEvent::Error`; `StreamKey::from_frame` keys by id when `index` is absent; the done frame logs `done_reason` and eval counts only. | batch 4 |
 | TL-01, 02, 03, 04, 09, 12, 14, 25 | Background output stopped at the first non-UTF-8 byte; the git clone directory guard missed Windows rooted/prefixed paths; glob reset its root per level so `src/**/*.rs` missed nested files; git_status mis-parsed porcelain v2 and never reported conflicts; README fetch always failed on github.com (cross-origin download_url); multi_edit ("atomic") left earlier files edited after a failure; rm followed symlinks; fetch truncation kept one char too few. Also found: apply_patch's header check was Windows-blind (later check still refused it). | Lossy capped line reader; root/prefix rejection; glob keeps the root; v2/short parsers by field count; raw-media README on the API origin; staged temp-and-rename writes; `symlink_metadata`; `nth(max_chars)`. | batch 5, `c0f6004` |
 | TL-07, TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | SSRF: a trailing dot bypassed the metadata/rebinding name checks, 100.64/10 and NAT64 were open, and resolved addresses were never checked; model-chosen webfetch size/timeout had no ceiling; GitHub/GitLab and remote-backend bodies were read unbounded; plugin clones were size-checked only after finishing; archives had no entry limit; webhook ingress shared one rate-limit key and leaked which automation ids exist. Residual: a known automation with no secret configured still answers 403 (an existing test asserts it), and the per-id limiter map grows with attacker-chosen ids until its 10k/120 s eviction. | Normalised names, both ranges, `SsrfSafeResolver` pinning; ceilings; 4 KiB/64 KiB capped readers; in-flight clone polling; `MAX_ARCHIVE_ENTRIES`; per-id key, credential check first, uniform 401. | `8589d4a`, git quoting `5bdcd74` |
+| RS-01, 02, 03, 06, 08, 09, 14, UI-02 (part), UI-04, UI-06 | CRLF plugin commands and research frontmatter mis-parsed (one corrupted RESEARCH.md); comparison quoted the wrong sentence after length-changing case folds; the rate window confused count with seconds; automations ran in the launch dir, not the project; a zero default timeout; a year regex; history writes could truncate; one provider cleared another's spinner; `/init config` could overwrite. | Byte-accurate offsets, CRLF-aware fences, offset mapping, `RATE_LIMIT_WINDOW`, `research_root` parent, hand-written Default, regex fix, temp+rename, provider-matched clear, `create_new`. | batch 7 |
 
 ### 2b. Open: high
 
@@ -94,12 +95,7 @@ Evidence:
 | ID | Defect | Where | V |
 |----|--------|-------|---|
 | TL-06 | The tool-adapter event forwarders subscribe after the tool starts and are aborted on return, so events are lost. The out-forwarder has no session filter. | `agent/src/tool/mod.rs` adapters | C |
-| RS-01 | `parse_command_markdown` advances `line.len()+1` but `lines()` strips `\r`. On CRLF (the Windows default) the body leaks fence bytes and can panic mid-codepoint. It also parses the user's own commands. | `plugins/src/manifest.rs` | R (traced) |
-| RS-02 | A CRLF `RESEARCH.md` looks frontmatter-less, so placeholder frontmatter is prepended to the whole file. | `research/src/io.rs` `find_yaml_open` | C |
-| RS-06 | The rate-limit window resets at `elapsed_secs >= RATE_LIMIT_PER_MINUTE`, so the request count is used as seconds. It is a fixed window, not the "rolling" one the comment claims. | `server/src/routes/mod.rs` | R (traced) |
-| RS-08 | `/auto/{id}` runs in `std::env::current_dir()`. Session resume changes `cwd_path` but not the process cwd, so runs execute in the wrong project. | `server/src/routes/automation.rs` | C |
 | UI-01 | Ribbon, menu and chip slash commands bypass `is_input_blocked()` and run mid-turn; typed and palette commands queue. A naive fix would also queue `/quit`. | gui `shell.rs` vs app-core `palette.rs` | P |
-| UI-04 | Any provider's model-list result clears `model_loading_state` before checking `provider_id`, so it hides another provider's spinner and drops the pending latch. | `app-core/src/app/event_handler.rs` | R (traced) |
 
 ### 2d. Open: low
 
@@ -111,15 +107,11 @@ Evidence:
 | AG-10 | `TaskStore` async fns take a blocking flock and do `std::fs` I/O on the runtime. |
 | CO-07 | The redaction prefix lists in types `sanitize.rs` and telemetry `sensitive.rs` have drifted. |
 | CO-09 | `Config::load` fails outright in a read-only cwd with no global config. Creating the default file is deliberate. |
-| RS-03 | Research comparison quotes slice with lowercase offsets, so a quote can come from the wrong sentence after U+0130. |
 | RS-04 / RS-05 | `git+` install size is checked only after the clone. zip/tar extraction has no entry-count cap (plugins and connectors). |
-| RS-09 | Derived `Default` on the open-access client gives a zero timeout (no callers today). |
-| RS-14 | The clarify regex's trailing `\b` binds only to the last alternative. |
 | TL-05, TL-10, TL-11, TL-13, TL-16 | Unbounded reads that cost memory only. Every tool result is cut to 12k chars before the model (`agent/src/session/history.rs` `MAX_TOOL_RESULT_CHARS_FOR_LLM`), so "floods the model" is refuted. |
 | TL-15 | A poisoned containment-cache lock fails open (practically unreachable). |
-| UI-02 | Input history is one global file, rewritten in full with plain `fs::write`; two windows erase each other's history. |
-| UI-03 | `/websearch` results go through one shared slot, so the result is lost or lands in the wrong session. |
-| UI-06 | `/init config` checks `exists()` and then writes (microsecond race). |
+| UI-02 | (Open part) Two windows still overwrite each other's input history: a merge needs the process to know which entries it added since loading. The crash-truncation part is fixed (batch 7). |
+| UI-03 | `/websearch` results go through one shared slot, so the result is lost or lands in the wrong session. **Blocked by pins:** `test_housekeeping.rs` and `test_session_events_deep.rs` write the slot as `Option<String>` and assert the status text; the fix (a queue of origin-tagged results) belongs in the structural batch. |
 
 **Refuted:**
 - AG-09: the racy `pending_manager` branch in `team_create.rs` cannot run, because nothing emits that state. It becomes a dead-code row instead.
@@ -235,7 +227,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | **Done** (commit "fix(llm): batch 4 stream frame handling") |
 | 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | **Done** (`6a71107` + commit "fix(tools): batch 5 git and fetch correctness") |
 | 6. Network/SSRF + caps | TL-07 (trailing dot, CGNAT, NAT64), TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | The same messages for allowed URLs and archives | `test_mf_security*`, `test_add`, `test_connector_install`, `test_automation_surface` | **Done** (`8589d4a`) |
-| 7. Research / plugins / server / UI bugs | RS-01, RS-02, RS-03, RS-06, RS-08, RS-09, RS-14, UI-02, UI-03, UI-04, UI-06 | LF / ASCII behaviour unchanged; 429 text unchanged | CRLF fixtures per parser; rate-window test; spinner test | Approved |
+| 7. Research / plugins / server / UI bugs | RS-01, RS-02, RS-03, RS-06, RS-08, RS-09, RS-14, UI-02, UI-03, UI-04, UI-06 | LF / ASCII behaviour unchanged; 429 text unchanged | CRLF fixtures per parser; rate-window test; spinner test | **Done** except UI-03 (blocked by pins) and the UI-02 cross-window merge |
 | 8. Perf | RS-16, RS-17, RS-18, TL-16 | Same results | crate suites | Approved |
 | 9. Infra | RS-22, RS-23, RS-24, RS-25, CO-17 | Same build | `cargo clippy --workspace --all-targets` clean; guard self-tests | Approved |
 | 10..n. Refactors | Section 5, one car per row group; monster functions one car each | The suite passes unchanged; no test edits | `cargo test -p <crate> --test all` | Approved |
