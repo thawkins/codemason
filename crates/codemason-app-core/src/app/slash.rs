@@ -7771,7 +7771,7 @@ than assumed.
                         self.session.team_members.clear();
                         self.session
                             .team_message_counts
-                            .retain(|(team, _), _| team != &team_name);
+                            .retain(|(team, _), _| team != team_name);
                         self.session.team_task_counts.clear();
                         self.session.team_task_counts_dirty = true;
                         self.show_teams = false;
