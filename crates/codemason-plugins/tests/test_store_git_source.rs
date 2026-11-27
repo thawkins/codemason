@@ -319,6 +319,12 @@ fn parse_git_source_refuses_unsafe_characters() {
 
 /// End-to-end: an option-looking ref cannot reach `git` through `add`, and the
 /// command it names never runs.
+///
+/// Unix only: the marker path is written into a `#ref:subpath` source, and a
+/// Windows path's drive colon is that syntax's delimiter. The guard itself is
+/// platform-independent and covered everywhere by
+/// `parse_git_source_refuses_option_like_refs_and_subpaths`.
+#[cfg(unix)]
 #[test]
 fn add_refuses_an_option_like_ref_without_running_it() {
     let temp = temp_dir("git-injection");

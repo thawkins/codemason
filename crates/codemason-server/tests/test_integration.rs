@@ -274,7 +274,8 @@ async fn test_create_session_success() {
         .join("target")
         .join("temp");
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let body = format!(r#"{{"directory":"{}"}}"#, dir.display());
+    // `json!` escapes the path; a Windows `\` spliced in raw is invalid JSON.
+    let body = serde_json::json!({ "directory": dir.display().to_string() }).to_string();
     let req = Request::builder()
         .method("POST")
         .uri("/sessions")

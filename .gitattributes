@@ -1,3 +1,6 @@
 # Embedded with `include_str!` and written out verbatim as skill files, so
 # they must stay LF in the working tree even under `core.autocrlf=true`.
 crates/codemason-app-core/src/app/graphify_skill_data/** text eol=lf
+# Compared byte-for-byte with the generator's output by
+# test_openapi_document::test_checked_in_client_matches_the_generator.
+docs/openapi/codemason-client.d.ts text eol=lf
