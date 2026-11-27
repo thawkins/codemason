@@ -24,3 +24,7 @@ mod test_suite_adapters_all;
 mod test_vendor_slug_partitioning;
 #[path = "test_xlsx.rs"]
 mod test_xlsx;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

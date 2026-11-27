@@ -173,3 +173,7 @@ mod test_yolo_persistence;
 mod test_config_load_for;
 #[path = "test_retention_config.rs"]
 mod test_retention_config;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

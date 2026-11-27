@@ -857,3 +857,7 @@ mod test_session_archive_project;
 mod test_session_project_attach;
 #[path = "test_session_worktree.rs"]
 mod test_session_worktree;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

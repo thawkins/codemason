@@ -150,3 +150,7 @@ mod test_wire_trace;
 
 #[path = "test_tool_result_error_marking.rs"]
 mod test_tool_result_error_marking;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

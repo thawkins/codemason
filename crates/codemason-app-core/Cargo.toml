@@ -73,6 +73,7 @@ unicode-segmentation = "1.12"
 unicode-width = "0.2"
 
 [dev-dependencies]
+ctor = { workspace = true }
 axum = { workspace = true }
 criterion = { workspace = true }
 filetime = "0.2"

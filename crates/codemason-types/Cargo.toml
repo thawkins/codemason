@@ -21,6 +21,7 @@ regex = "1"
 url = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 serial_test = "4"
 tempfile = "3.14"

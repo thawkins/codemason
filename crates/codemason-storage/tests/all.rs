@@ -128,3 +128,7 @@ mod test_usage_stats;
 mod test_wal_warmup;
 #[path = "test_warm_index_scan.rs"]
 mod test_warm_index_scan;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

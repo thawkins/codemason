@@ -168,3 +168,7 @@ mod test_truncate;
 
 #[path = "test_bash_large_output.rs"]
 mod test_bash_large_output;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

@@ -79,3 +79,7 @@ mod test_sigint_flush;
 mod test_subsystem;
 #[path = "test_subsystem_reconfigure.rs"]
 mod test_subsystem_reconfigure;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

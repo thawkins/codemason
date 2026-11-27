@@ -48,3 +48,7 @@ mod test_templates;
 mod test_validation;
 #[path = "test_validation_perf.rs"]
 mod test_validation_perf;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

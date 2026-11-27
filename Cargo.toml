@@ -183,6 +183,8 @@ codemason-plugins = { path = "crates/codemason-plugins" }
 codemason-server = { path = "crates/codemason-server" }
 codemason-app-core = { path = "crates/codemason-app-core" }
 codemason-gui = { path = "crates/codemason-gui" }
+# Test-only: runs `tests/common/profile_isolation.rs` before any test starts.
+ctor = "1"
 
 # -- GUI frontend (egui) -----------------------------------------------------
 # Resolved to the storytold forks by the `[patch.crates-io]` table below.
@@ -430,6 +432,7 @@ serde = { workspace = true }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = "3.14"
 
 [lints]

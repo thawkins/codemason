@@ -47,6 +47,7 @@ rand = { workspace = true }
 dirs = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 criterion = { workspace = true }

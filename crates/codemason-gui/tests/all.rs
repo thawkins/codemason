@@ -331,3 +331,7 @@ mod test_window_lifecycle_gui;
 mod test_window_routing_gui;
 #[path = "test_window_scroll_wheel_gui.rs"]
 mod test_window_scroll_wheel_gui;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

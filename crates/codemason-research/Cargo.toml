@@ -39,6 +39,7 @@ regex = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = "3"
 criterion = { workspace = true }
 codemason-specs = { path = "../codemason-specs" }

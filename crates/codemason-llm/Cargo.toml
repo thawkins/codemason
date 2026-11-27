@@ -44,6 +44,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 # Only `tests/test_openrouter_provider.rs` builds a real `Storage`; the library
 # reads keys through `codemason_types::provider_auth::ProviderAuthSource`.
 codemason-storage = { path = "../codemason-storage" }

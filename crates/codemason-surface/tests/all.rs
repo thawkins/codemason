@@ -22,3 +22,7 @@ mod test_surface_net;
 mod test_surface_store;
 #[path = "test_surface_store_extra.rs"]
 mod test_surface_store_extra;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

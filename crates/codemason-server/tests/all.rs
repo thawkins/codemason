@@ -54,3 +54,7 @@ mod test_routes_handlers;
 mod test_sse_event_variants;
 #[path = "test_web_ui.rs"]
 mod test_web_ui;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

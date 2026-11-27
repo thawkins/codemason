@@ -29,6 +29,7 @@ url = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 async-trait = { workspace = true }
 flate2 = "1"
 serde_json = { workspace = true }

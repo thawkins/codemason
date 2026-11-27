@@ -148,3 +148,7 @@ mod test_tool_adapter;
 
 #[path = "test_store_ledger_atomic.rs"]
 mod test_store_ledger_atomic;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

@@ -92,6 +92,7 @@ version = "3.5"
 chrono = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 # Only the `#[cfg(test)]` compaction-runner tests and `tests/` use it.
 tokio-stream = { workspace = true }
 # Builds the text PDF for the ranged `@file.pdf#a-b` mention test.
