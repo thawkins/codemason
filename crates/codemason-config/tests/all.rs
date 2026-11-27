@@ -100,6 +100,9 @@ mod test_loop_config;
 #[path = "test_merge_project_privileged.rs"]
 mod test_merge_project_privileged;
 
+#[path = "test_merge_six_sections.rs"]
+mod test_merge_six_sections;
+
 #[path = "test_mcp_type_default.rs"]
 mod test_mcp_type_default;
 

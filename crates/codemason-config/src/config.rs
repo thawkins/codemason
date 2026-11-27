@@ -3361,6 +3361,10 @@ impl Config {
     /// - budgets and safety switches: `loop` (steps, cost, retries,
     ///   checkpoints), `prices`, `input_queue_capacity`, the background-agent
     ///   limits, `activity_log` and `edit_log`.
+    /// - `storage`: retention deletes messages across every session.
+    /// - `memory`: `cross_project` exposes other projects' memories.
+    /// - `security_analyzer`: a project could disable it or route every
+    ///   proposed tool action to a model of its choosing.
     fn strip_unprivileged_project_sections(&mut self, rejected: &mut Vec<&'static str>) {
         if !self.formatter.is_default() {
             self.formatter = FormatterConfig::default();
@@ -3423,6 +3427,17 @@ impl Config {
             self.activity_log = true;
             self.edit_log = false;
             rejected.push("activity_log / edit_log");
+        }
+        if !self.storage.is_default() {
+            self.storage = StorageConfig::default();
+            rejected.push("storage");
+        }
+        if self.memory != MemoryConfig::default() {
+            self.memory = MemoryConfig::default();
+            rejected.push("memory");
+        }
+        if self.security_analyzer.take().is_some() {
+            rejected.push("security_analyzer");
         }
     }
 
@@ -3722,6 +3737,31 @@ impl Config {
         if overlay.execution_backend.is_some() {
             base.execution_backend = overlay.execution_backend;
         }
+
+        // Stream, memory, storage, agent-perf and trigger settings: a section
+        // that differs from its defaults replaces the lower layer wholesale
+        // (the `formatter` rule above). These were once never copied, so every
+        // load - which starts from defaults - discarded them from every file.
+        if overlay.stream != StreamConfig::default() {
+            base.stream = overlay.stream;
+        }
+        if overlay.memory != MemoryConfig::default() {
+            base.memory = overlay.memory;
+        }
+        if !overlay.storage.is_default() {
+            base.storage = overlay.storage;
+        }
+        if overlay.agent_perf != AgentPerfConfig::default() {
+            base.agent_perf = overlay.agent_perf;
+        }
+        if !overlay.trigger.is_empty() {
+            base.trigger = overlay.trigger;
+        }
+        // Security analyzer: opt-in and absent by default, so a layer that
+        // writes the section wins outright.
+        if overlay.security_analyzer.is_some() {
+            base.security_analyzer = overlay.security_analyzer;
+        }
         // Backend registry (FR-004): overlay entries replace base entries with
         // the same id, otherwise append. Unknown/duplicate-free entries are
         // preserved so a later config file can add or override one backend.
@@ -3921,7 +3961,7 @@ impl Config {
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryConfig {
     /// Whether the memory system is enabled.
     #[serde(default = "default_true")]
@@ -3957,7 +3997,7 @@ impl Default for MemoryConfig {
 }
 
 /// Structured memory store configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructuredMemoryConfig {
     /// Whether the structured store is enabled.
     #[serde(default = "default_true")]
@@ -3971,7 +4011,7 @@ impl Default for StructuredMemoryConfig {
 }
 
 /// Retrieval configuration for injecting memories into the system prompt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetrievalConfig {
     /// Maximum number of structured memories to consider for injection into
     /// the system prompt.
@@ -4039,7 +4079,7 @@ fn default_relevance_weight() -> f64 {
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoExtractConfig {
     /// Whether automatic memory extraction is enabled.
     ///
@@ -4091,7 +4131,7 @@ fn default_require_confirmation() -> bool {
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecayConfig {
     /// Multiplicative decay factor per day since last access.
     ///
@@ -4148,7 +4188,7 @@ fn default_decay_min_confidence() -> f64 {
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrossProjectConfig {
     /// Whether cross-project memory sharing is enabled.
     ///
