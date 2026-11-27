@@ -7668,7 +7668,7 @@ than assumed.
                 .retain(|(team, _), _| team != &team_name);
             self.session.team_task_counts.clear();
             self.session.team_task_counts_dirty = true;
-            self.show_teams = false;
+            self.drop_team_from_pane(&team_name);
             self.session.focused_teammate = None;
             if self
                 .session
@@ -7774,7 +7774,6 @@ than assumed.
                             .retain(|(team, _), _| team != team_name);
                         self.session.team_task_counts.clear();
                         self.session.team_task_counts_dirty = true;
-                        self.show_teams = false;
                         self.session.focused_teammate = None;
                         if self
                             .session
@@ -7785,6 +7784,7 @@ than assumed.
                             self.session.swarm_state = None;
                         }
                     }
+                    self.drop_team_from_pane(rest);
                     self.push_log_no_agent(
                         LogLevel::Info,
                         format!("[clr]  Team '{}' deleted", rest),
@@ -8078,7 +8078,7 @@ than assumed.
                 .retain(|(team, _), _| team != &team_name);
             self.session.team_task_counts.clear();
             self.session.team_task_counts_dirty = true;
-            self.show_teams = false;
+            self.drop_team_from_pane(&team_name);
             self.session.focused_teammate = None;
             if self
                 .session
@@ -8233,7 +8233,7 @@ than assumed.
                         .retain(|(team, _), _| team != &team_name);
                     self.session.team_task_counts.clear();
                     self.session.team_task_counts_dirty = true;
-                    self.show_teams = false;
+                    self.drop_team_from_pane(&team_name);
                     self.session.focused_teammate = None;
                     if self
                         .session

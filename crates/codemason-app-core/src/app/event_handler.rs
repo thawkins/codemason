@@ -2693,17 +2693,7 @@ impl App {
         {
             self.session.focused_teammate = None;
         }
-        // The removed team's manager goes; the pane stays while any other
-        // team is still running. FR-053: with none left the Teams popup
-        // hides too, so a removed team cannot keep a window open showing a
-        // lead row with no team.
-        self.session_processor.team_managers.prune_stale();
-        let teams_remain = self.session.active_team.is_some()
-            || !self.session_processor.team_managers.all().is_empty();
-        self.show_teams = teams_remain;
-        if !teams_remain {
-            self.show_teams_window = false;
-        }
+        self.drop_team_from_pane(team_name);
         if self
             .session
             .swarm_state
@@ -3413,6 +3403,24 @@ impl App {
             m.session_id.clone(),
         );
         self.status = format!("team: focused -> {}", m.name);
+    }
+
+    /// Take `team_name` out of the Teams pane after it was closed, deleted or
+    /// cleaned up: its manager is unbound, any other stale manager is pruned,
+    /// and the pane stays shown while another team is still listed. With none
+    /// left the Teams popup hides too (FR-053), so a removed team cannot keep
+    /// a window open showing a lead row with no team.
+    pub(crate) fn drop_team_from_pane(&mut self, team_name: &str) {
+        let managers = &self.session_processor.team_managers;
+        if let Some(manager) = managers.get(team_name) {
+            managers.remove_if(&manager);
+        }
+        managers.prune_stale();
+        let teams_remain = self.session.active_team.is_some() || !managers.all().is_empty();
+        self.show_teams = teams_remain;
+        if !teams_remain {
+            self.show_teams_window = false;
+        }
     }
 
     /// Whether `team_name` is the team the session's member list mirrors, or

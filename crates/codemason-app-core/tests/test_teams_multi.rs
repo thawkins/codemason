@@ -144,3 +144,39 @@ async fn test_teams_multi_message_counters_follow_their_own_team() {
     assert_eq!(counts.get(&key("beta")).copied(), Some((1, 0)));
     assert_eq!(counts.get(&key("alpha")), None, "alpha stays untouched");
 }
+
+#[tokio::test]
+async fn test_teams_multi_recount_covers_non_active_team_mailboxes() {
+    let ws = workspace("recount_other_team");
+    let mut app = app_with_teams(&ws, 1, 1);
+    let beta = TeamStore::load_by_name("beta", &ws).expect("beta store");
+    let mailbox = codemason_agent::team::Mailbox::open(&beta.dir, "tm-1").expect("mailbox");
+    let msg = codemason_agent::team::MailboxMessage::new(
+        "tm-1",
+        "lead",
+        codemason_agent::team::MessageType::Message,
+        "hello",
+    );
+    mailbox.push(msg).expect("send");
+    app.refresh_team_member_session_ids();
+    let key = ("beta".to_string(), "tm-1".to_string());
+    assert!(
+        app.session
+            .team_message_counts
+            .get(&key)
+            .is_some_and(|(sent, _)| *sent >= 1),
+        "beta's mailbox is counted while alpha is active: {:?}",
+        app.session.team_message_counts
+    );
+}
+
+#[tokio::test]
+async fn test_teams_multi_close_leaves_other_team_listed() {
+    let ws = workspace("close_leaves_other");
+    let mut app = app_with_teams(&ws, 1, 1);
+    app.show_teams = true;
+    app.execute_slash_command("/team close").await;
+    let names: Vec<String> = app.team_sections().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["beta"], "the closed team is gone from the pane");
+    assert!(app.show_teams, "the pane stays while beta runs");
+}

@@ -5023,7 +5023,18 @@ impl App {
     /// target; not part of the crate's public API surface.
     #[doc(hidden)]
     pub fn refresh_team_member_session_ids(&mut self) {
-        let Some(team_name) = self.session.active_team.as_ref().map(|t| t.name.clone()) else {
+        // The Teams pane lists every bound team, so each team's counters are
+        // recounted from its own mailboxes, not only the active team's.
+        let active = self.session.active_team.as_ref().map(|t| t.name.clone());
+        for manager in self.session_processor.team_managers.all() {
+            if active.as_deref() == Some(manager.team_name.as_str()) {
+                continue;
+            }
+            if let Ok(store) = TeamStore::load(&manager.team_dir) {
+                self.recount_team_messages(&store);
+            }
+        }
+        let Some(team_name) = active else {
             return;
         };
         let working_dir = self.cwd_path.clone();
