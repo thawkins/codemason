@@ -281,9 +281,10 @@ fn process_alive(pid: u32) -> bool {
                 return false;
             }
             let mut code: u32 = 0;
-            let ok = GetExitCodeProcess(handle, &mut code) != 0;
+            let ok = GetExitCodeProcess(handle, &raw mut code) != 0;
             CloseHandle(handle);
-            ok && code != STILL_ACTIVE as u32
+            // `STILL_ACTIVE` is the exit code of a process that is running.
+            ok && code == STILL_ACTIVE as u32
         }
     }
     #[cfg(not(any(unix, windows)))]
@@ -294,6 +295,6 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "../tests/inline/crash_dump_tests.rs"]
 mod tests;

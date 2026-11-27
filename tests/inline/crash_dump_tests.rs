@@ -40,3 +40,22 @@ fn missing_marker_reports_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     assert!(previous_unclean_exit(dir.path()).expect("scan").is_none());
 }
+
+#[test]
+fn exited_pid_is_not_alive() {
+    // A child that has already exited and been reaped: its pid names no live
+    // process (pid reuse inside this window is not a realistic concern).
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .arg("--list")
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn child");
+    let pid = child.id();
+    child.wait().expect("child exits");
+    assert!(!process_alive(pid), "an exited pid must not read as alive");
+}
+
+#[test]
+fn own_pid_is_alive() {
+    assert!(process_alive(std::process::id()));
+}
