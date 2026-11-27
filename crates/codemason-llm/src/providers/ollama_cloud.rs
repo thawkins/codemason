@@ -683,24 +683,18 @@ impl LlmClient for OllamaCloudClient {
                     }
 
                     if parsed.get("done").and_then(serde_json::Value::as_bool) == Some(true) {
-                        // PERF-062: only serialise the done frame for the log
-                        // when INFO logging is actually enabled.
-                        if tracing::enabled!(tracing::Level::INFO) {
-                            let done_preview = serde_json::to_string(&parsed).unwrap_or_default();
-                            // SEC-codemason-llm-006 (SECTASKS T-050): slicing at a
-                            // raw byte offset panics when it lands inside a
-                            // multibyte UTF-8 character in a server-controlled
-                            // string field (the same fix already applied in
-                            // openrouter.rs / FUNC-001).
-                            let done_preview =
-                                codemason_types::strutil::truncate_bytes_no_ellipsis(&done_preview, 500);
-                            tracing::info!(
-                                model = %model_name,
-                                open_calls = acc.open_count(),
-                                done_frame = %done_preview,
-                                "Ollama Cloud: done frame received"
-                            );
-                        }
+                        // CO-12: log the frame's metadata only. The done frame of
+                        // `/api/generate` carries the final `response` fragment
+                        // and `context` token ids (an encoding of the whole
+                        // conversation), so it is never logged whole.
+                        tracing::info!(
+                            model = %model_name,
+                            open_calls = acc.open_count(),
+                            done_reason = parsed.get("done_reason").and_then(serde_json::Value::as_str).unwrap_or(""),
+                            prompt_eval_count = parsed.get("prompt_eval_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            eval_count = parsed.get("eval_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            "Ollama Cloud: done frame received"
+                        );
 
                         if let Some(prompt_tokens) = parsed.get("prompt_eval_count").and_then(serde_json::Value::as_u64)
                         {

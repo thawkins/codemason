@@ -61,6 +61,8 @@ mod test_http_client_helpers;
 #[path = "test_http_client_stream_chunk.rs"]
 mod test_http_client_stream_chunk;
 
+#[path = "test_stream_frame_handling.rs"]
+mod test_stream_frame_handling;
 #[path = "test_stream_stall.rs"]
 mod test_stream_stall;
 

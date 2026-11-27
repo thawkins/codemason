@@ -80,6 +80,7 @@ Evidence:
 | W-14 | Embedded skill data was checked out CRLF under `core.autocrlf`, so Windows builds shipped CRLF skill files. | `.gitattributes` pins that directory to LF (narrow form of O-07). | `65a4c2e` |
 | AG-01..04, 06, 07 | Hook and child-process limits: pre-tool hooks ignored `timeout_secs` and blocked a runtime worker; timed-out hooks leaked the process; a >128 KiB (32 K chars on Windows) tool input made the spawn fail so guard hooks were skipped; stdin-vs-stdout deadlock; verification killed bash only and lost output on one non-UTF-8 byte; a verbose probe was killed as hung. Found on the way: Git for Windows' `binbash.exe` is a launcher, so killing it left scripts running. | One `child_process::run_with_deadline` (AG-18): concurrent stdin, drained pipes, process-tree kill (process group / `taskkill /T`); pre-hooks on the blocking pool; env values over 64 KiB (16 KiB Windows) become empty + `_TRUNCATED=1`. | batch 2 |
 | AG-05, AG-08, AG-13, CO-14 | A trigger with a length-changing lowercase char (U+212A) panicked; `timeout_secs = u64::MAX` overflowed the wait deadline and panicked; a typo'd teammate `memory` scope silently meant none; Bedrock `region`/`profile`/`endpoint_url` were never forwarded and Bedrock compaction ran on the default model. | ASCII case folding; `tool::deadline_after` saturates; unknown scope is an error; `Config::provider_client_options` forwards every provider option plus the model at all three client sites. | batch 3 |
+| CO-05, CO-06, CO-12 | An Anthropic `event: error` frame (`overloaded_error`) was swallowed, so the turn looked truncated and the provider message was lost (anthropic and azure_resource copies); copilot and huggingface merged index-less parallel tool calls onto stream 0; the Ollama Cloud done frame (final text, `context` token ids) was logged at INFO. | `"error"` arm yields `StreamEvent::Error`; `StreamKey::from_frame` keys by id when `index` is absent; the done frame logs `done_reason` and eval counts only. | batch 4 |
 
 ### 2b. Open: high
 
@@ -91,7 +92,6 @@ Evidence:
 
 | ID | Defect | Where | V |
 |----|--------|-------|---|
-| CO-05 | Anthropic `event: error` mid-stream falls into `_ => {}`, so the provider's error text is lost (the Azure copy too). | `llm/providers/anthropic.rs`, `azure_resource.rs` | C |
 | TL-02 | The `git_clone` destination check is text-only. On Windows `\x` and `C:x` pass, and a symlinked directory escapes everywhere. | `tools-vcs/src/git/mod.rs` | C |
 | TL-03 | The glob recursion resets the root at every level, so `src/**/*.rs` misses nested files and nested hits come back as bare names. | `tools-core/src/glob.rs` (`collect_matches(sub, sub, ..)`) | R (traced) |
 | TL-04 | Porcelain v2 path = `line[4..]` (the whole record), and v2 `u` lines are never parsed, so the conflicted list is always empty. `short:true` uses v1 and is parsed as v2. | `tools-vcs/src/git/git_status.rs` | R (traced) |
@@ -115,9 +115,7 @@ Evidence:
 | W-17 | 28 agent tests and `scripts/check-test-env-isolation.sh` need `python3`; a Windows box without Python cannot run them, and the guard script cannot run at all. |
 | AG-10 | `TaskStore` async fns take a blocking flock and do `std::fs` I/O on the runtime. |
 | AG-11 | `backend/remote.rs` reads `.text()` / `.json()` without a bound. |
-| CO-06 | `index.unwrap_or(0)` merges parallel tool calls in copilot and huggingface (refuted for anthropic/azure). |
 | CO-07 | The redaction prefix lists in types `sanitize.rs` and telemetry `sensitive.rs` have drifted. |
-| CO-12 | ollama_cloud logs the done frame at INFO without `redact_frame`. |
 | CO-09 | `Config::load` fails outright in a read-only cwd with no global config. Creating the default file is deliberate. |
 | RS-03 | Research comparison quotes slice with lowercase offsets, so a quote can come from the wrong sentence after U+0130. |
 | RS-04 / RS-05 | `git+` install size is checked only after the clone. zip/tar extraction has no entry-count cap (plugins and connectors). |
@@ -244,7 +242,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | **Done** (`3984496`, `86dfcb2`, `3fba902`) |
 | 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | **Done** (see commit "fix(agent): one deadline-bounded child runner") |
 | 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | **Done** (commit "fix(agent): batch 3 panics and Bedrock options") |
-| 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | Approved |
+| 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | **Done** (commit "fix(llm): batch 4 stream frame handling") |
 | 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | Approved |
 | 6. Network/SSRF + caps | TL-07 (trailing dot, CGNAT, NAT64), TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | The same messages for allowed URLs and archives | `test_mf_security*`, `test_add`, `test_connector_install`, `test_automation_surface` | Approved (the resolver-pinning half of TL-07 is M; included) |
 | 7. Research / plugins / server / UI bugs | RS-01, RS-02, RS-03, RS-06, RS-08, RS-09, RS-14, UI-02, UI-03, UI-04, UI-06 | LF / ASCII behaviour unchanged; 429 text unchanged | CRLF fixtures per parser; rate-window test; spinner test | Approved |

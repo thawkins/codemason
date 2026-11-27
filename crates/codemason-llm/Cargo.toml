@@ -44,6 +44,8 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 
 [dev-dependencies]
+# `tests/test_stream_frame_handling.rs` captures a provider log line.
+tracing-subscriber = { workspace = true }
 ctor = { workspace = true }
 # Only `tests/test_openrouter_provider.rs` builds a real `Storage`; the library
 # reads keys through `codemason_types::provider_auth::ProviderAuthSource`.

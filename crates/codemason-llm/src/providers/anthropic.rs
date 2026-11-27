@@ -579,6 +579,17 @@ impl LlmClient for AnthropicClient {
                                     };
                                 }
                             }
+                            // CO-05: a mid-stream `event: error` frame (e.g.
+                            // `overloaded_error`) ends the turn with the
+                            // provider's message instead of a silent truncation.
+                            "error" => {
+                                let message = parsed["error"]["message"]
+                                    .as_str()
+                                    .unwrap_or("Anthropic stream error")
+                                    .to_string();
+                                yield StreamEvent::Error { message };
+                                return;
+                            }
                             _ => {}
                         }
                     }
