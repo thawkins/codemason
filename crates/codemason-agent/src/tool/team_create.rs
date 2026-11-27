@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, ToolOutput};
 use crate::team::TaskStore;
-use crate::team::TeamStatus;
 use crate::team::TeamStore;
 use crate::team::manager::HookOutcome;
 use crate::tool::metadata::MetadataBuilder;
@@ -120,7 +119,7 @@ impl Tool for TeamCreateTool {
                 },
                 "seed_only": {
                     "type": "boolean",
-                    "description": "Apply the blueprint to an existing team instead of creating one. The team must already exist; the call never re-creates its directory. Used by `/team create`, which has created the team before seeding. Default: false"
+                    "description": "Apply the blueprint to an existing team instead of creating one. The team must already exist and the calling session must be that team's lead session; the call never re-creates its directory. Used by `/team create`, which has created the team before seeding. Default: false"
                 }
             },
             "required": [
@@ -135,8 +134,9 @@ impl Tool for TeamCreateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        // `seed_only` (the leader launch path and `/team create`) is exempt;
-        // any other creation is reserved for a team-leader agent.
+        // Creation is reserved for a team-leader agent. `seed_only` skips this
+        // check but is instead restricted to the team's own lead session (see
+        // `open_team_store`), because the flag is model-visible input.
         let seed_only = input
             .get("seed_only")
             .and_then(serde_json::Value::as_bool)
@@ -264,16 +264,18 @@ impl Tool for TeamCreateTool {
 
 /// Open the team store `team_create` seeds, returning the final team name.
 ///
-/// `seed_only` loads the existing team. Otherwise the team is created with an
-/// atomic create-directory-exclusive (see `TeamStore::create`), so concurrent
-/// creates cannot both win. A generated name that collides gets `-2`, `-3`,
-/// ... until it is free; an explicit name that matches an Active team is
-/// refused, and a non-Active or config-less team of that name is reopened.
+/// `seed_only` loads the existing team and requires the calling session to be
+/// that team's lead session. Otherwise the team is created with an atomic
+/// create-directory-exclusive (see `TeamStore::create`), so concurrent creates
+/// cannot both win. A generated name that collides gets `-2`, `-3`, ... until
+/// it is free (bounded); an explicit name whose team directory already exists
+/// in any state is refused.
 ///
 /// # Errors
 ///
-/// Returns an error when the team cannot be created or loaded, or when an
-/// explicit name is already taken by an Active team.
+/// Returns an error when the team cannot be created or loaded, when an
+/// explicit name is already taken, or when `seed_only` is requested by a
+/// session other than the team's lead.
 fn open_team_store(
     name: &str,
     explicit: bool,
@@ -282,46 +284,36 @@ fn open_team_store(
     seed_only: bool,
 ) -> Result<(String, TeamStore)> {
     if seed_only {
-        return Ok((
-            name.to_string(),
-            TeamStore::load_by_name(name, &ctx.working_dir)?,
-        ));
+        let store = TeamStore::load_by_name(name, &ctx.working_dir)?;
+        if store.config.lead_session_id != ctx.session_id {
+            return Err(super::param_schema::reason_error(
+                REASON_NOT_TEAM_LEADER,
+                format!("only team '{name}' lead session may seed it with a blueprint."),
+            ));
+        }
+        return Ok((name.to_string(), store));
     }
+    /// Upper bound on generated-name suffix attempts.
+    const MAX_ATTEMPTS: u32 = 1000;
     let mut candidate = name.to_string();
-    for suffix in 2u32.. {
+    for attempt in 2..=MAX_ATTEMPTS + 1 {
         match TeamStore::create(&candidate, &ctx.session_id, &ctx.working_dir, project_local) {
             Ok(store) => return Ok((candidate, store)),
             Err(e) if e.to_string().contains("already exists") => {
-                if !explicit {
-                    candidate = format!("{name}-{suffix}");
-                    continue;
+                if explicit {
+                    return Err(anyhow::anyhow!(
+                        "team '{candidate}' already exists; choose a different name or run \
+                         `/team cleanup` to remove it"
+                    ));
                 }
-                return match TeamStore::load_by_name(&candidate, &ctx.working_dir) {
-                    Ok(existing) if existing.config.status == TeamStatus::Active => {
-                        Err(anyhow::anyhow!(
-                            "team '{candidate}' already exists and is active; choose a \
-                             different name"
-                        ))
-                    }
-                    Ok(existing) => Ok((candidate, existing)),
-                    Err(load_err)
-                        if load_err.to_string().contains("read")
-                            && load_err.to_string().contains("config.json") =>
-                    {
-                        let store = TeamStore::initialize_existing_without_config(
-                            &candidate,
-                            &ctx.session_id,
-                            &ctx.working_dir,
-                        )?;
-                        Ok((candidate, store))
-                    }
-                    Err(load_err) => Err(load_err),
-                };
+                candidate = format!("{name}-{attempt}");
             }
             Err(e) => return Err(e),
         }
     }
-    unreachable!("the suffix loop only exits by return")
+    Err(anyhow::anyhow!(
+        "could not find a free team name based on '{name}' after {MAX_ATTEMPTS} attempts"
+    ))
 }
 
 /// Locate the blueprint directory for `bp`, closest wins:

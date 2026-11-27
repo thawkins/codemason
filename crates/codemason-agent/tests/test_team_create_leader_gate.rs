@@ -15,8 +15,12 @@ fn workspace() -> tempfile::TempDir {
 }
 
 fn ctx_in(dir: &std::path::Path, role: AgentRole) -> ToolContext {
+    ctx_with_session(dir, role, "sess-gate")
+}
+
+fn ctx_with_session(dir: &std::path::Path, role: AgentRole, session: &str) -> ToolContext {
     ToolContext {
-        session_id: "sess-gate".to_string(),
+        session_id: session.to_string(),
         working_dir: dir.to_path_buf(),
         event_bus: Arc::new(EventBus::new(16)),
         storage: None,
@@ -75,17 +79,20 @@ async fn test_team_create_leader_gate_allows_leader() {
     assert!(ws.path().join(".codemason/teams/led").is_dir());
 }
 
-#[tokio::test]
-async fn test_team_create_leader_gate_seed_only_exempt() {
-    let ws = workspace();
-    let leader = ctx_in(ws.path(), AgentRole::TeamLeader);
+async fn create_seeded(ws: &std::path::Path) {
     tool("team_create")
         .execute(
             json!({ "blueprint": "code-review", "context": "x", "name": "seeded" }),
-            &leader,
+            &ctx_in(ws, AgentRole::TeamLeader),
         )
         .await
         .expect("create");
+}
+
+#[tokio::test]
+async fn test_team_create_leader_gate_seed_only_exempt() {
+    let ws = workspace();
+    create_seeded(ws.path()).await;
     let standard = ctx_in(ws.path(), AgentRole::Standard);
     tool("team_create")
         .execute(
@@ -95,7 +102,61 @@ async fn test_team_create_leader_gate_seed_only_exempt() {
             &standard,
         )
         .await
-        .expect("seed_only is exempt from the leader gate");
+        .expect("seed_only from the lead session is exempt from the role gate");
+}
+
+#[tokio::test]
+async fn test_team_create_leader_gate_seed_only_refused_for_other_session() {
+    let ws = workspace();
+    create_seeded(ws.path()).await;
+    let other = ctx_with_session(ws.path(), AgentRole::TeamLeader, "someone-else");
+    let err = tool("team_create")
+        .execute(
+            json!({
+                "blueprint": "code-review", "context": "x", "name": "seeded", "seed_only": true
+            }),
+            &other,
+        )
+        .await
+        .expect_err("a non-lead session may not seed the team");
+    assert!(err.to_string().contains("not_team_leader"), "{err}");
+}
+
+#[tokio::test]
+async fn test_team_create_leader_gate_refuses_existing_inactive_name() {
+    let ws = workspace();
+    create_seeded(ws.path()).await;
+    let mut store =
+        codemason_agent::team::TeamStore::load_by_name("seeded", ws.path()).expect("load");
+    store.config.status = codemason_agent::team::TeamStatus::Completed;
+    store.save().expect("save");
+    let err = tool("team_create")
+        .execute(
+            json!({ "blueprint": "code-review", "context": "x", "name": "seeded" }),
+            &ctx_in(ws.path(), AgentRole::TeamLeader),
+        )
+        .await
+        .expect_err("an inactive team's name is still taken");
+    assert!(err.to_string().contains("seeded"), "{err}");
+}
+
+#[tokio::test]
+async fn test_team_create_leader_gate_refuses_configless_dir_name() {
+    let ws = workspace();
+    std::fs::create_dir_all(ws.path().join(".codemason/teams/halfmade")).expect("dir");
+    let err = tool("team_create")
+        .execute(
+            json!({ "blueprint": "code-review", "context": "x", "name": "halfmade" }),
+            &ctx_in(ws.path(), AgentRole::TeamLeader),
+        )
+        .await
+        .expect_err("a config-less directory name is refused");
+    assert!(err.to_string().contains("halfmade"), "{err}");
+    assert!(
+        !ws.path()
+            .join(".codemason/teams/halfmade/config.json")
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -114,24 +175,48 @@ async fn test_team_create_leader_gate_refuses_existing_active_name() {
     assert!(err.to_string().contains("alpha"), "{err}");
 }
 
-#[tokio::test]
+/// Eight real parallel creates of one blueprint. Rounds repeat until the
+/// creates share a timestamp base (so the `-N` suffix path runs under
+/// contention); every round must still produce distinct names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_team_create_leader_gate_concurrent_generated_names_distinct() {
-    let ws = workspace();
-    let ctx = ctx_in(ws.path(), AgentRole::TeamLeader);
-    let input = json!({ "blueprint": "code-review", "context": "x" });
-    let t = tool("team_create");
-    let (a, b) = tokio::join!(
-        t.execute(input.clone(), &ctx),
-        t.execute(input.clone(), &ctx)
-    );
-    let name = |o: codemason_agent::tool::ToolOutput| {
-        o.metadata.expect("metadata")["team_name"]
-            .as_str()
-            .expect("name")
-            .to_string()
-    };
-    let (a, b) = (name(a.expect("first")), name(b.expect("second")));
-    assert_ne!(a, b);
+    let mut saw_suffix = false;
+    for _ in 0..20 {
+        let ws = workspace();
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let dir = ws.path().to_path_buf();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                let ctx = ctx_in(&dir, AgentRole::TeamLeader);
+                barrier.wait().await;
+                tool("team_create")
+                    .execute(json!({ "blueprint": "code-review", "context": "x" }), &ctx)
+                    .await
+            }));
+        }
+        let mut names = Vec::new();
+        for h in handles {
+            let out = h.await.expect("join").expect("create");
+            names.push(
+                out.metadata.expect("metadata")["team_name"]
+                    .as_str()
+                    .expect("name")
+                    .to_string(),
+            );
+        }
+        let distinct: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(distinct.len(), names.len(), "names collided: {names:?}");
+        if names
+            .iter()
+            .any(|n| n.rsplit('-').next().is_some_and(|l| l.len() < 3))
+        {
+            saw_suffix = true;
+            break;
+        }
+    }
+    assert!(saw_suffix, "no round exercised the -N suffix path");
 }
 
 #[tokio::test]
