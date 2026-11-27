@@ -42,6 +42,7 @@ use codemason_app_core::diff_view::{
 use egui::{Id, RichText, Role, Sense, Stroke, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
+use crate::material::button::small_button;
 use crate::material::icon_button::{DENSE_SIZE, IconButtonKind, icon_button_dense};
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
@@ -95,12 +96,6 @@ pub fn more_lines_label(count: usize) -> String {
 #[must_use]
 pub fn pane_focus_id() -> Id {
     Id::unique("codemason_diff_pane_focus")
-}
-
-/// A click-only button: it never holds the keyboard focus, so it cannot
-/// take an Enter meant for the prompt.
-fn button(text: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(text).size(text_size::SMALL)).sense(Sense::CLICK)
 }
 
 /// One of the pane's four step buttons: its icon, whether there is anything
@@ -381,7 +376,7 @@ pub fn inline_diff_ui(ui: &mut egui::Ui, diff: &FileDiff, palette: &Palette) -> 
             if more > 0 {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(more_lines_label(more)).color(palette.subtle));
-                    open = ui.add(button(OPEN_DIFF)).clicked();
+                    open = small_button(ui, palette, OPEN_DIFF, None).clicked();
                 });
             }
         });

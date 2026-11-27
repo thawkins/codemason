@@ -26,6 +26,7 @@ use codemason_app_core::syntax_highlight::highlight;
 use egui::text::LayoutJob;
 use egui::{FontId, RichText, TextFormat};
 
+use crate::material::button::small_button;
 use crate::metrics::{radius, space, text_size};
 use crate::palette::Palette;
 use crate::styled_text::FONT_SIZE;
@@ -134,19 +135,14 @@ pub fn code_block_ui(
                         .color(palette.muted),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let button = |text: &str| {
-                        egui::Button::new(RichText::new(text).size(text_size::SMALL))
-                            .sense(egui::Sense::CLICK)
-                    };
-                    if ui.add(button(INSERT)).clicked() {
+                    if small_button(ui, palette, INSERT, None).clicked() {
                         action = Some(CodeAction::Insert(code.to_string()));
                     }
-                    let toggle = button(WRAP).selected(wrap);
-                    if ui.add(toggle).clicked() {
+                    if small_button(ui, palette, WRAP, Some(wrap)).clicked() {
                         wrap = !wrap;
                         ui.data_mut(|d| d.insert_temp(wrap_id, wrap));
                     }
-                    if ui.add(button(COPY)).clicked() {
+                    if small_button(ui, palette, COPY, None).clicked() {
                         ui.ctx().copy_text(code.to_string());
                     }
                 });
