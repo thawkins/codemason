@@ -2127,14 +2127,29 @@ async fn cron_scheduler_first_tick_processes_due_events() {
         temp.path().to_path_buf(),
     );
 
-    // Wait for the first tick to finish: the one-shot event ends up disabled.
+    // Wait for the first tick to finish processing every due event: the
+    // one-shot ends up disabled, the repeating event is advanced and the
+    // disabled one-shot is pushed to the far future. Waiting on the one-shot
+    // alone raced the rest of the tick on a slow host.
     let mut fired = false;
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if let Ok(Some(row)) = storage.get_cron_event("due-one-shot")
-            && !row.enabled
-        {
-            fired = true;
+        let one_shot_disabled = matches!(
+            storage.get_cron_event("due-one-shot"),
+            Ok(Some(row)) if !row.enabled
+        );
+        let repeating_advanced = matches!(
+            storage.get_cron_event("due-unknown-agent"),
+            Ok(Some(row)) if chrono::DateTime::parse_from_rfc3339(&row.next_due)
+                .is_ok_and(|due| due.with_timezone(&Utc) > Utc::now())
+        );
+        let disabled_skipped = matches!(
+            storage.get_cron_event("due-disabled"),
+            Ok(Some(row)) if row.next_due.starts_with("9999")
+        );
+        fired = one_shot_disabled;
+        if one_shot_disabled && repeating_advanced && disabled_skipped {
             break;
         }
     }

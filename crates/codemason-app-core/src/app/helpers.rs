@@ -412,7 +412,8 @@ pub fn image_dimensions_or_placeholder(alt: &str, src: &str, base_dir: &std::pat
     // the process can open, so such a source is rejected before any filesystem
     // access. It is only ever displayed as a placeholder.
     let safe_local = !is_url && is_contained_relative(src);
-    let resolved = if is_url {
+    // An unsafe source is shown as written, never joined onto `base_dir`.
+    let resolved = if is_url || !safe_local {
         src.to_string()
     } else {
         base_dir.join(src).to_string_lossy().to_string()
@@ -434,13 +435,15 @@ pub fn image_dimensions_or_placeholder(alt: &str, src: &str, base_dir: &std::pat
 /// SEC-079: guards [`image_dimensions_or_placeholder`] against reading a file
 /// outside the document root via an absolute path or a `../` traversal.
 fn is_contained_relative(src: &str) -> bool {
-    let path = std::path::Path::new(src);
-    if path.is_absolute() {
-        return false;
-    }
-    !path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
+    // Only plain names and `.` are allowed. Checking components rather than
+    // `is_absolute()` also rejects a Windows rooted path (`/etc/passwd`, which
+    // `is_absolute()` reports as relative there) and a drive prefix (`C:x`).
+    std::path::Path::new(src).components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    })
 }
 
 /// Read at most `IMAGE_HEADER_LIMIT` bytes from `path`.
