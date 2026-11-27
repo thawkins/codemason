@@ -629,6 +629,8 @@ mod test_team_manager_binding;
 mod test_team_name_validation;
 #[path = "test_team_poll_loop_keeps_unread.rs"]
 mod test_team_poll_loop_keeps_unread;
+#[path = "test_team_registry.rs"]
+mod test_team_registry;
 #[path = "test_team_store_atomic_update.rs"]
 mod test_team_store_atomic_update;
 #[path = "test_team_teammate_wake.rs"]

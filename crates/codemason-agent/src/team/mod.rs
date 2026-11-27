@@ -23,6 +23,7 @@
 //! | [`store`]  | `TeamStore`, `find_team_dir`, directory discovery |
 //! | [`status_history`] | `status-history.jsonl` - the last member-status transitions (FR-036) |
 //! | [`manager`]| `TeamManager` runtime for spawning/polling teammates |
+//! | [`registry`] | `TeamManagers` - per-team registry of live `TeamManager` runtimes |
 //! | [`swarm`]  | LLM decomposition of a goal into parallel subtasks |
 
 use chrono::{DateTime, Utc};
@@ -32,6 +33,7 @@ pub mod config;
 pub mod hook_ledger;
 pub mod mailbox;
 pub mod manager;
+pub mod registry;
 pub mod status_history;
 pub mod store;
 /// Swarm - fleet-style auto-decomposition into parallel subtasks.
@@ -59,10 +61,11 @@ pub use mailbox::{
 };
 pub use manager::watchdog_check_interval;
 pub use manager::{
-    HookOutcome, MAX_HOOK_FEEDBACK_BYTES, StatusTransition, TeamManager, TeamManagerSlot,
-    TeammateNextTurn, build_team_prompt_addition, poll_mailbox_once, run_hook, run_team_hook,
-    teammate_retry_backoff, validate_hook_command,
+    HookOutcome, MAX_HOOK_FEEDBACK_BYTES, StatusTransition, TeamManager, TeammateNextTurn,
+    build_team_prompt_addition, poll_mailbox_once, run_hook, run_team_hook, teammate_retry_backoff,
+    validate_hook_command,
 };
+pub use registry::TeamManagers;
 pub use status_history::{
     MAX_HISTORY_BYTES, STATUS_HISTORY_FILE, STATUS_HISTORY_LIMIT, STATUS_HISTORY_ROTATED_FILE,
     StatusHistoryEntry, history_path, read_status_history, recent_status_history,

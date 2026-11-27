@@ -48,9 +48,12 @@ fn lead() -> TeamContext {
 #[tokio::test]
 async fn test_team_binding_lead_session_gets_a_manager() {
     let (processor, tmp) = fixture();
-    assert!(processor.team_manager.get().is_none());
+    assert!(processor.team_managers.all().is_empty());
     processor.ensure_team_manager(Some(&lead()), tmp.path(), &model());
-    let manager = processor.team_manager.get().expect("manager bound");
+    let manager = processor
+        .team_managers
+        .get("bind-a")
+        .expect("manager bound");
     assert_eq!(manager.team_name, "bind-a");
     manager.shutdown_all().await.expect("shutdown");
 }
@@ -65,7 +68,7 @@ async fn test_team_binding_teammate_or_no_team_binds_nothing() {
         ..lead()
     };
     processor.ensure_team_manager(Some(&teammate), tmp.path(), &model());
-    assert!(processor.team_manager.get().is_none());
+    assert!(processor.team_managers.all().is_empty());
 }
 
 #[tokio::test]
@@ -76,13 +79,13 @@ async fn test_team_binding_without_agent_manager_is_a_no_op() {
     std::fs::create_dir_all(tmp.path().join(".codemason")).expect(".codemason");
     TeamStore::create("bind-a", "lead-sess", tmp.path(), true).expect("create team");
     processor.ensure_team_manager(Some(&lead()), tmp.path(), &model());
-    assert!(processor.team_manager.get().is_none());
+    assert!(processor.team_managers.all().is_empty());
 }
 
 // -- Rebinding (review P0-4) -------------------------------------------------
 
 use codemason_agent::team::{
-    Mailbox, MemberStatus, MessageType, TeamManager, TeamManagerSlot, TeamMember, TeamStatus,
+    Mailbox, MemberStatus, MessageType, TeamManager, TeamManagers, TeamMember, TeamStatus,
 };
 use codemason_agent::tool::{TeamManagerInterface, Tool, ToolContext};
 
@@ -104,85 +107,29 @@ fn manager_for(
 }
 
 #[tokio::test]
-async fn test_team_binding_slot_set_replace_clear() {
-    let (processor, tmp) = fixture();
-    let slot = TeamManagerSlot::default();
-    let a = manager_for(&processor, tmp.path(), "slot-a");
-    let b = manager_for(&processor, tmp.path(), "slot-b");
-    assert!(slot.set(Arc::clone(&a)).is_ok());
-    assert!(slot.set(Arc::clone(&b)).is_err(), "set does not overwrite");
-    let old = slot.replace(Arc::clone(&b)).expect("replaced");
-    assert_eq!(old.team_name, "slot-a");
-    assert_eq!(slot.get().expect("bound").team_name, "slot-b");
-    assert!(slot.clear().is_some());
-    assert!(slot.get().is_none());
-}
-
-#[tokio::test]
-async fn test_team_binding_slot_reports_a_gone_team_as_stale() {
-    let (processor, tmp) = fixture();
-    let slot = TeamManagerSlot::default();
-    let a = manager_for(&processor, tmp.path(), "stale-a");
-    assert!(slot.set(Arc::clone(&a)).is_ok());
-    assert!(slot.stale().is_none(), "a live team is not stale");
-
-    TeamStore::update(&a.team_dir, |c| {
-        c.status = TeamStatus::Disbanded;
-        Ok(())
-    })
-    .expect("disband");
-    assert!(slot.stale().is_some(), "a disbanded team is stale");
-
-    std::fs::remove_dir_all(&a.team_dir).expect("remove");
-    assert!(slot.stale().is_some(), "a deleted team is stale");
-}
-
-#[tokio::test]
 async fn test_team_binding_rebinds_from_a_cleaned_up_team() {
     let (processor, tmp) = fixture();
     let first = manager_for(&processor, tmp.path(), "first");
-    assert!(processor.team_manager.set(Arc::clone(&first)).is_ok());
+    assert!(processor.team_managers.bind(Arc::clone(&first)).is_ok());
     std::fs::remove_dir_all(&first.team_dir).expect("cleanup first");
 
     processor.ensure_team_manager(Some(&lead()), tmp.path(), &model());
-    assert_eq!(
-        processor.team_manager.get().expect("bound").team_name,
-        "bind-a"
-    );
+    assert!(processor.team_managers.get("first").is_none(), "pruned");
+    assert!(processor.team_managers.get("bind-a").is_some());
 }
 
 #[tokio::test]
 async fn test_team_binding_keeps_a_live_manager_of_another_team() {
-    // One processor serves many sessions in `serve` mode: a session leading a
-    // different team must not displace a live manager (the slot would flip on
-    // every step and strand each team's running teammates).
+    // One processor serves many teams: binding a second team must not
+    // displace a live manager of another team.
     let (processor, tmp) = fixture();
     let other = manager_for(&processor, tmp.path(), "other");
-    assert!(processor.team_manager.set(Arc::clone(&other)).is_ok());
+    assert!(processor.team_managers.bind(Arc::clone(&other)).is_ok());
 
     processor.ensure_team_manager(Some(&lead()), tmp.path(), &model());
-    assert_eq!(
-        processor.team_manager.get().expect("bound").team_name,
-        "other"
-    );
-}
-
-#[tokio::test]
-async fn test_team_binding_clear_if_leaves_a_manager_bound_meanwhile() {
-    let (processor, tmp) = fixture();
-    let slot = TeamManagerSlot::default();
-    let seen = manager_for(&processor, tmp.path(), "seen");
-    let newer = manager_for(&processor, tmp.path(), "newer");
-    assert!(slot.set(Arc::clone(&seen)).is_ok());
-    // Another task rebinds between the caller's inspection and its clear.
-    slot.replace(Arc::clone(&newer));
-    assert!(
-        !slot.clear_if(&seen),
-        "a manager that is no longer bound is not cleared"
-    );
-    assert_eq!(slot.get().expect("bound").team_name, "newer");
-    assert!(slot.clear_if(&newer));
-    assert!(slot.get().is_none());
+    let kept = processor.team_managers.get("other").expect("kept");
+    assert!(Arc::ptr_eq(&kept, &other));
+    assert!(processor.team_managers.get("bind-a").is_some());
 }
 
 #[tokio::test]
