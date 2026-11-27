@@ -470,6 +470,43 @@ pub struct ModelRef {
     pub model_id: String,
 }
 
+impl ModelRef {
+    /// Build a reference from its two parts.
+    fn from_parts((provider_id, model_id): (&str, &str)) -> Self {
+        Self {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+        }
+    }
+
+    /// Parse `provider/model`, splitting at the first `/`; the model part may
+    /// itself contain `/` (`openrouter/meta/llama`). Returns `None` when there
+    /// is no `/`. Either part may be empty.
+    #[must_use]
+    pub fn split_slash(text: &str) -> Option<Self> {
+        text.split_once('/').map(Self::from_parts)
+    }
+
+    /// Parse `provider/model` or, when there is no `/`, `provider:model`.
+    /// Returns `None` when there is neither separator (a bare model id is
+    /// ambiguous without a default provider). Either part may be empty.
+    #[must_use]
+    pub fn split_slash_or_colon(text: &str) -> Option<Self> {
+        text.split_once('/')
+            .or_else(|| text.split_once(':'))
+            .map(Self::from_parts)
+    }
+
+    /// Parse a trimmed `provider/model`, rejecting an empty provider or model.
+    #[must_use]
+    pub fn parse_strict(text: &str) -> Option<Self> {
+        text.trim()
+            .split_once('/')
+            .filter(|(p, m)| !p.is_empty() && !m.is_empty())
+            .map(Self::from_parts)
+    }
+}
+
 /// Complete definition of an agent, including its model, prompt, and permissions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInfo {

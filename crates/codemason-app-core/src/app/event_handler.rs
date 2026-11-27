@@ -142,11 +142,8 @@ impl App {
 
             // Apply current model override to plan agent
             if let Some(ref model_str) = self.session.selected_model {
-                if let Some((provider, model)) = model_str.split_once('/') {
-                    plan.model = Some(ModelRef {
-                        provider_id: provider.to_string(),
-                        model_id: model.to_string(),
-                    });
+                if let Some(model) = ModelRef::split_slash(model_str) {
+                    plan.model = Some(model);
                 }
             }
 

@@ -1749,12 +1749,7 @@ impl AgentManager {
 /// Returns `None` when the string carries no separator (a bare model id is
 /// ambiguous without a default provider).
 fn parse_model_ref(s: &str) -> Option<ModelRef> {
-    s.split_once('/')
-        .or_else(|| s.split_once(':'))
-        .map(|(provider, model_id)| ModelRef {
-            provider_id: provider.to_string(),
-            model_id: model_id.to_string(),
-        })
+    ModelRef::split_slash_or_colon(s)
 }
 
 /// Apply an explicit model override to an agent, falling back to the user's

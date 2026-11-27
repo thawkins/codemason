@@ -1024,11 +1024,7 @@ impl App {
                             .session
                             .selected_model
                             .as_deref()
-                            .and_then(|s| s.split_once('/'))
-                            .map(|(p, m)| codemason_agent::agent::ModelRef {
-                                provider_id: p.to_string(),
-                                model_id: m.to_string(),
-                            });
+                            .and_then(codemason_agent::agent::ModelRef::split_slash);
                         let Some(model_ref) = model_ref else {
                             self.status = format!("research: cluster '{name}' no model selected");
                             self.append_assistant_text(&format!(

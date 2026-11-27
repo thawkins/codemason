@@ -88,11 +88,7 @@ impl App {
             .session
             .selected_model
             .as_deref()
-            .and_then(|s| s.split_once('/'))
-            .map(|(p, m)| ModelRef {
-                provider_id: p.to_string(),
-                model_id: m.to_string(),
-            })
+            .and_then(ModelRef::split_slash)
             .or_else(|| self.session.agent_info.model.clone());
         let Some(model_ref) = resolved_model else {
             self.status = "[warn] No model selected - use /model to choose".to_string();

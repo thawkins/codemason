@@ -208,15 +208,10 @@ impl Tool for TeamSpawnTool {
             }
         }
         // Parse optional per-teammate model override ("provider_id/model_id").
-        let teammate_model: Option<ModelRef> =
-            input.get("model").and_then(|v| v.as_str()).and_then(|s| {
-                s.split_once('/')
-                    .or_else(|| s.split_once(':'))
-                    .map(|(p, m)| ModelRef {
-                        provider_id: p.to_string(),
-                        model_id: m.to_string(),
-                    })
-            });
+        let teammate_model: Option<ModelRef> = input
+            .get("model")
+            .and_then(|v| v.as_str())
+            .and_then(ModelRef::split_slash_or_colon);
 
         // Parse optional memory scope.
         let memory_scope = match input.get("memory").and_then(|v| v.as_str()) {

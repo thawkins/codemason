@@ -16,13 +16,7 @@ use super::context::inject_dynamic_context;
 /// Parse a model reference in either `provider/model` or `provider:model` format.
 #[must_use]
 pub fn parse_model_ref(model_str: &str) -> Option<crate::agent::ModelRef> {
-    model_str
-        .split_once('/')
-        .or_else(|| model_str.split_once(':'))
-        .map(|(provider, model)| crate::agent::ModelRef {
-            provider_id: provider.to_string(),
-            model_id: model.to_string(),
-        })
+    crate::agent::ModelRef::split_slash_or_colon(model_str)
 }
 
 /// Resolve the agent used for an inline skill invocation in the current session.
