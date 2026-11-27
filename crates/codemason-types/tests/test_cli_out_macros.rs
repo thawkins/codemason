@@ -114,6 +114,9 @@ fn test_partial_write_then_error_is_a_failure() {
     assert_eq!(out.0.bytes, b"data", "the bytes still reached the writer");
 }
 
+// Unix-only, like the probe it drives: the probe closes its streams through
+// `std::os::fd` raw descriptors, which do not exist on Windows.
+#[cfg(unix)]
 #[test]
 fn test_macros_do_not_panic_when_stdout_and_stderr_are_closed() {
     // Re-executes this test binary as a probe, because the only way to prove a
@@ -209,6 +212,7 @@ fn test_a_filter_that_names_no_test_exits_zero_and_reports_no_probe() {
 }
 
 /// The marker content the probe writes once it has driven every macro.
+#[cfg(unix)]
 const PROBE_FINISHED: &str = "ran: macros drove the closed streams";
 
 /// The number preceding `label` in the harness's output, if it wrote one.
@@ -235,6 +239,7 @@ fn counted(stream: &str, label: &str) -> u64 {
 /// stale file, and passes the path through `CODEMASON_CLI_OUT_PROBE_MARKER`, because
 /// a path derived from the child's own pid could never match what the parent
 /// checks.
+#[cfg(unix)]
 fn probe_marker() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
@@ -244,6 +249,7 @@ fn probe_marker() -> std::path::PathBuf {
 }
 
 /// The marker path the parent handed this probe, if any.
+#[cfg(unix)]
 fn inherited_probe_marker() -> Option<std::path::PathBuf> {
     std::env::var_os("CODEMASON_CLI_OUT_PROBE_MARKER").map(std::path::PathBuf::from)
 }
@@ -257,12 +263,9 @@ fn inherited_probe_marker() -> Option<std::path::PathBuf> {
 /// therefore always passes `CODEMASON_CLI_OUT_PROBE_MARKER`; selected as a child
 /// probe it closes the streams, and selected inside the parent's own run - with
 /// no marker, and with the parent's own streams left alone - it is a no-op.
+#[cfg(unix)]
 #[test]
 fn test_macro_output_probe() {
-    if !cfg!(unix) {
-        return;
-    }
-
     // Announce that the probe body ran, before the streams are closed: the
     // parent's only other evidence would be the harness's own output, which the
     // next lines send to /dev/null.
