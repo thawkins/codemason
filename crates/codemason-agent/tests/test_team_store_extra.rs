@@ -3,6 +3,8 @@
 //! blocking), the `initialize_existing_without_config` recovery path, and the
 //! `find_project_teams_dir` walk-up.
 
+#![allow(unsafe_code)] // Rust 2024 `set_var` for the HOME redirect below.
+
 use codemason_agent::team::{
     TeamStore, find_project_teams_dir, global_teams_dir, slugify_team_name,
 };
@@ -164,4 +166,34 @@ async fn blocking_store_wrappers_round_trip() {
         .await
         .expect("load by name blocking");
     by_name.save_blocking().await.expect("save blocking");
+}
+
+#[test]
+fn find_project_teams_dir_stops_below_the_home_folder() {
+    // `~/.codemason` is the legacy global dir, never a project marker.
+    let _env = crate::global_env_lock();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = tmp.path().join("home");
+    let project = home.join("project").join("src");
+    std::fs::create_dir_all(&project).expect("project");
+    std::fs::create_dir_all(home.join(".codemason")).expect("home .codemason");
+    let previous = std::env::var_os("HOME");
+    // SAFETY: the binary-wide env lock is held for the whole mutation.
+    unsafe { std::env::set_var("HOME", &home) };
+
+    let without_own = find_project_teams_dir(&project);
+    std::fs::create_dir_all(home.join("project").join(".codemason")).expect(".codemason");
+    let with_own = find_project_teams_dir(&project);
+
+    // SAFETY: as above.
+    match previous {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    assert_eq!(without_own, None, "home's .codemason is not the project's");
+    assert_eq!(
+        with_own,
+        Some(home.join("project").join(".codemason").join("teams")),
+        "a project's own .codemason below home is still found"
+    );
 }

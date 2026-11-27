@@ -104,10 +104,26 @@ pub fn slugify_team_name(raw: &str) -> String {
 
 /// Walk up from `working_dir` to find the nearest project `.codemason/` directory,
 /// returning `[PROJECT]/.codemason/teams/`.
+///
+/// The walk stops below the user's home folder: `~/.codemason` is codemason's
+/// legacy global directory, not a project, so a project under home without a
+/// `.codemason/` of its own has no project teams directory. Both the OS home
+/// and an overriding `HOME` count as home.
 #[must_use]
 pub fn find_project_teams_dir(working_dir: &Path) -> Option<PathBuf> {
+    // Compared in canonical form: on Windows the same folder can be spelled
+    // with an 8.3 short name (`C:\Users\TIMHAW~1`), as `%TEMP%` often is.
+    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let homes: Vec<PathBuf> = [dirs::home_dir(), codemason_config::user_dirs::home_dir()]
+        .into_iter()
+        .flatten()
+        .map(|home| canonical(&home))
+        .collect();
     let mut current = working_dir;
     loop {
+        if homes.contains(&canonical(current)) {
+            return None;
+        }
         let candidate = current.join(".codemason");
         if candidate.is_dir() {
             return Some(candidate.join("teams"));
