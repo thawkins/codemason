@@ -2359,31 +2359,11 @@ impl SessionProcessor {
         #[allow(clippy::needless_borrow)]
         let session_id: &str = &session_id_arc;
 
-        // 1. Store user message
-        {
-            let _scope = profiler.scope("storage.user_message.create");
-            let msg = user_msg.clone();
-            self.storage_op(move |s| s.create_message(&msg)).await?;
-        }
-        self.event_bus.publish(Event::MessageStart {
-            session_id: session_id.to_string(),
-            message_id: user_msg.id.clone(),
-        });
-
-        // Activity log: generate a RunId for this turn and record the user
-        // message. The run_id is threaded through the loop to link all
-        // events (model messages, tool calls, tool results, termination)
-        // for this turn.
-        let run_id = codemason_types::id::RunId::new();
-        let user_content = user_msg.text_content();
-        let user_msg_id = user_msg.id.clone();
+        // 1. Store user message, then start the turn's activity-log run.
+        let run_id = self
+            .store_turn_user_message(session_id, &user_msg, &profiler)
+            .await?;
         let turn_user_msg_id = user_msg.id.clone();
-        let run_id_for_user = run_id.clone();
-        self.record_activity_event(move |log| {
-            log.record_model_message(&run_id_for_user, "user", &user_content, Some(user_msg_id))
-                .map(Some)
-        })
-        .await;
 
         // ACP agents (spec `openhands` FR-022): when the active agent is bound to
         // an external ACP agent, relay the turn to it over JSON-RPC on stdio
@@ -2434,6 +2414,113 @@ impl SessionProcessor {
         let publish_run_cost_summary =
             self.run_cost_summary_publisher(session_id, &turn, usage_accum.clone());
 
+        // 3-5. System prompt, chat history, and the agent-loop setup.
+        let (env, mut state) = self
+            .prepare_turn_loop(TurnScope {
+                session_id,
+                session_id_arc: &session_id_arc,
+                agent,
+                turn: &turn,
+                profiler: &profiler,
+                cancel_flag: &cancel_flag,
+                run_id,
+                turn_user_msg_id,
+                publish_run_cost_summary: &publish_run_cost_summary,
+            })
+            .await?;
+
+        // 6. Agent loop
+        loop {
+            if let std::ops::ControlFlow::Break(exit) = self.run_loop_step(&env, &mut state).await {
+                match exit {
+                    StepExit::Continue => continue,
+                    StepExit::Break => break,
+                    StepExit::Return(result) => return result,
+                }
+            }
+        }
+
+        // 7. Finalize
+        self.finish_turn(env, state, &session_recorder).await
+    }
+
+    /// Persist the turn's user message, announce it on the bus, and record it
+    /// in the activity log under a fresh run id.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - the session the turn belongs to.
+    /// * `user_msg` - the user message that opens the turn.
+    /// * `profiler` - the agent-loop profiler for the storage scope.
+    ///
+    /// # Returns
+    ///
+    /// The [`codemason_types::id::RunId`] that links every activity-log event
+    /// of this turn, or the storage error that prevented the message from
+    /// being stored.
+    async fn store_turn_user_message(
+        &self,
+        session_id: &str,
+        user_msg: &Message,
+        profiler: &Arc<crate::session::profiler::AgentLoopProfiler>,
+    ) -> Result<codemason_types::id::RunId> {
+        {
+            let _scope = profiler.scope("storage.user_message.create");
+            let msg = user_msg.clone();
+            self.storage_op(move |s| s.create_message(&msg)).await?;
+        }
+        self.event_bus.publish(Event::MessageStart {
+            session_id: session_id.to_string(),
+            message_id: user_msg.id.clone(),
+        });
+
+        // Activity log: generate a RunId for this turn and record the user
+        // message. The run_id is threaded through the loop to link all
+        // events (model messages, tool calls, tool results, termination)
+        // for this turn.
+        let run_id = codemason_types::id::RunId::new();
+        let user_content = user_msg.text_content();
+        let user_msg_id = user_msg.id.clone();
+        let run_id_for_user = run_id.clone();
+        self.record_activity_event(move |log| {
+            log.record_model_message(&run_id_for_user, "user", &user_content, Some(user_msg_id))
+                .map(Some)
+        })
+        .await;
+        Ok(run_id)
+    }
+
+    /// Build the system prompt, the chat history and the agent-loop state for
+    /// a turn whose client has already been prepared (steps 3-5 of
+    /// [`Self::process_user_message`]).
+    ///
+    /// # Arguments
+    ///
+    /// * `scope` - the turn's borrowed inputs (session, agent, client,
+    ///   profiler, cancel flag, run id, cost-summary publisher).
+    ///
+    /// # Returns
+    ///
+    /// The read-only [`TurnEnv`] every loop phase consults and the mutable
+    /// [`TurnState`] the loop threads through its steps, or the error from
+    /// building the prompt, loading the history, or storing the assistant
+    /// placeholder.
+    async fn prepare_turn_loop<'a>(
+        &self,
+        scope: TurnScope<'a>,
+    ) -> Result<(TurnEnv<'a>, TurnState)> {
+        let TurnScope {
+            session_id,
+            session_id_arc,
+            agent,
+            turn,
+            profiler,
+            cancel_flag,
+            run_id,
+            turn_user_msg_id,
+            publish_run_cost_summary,
+        } = scope;
+
         // 3. Build system prompt
         let system_prompt = self
             .build_turn_system_prompt(
@@ -2443,7 +2530,7 @@ impl SessionProcessor {
                 &turn.working_dir,
                 turn.team_context.as_ref(),
                 &turn.alias_table,
-                &profiler,
+                profiler,
             )
             .await?;
 
@@ -2452,22 +2539,15 @@ impl SessionProcessor {
         // `context_window` so the orchestrator does not re-resolve it below.
         // PERF-032: the returned history is already an `Arc`, shared with the
         // session-state cache by refcount (no per-turn transcript clone).
-        let (chat_messages, mut last_reported_input_tokens, context_window) = self
+        let (chat_messages, last_reported_input_tokens, context_window) = self
             .build_turn_chat_messages(
                 session_id,
                 agent,
                 &turn.model_ref,
                 &turn.session_config,
-                &profiler,
+                profiler,
             )
             .await?;
-        // Compression hysteresis for this turn starts false; the LLM stage
-        // sets it through `LoopState` when compaction actually runs.
-        let mut compressed_this_turn = false;
-        // P-6: hold the per-turn chat history as `Arc<Vec<ChatMessage>>`
-        // so the per-retry `ChatRequest` can share it by refcount bump
-        // instead of cloning the entire `Vec` on every attempt.
-        let mut chat_messages: std::sync::Arc<Vec<ChatMessage>> = chat_messages;
 
         // 5. Agent loop setup
         let max_steps = agent.max_steps.unwrap_or(1024) as usize;
@@ -2477,7 +2557,7 @@ impl SessionProcessor {
         let agent_is_subagent = agent.mode == crate::agent::AgentMode::Subagent;
         self.event_bus.set_step(session_id, 0);
         let tool_definitions: std::sync::Arc<Vec<ToolDefinition>> = self
-            .turn_tool_definitions(session_id, &turn, max_steps, agent_is_subagent)
+            .turn_tool_definitions(session_id, turn, max_steps, agent_is_subagent)
             .await;
         // P-7: prime the tool-definition byte cache alongside the definitions
         // cache so the per-step request-size estimator can reuse the sum.
@@ -2493,36 +2573,7 @@ impl SessionProcessor {
         } else {
             None
         };
-        let mut assistant_parts: std::sync::Arc<Vec<MessagePart>> = std::sync::Arc::new(Vec::new());
-        let mut agent_switch_requested = false;
-        let mut agent_complete_requested = false;
-        // Set when a tool call stalls past `TOOL_WATCHDOG_TIMEOUT`; the run is
-        // terminated after the tool phase.
-        let mut watchdog_timed_out = false;
-        // Set to true after injecting the sub-agent summary nudge so we only
-        // nudge once per run. See [`SUBAGENT_SUMMARY_NUDGE`].
-        let mut subagent_summary_nudged = false;
-        // Count of stall nudges fed to a primary agent this turn. See
-        // [`crate::session::stall_guard`].
-        let mut stall_nudges: u32 = 0;
-        // M-008 (amended): count of assistant parts at the last interim save.
-        // Parts are only ever pushed or popped (stream deltas, per-call
-        // tool-call appends, the sub-agent narration nudge) - never mutated in
-        // place - so the count alone is a sufficient save gate. Tool-call
-        // parts are included so the child session's SQLite row stays in step
-        // with the run and the TUI output-view overlay can render steps live.
-        let mut last_interim_parts_count: Option<usize> = None;
         let total_start = Instant::now();
-        // `/undo`: the pre-turn workspace snapshot is taken once, before the
-        // turn's first tool call.
-        let mut turn_snapshot_taken = false;
-        let mut cumulative_model_wait_ms: u64 = 0;
-        let mut compaction_attempted_this_turn = false;
-        // Finish reason observed by the inner loop for the most recent
-        // assistant message this turn. Used at finalise time to publish
-        // a visible notice for interactive sessions when the provider
-        // silently truncated the reply.
-        let mut last_finish_reason: Option<FinishReason> = None;
         // Clear any stale entry from a previous turn on this session so the
         // `last_message_end_reason()` getter only ever observes THIS run's
         // terminal `MessageEnd` reason.
@@ -2530,13 +2581,6 @@ impl SessionProcessor {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session_id);
-        // P-17: reuse the per-step ContentPart buffers across loop iterations
-        // to avoid reallocating two `Vec<ContentPart>`s on every step. They
-        // are emptied via `std::mem::take` when pushed into `chat_messages`,
-        // so the next iteration starts with an empty (but allocated) Vec.
-        let mut assistant_content_parts: Vec<ContentPart> = Vec::new();
-        let mut tool_result_parts: Vec<ContentPart> = Vec::new();
-        let mut bg_parts: Vec<ContentPart> = Vec::new();
 
         let assistant_msg_id = {
             let _scope = profiler.scope("storage.assistant_placeholder.create");
@@ -2551,1547 +2595,934 @@ impl SessionProcessor {
         // `build_turn_chat_messages` instead of re-resolving it from the
         // provider registry a second time.
 
-        // 6. Agent loop
         // T-008: take a working copy of the loop tracker (when a goal-driven
         // loop is active) so the FR-017 guard below can consult and update it
         // without holding the `active_loops` lock across an await point.
         // Plain chat turns have no tracker entry and skip the guard entirely.
-        let mut loop_tracker: Option<crate::session::loop_state::LoopTracker> =
+        let loop_tracker: Option<crate::session::loop_state::LoopTracker> =
             self.active_loops.read().await.get(session_id).copied();
         // T-011 (FR-016): the human-interrupt flag for this session's loop,
         // raised by the TUI `Esc` path
         // ([`SessionProcessor::request_loop_interrupt`]). Plain chat turns
         // have no flag and keep cancelling through `cancel_flag` alone.
         let loop_interrupt_flag = self.active_loop_interrupts.read().get(session_id).cloned();
-        let interrupt_requested = |cancel_flag: &AtomicBool| -> bool {
-            cancel_flag.load(Ordering::Relaxed)
-                || loop_interrupt_flag
-                    .as_ref()
-                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        };
-        // T-011 (FR-016): set when a safe-point interrupt check fired - the
-        // post-loop handler persists the partial turn and ends it normally.
-        let mut loop_interrupted = false;
-        // FR-033: how many times a blocking Stop hook has already been fed back
-        // to the model this turn. Bounded so a hook that always blocks cannot
-        // spin the loop forever.
-        const MAX_STOP_CONTINUATIONS: u32 = 3;
-        let mut stop_continuations: u32 = 0;
-        // PERF-036: memoise the per-step request-token estimate so a step that
-        // appends one message does not re-sum the whole history + tool schemas.
-        let mut token_tracker = crate::compaction::estimator::RequestTokenTracker::new();
-        // Local estimate of the request whose `input_tokens` the provider last
-        // reported. The pre-send check adds the growth since then to the
-        // (otherwise one-request-stale) provider count. `None` at turn start
-        // and after compaction replaces the history.
-        let mut reported_anchor_estimate: Option<usize> = None;
-        // Threshold a successful, history-reducing pre-send compaction must be
-        // confirmed under (by the next provider report) before auto-compaction
-        // re-arms within this turn.
-        let mut rearm_below_threshold: Option<usize> = None;
         // A sub-agent running here can now take messages from the user.
         if let Some(manager) = self.agent_manager.get() {
             manager.open_inbox(session_id);
         }
-        loop {
-            // T-008 (FR-010, FR-013, FR-014, FR-017): the stop-flag guard.
-            // No stage of this iteration may run once the loop's stop flag is
-            // set; a budget breach stops the run BEFORE the LLM request, and
-            // the per-iteration step counter is persisted back so the gate is
-            // visible to the next iteration and to external terminations.
-            if let Some(tracker) = loop_tracker.as_ref() {
-                if tracker.is_stopped() {
-                    debug!("Loop already stopped; no further stage will run");
-                    break;
+
+        let env = TurnEnv {
+            session_id,
+            session_id_arc,
+            agent,
+            turn,
+            profiler,
+            cancel_flag,
+            loop_interrupt_flag,
+            run_id,
+            turn_user_msg_id,
+            publish_run_cost_summary,
+            system_prompt,
+            context_window,
+            max_steps,
+            tool_definitions,
+            write_capable_tools,
+            cached_tool_names,
+            assistant_msg_id,
+            total_start,
+        };
+        let state = TurnState {
+            // P-6: hold the per-turn chat history as `Arc<Vec<ChatMessage>>`
+            // so the per-retry `ChatRequest` can share it by refcount bump
+            // instead of cloning the entire `Vec` on every attempt.
+            chat_messages,
+            last_reported_input_tokens,
+            // Compression hysteresis for this turn starts false; the LLM stage
+            // sets it through `LoopState` when compaction actually runs.
+            compressed_this_turn: false,
+            assistant_parts: std::sync::Arc::new(Vec::new()),
+            agent_switch_requested: false,
+            agent_complete_requested: false,
+            watchdog_timed_out: false,
+            subagent_summary_nudged: false,
+            stall_nudges: 0,
+            last_interim_parts_count: None,
+            turn_snapshot_taken: false,
+            cumulative_model_wait_ms: 0,
+            compaction_attempted_this_turn: false,
+            last_finish_reason: None,
+            // P-17: reuse the per-step ContentPart buffers across loop iterations
+            // to avoid reallocating two `Vec<ContentPart>`s on every step. They
+            // are emptied via `std::mem::take` when pushed into `chat_messages`,
+            // so the next iteration starts with an empty (but allocated) Vec.
+            assistant_content_parts: Vec::new(),
+            tool_result_parts: Vec::new(),
+            bg_parts: Vec::new(),
+            loop_tracker,
+            loop_interrupted: false,
+            stop_continuations: 0,
+            // PERF-036: memoise the per-step request-token estimate so a step that
+            // appends one message does not re-sum the whole history + tool schemas.
+            token_tracker: crate::compaction::estimator::RequestTokenTracker::new(),
+            reported_anchor_estimate: None,
+            rearm_below_threshold: None,
+        };
+        Ok((env, state))
+    }
+
+    /// Run one iteration of the agent loop: the stop/interrupt gates, the step
+    /// counter, the pre-send compaction check, the LLM exchange, and then
+    /// either the text-only finish or the tool phase followed by background
+    /// injection and the interim save.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    ///
+    /// # Returns
+    ///
+    /// `ControlFlow::Continue(())` when the step ran to its end, or
+    /// `ControlFlow::Break` with the [`StepExit`] the loop must apply
+    /// (`continue`, `break`, or return from the turn).
+    async fn run_loop_step(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+    ) -> std::ops::ControlFlow<StepExit> {
+        self.run_step_gates(env, state).await?;
+        let _step_scope = env.profiler.scope("loop.step.total");
+        let step = self.advance_step(env, state).await?;
+        self.publish_tools_sent(env, step);
+
+        // Maybe compact (per-iteration pre-send check) - T-008, FR-003,
+        // FR-006, FR-008. When `compaction.auto` is enabled and compaction
+        // has not already run this turn, estimate the request token load
+        // and - if it exceeds `context_window - max(output, buffer)` -
+        // invoke the OpenCode-derived summarisation runner before sending
+        // the user prompt to the LLM.
+        let llm_request_start = std::time::Instant::now();
+        self.maybe_compact_before_send(env, state).await;
+
+        let mut llm_result = self.run_llm_exchange(env, state, llm_request_start).await?;
+        self.collect_response_parts(env, state, step, &llm_result, llm_request_start)
+            .await;
+
+        // No tool calls - the loop ends here. The agent's text response
+        // is the final answer for this turn.
+        if llm_result.tool_calls.is_empty() {
+            return std::ops::ControlFlow::Break(
+                self.finish_text_only_step(env, state, step, &mut llm_result)
+                    .await,
+            );
+        }
+
+        // T-011 (FR-016): safe point between the LLM response and the
+        // tool phase - an interrupt raised while the model was responding
+        // aborts the run before any tool executes.
+        self.interrupt_safe_point(env, state).await?;
+
+        // Tool dispatch phase
+        self.run_tool_phase(env, state, step, &mut llm_result)
+            .await?;
+
+        self.inject_background_and_save(env, state).await;
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// The gates that run before a step does any work: the loop's stop flag,
+    /// the inter-stage interrupt safe point, the sub-agent suspension wait,
+    /// user-inbox delivery, and the loop tracker's budget gate.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    ///
+    /// # Returns
+    ///
+    /// `ControlFlow::Break(StepExit::Break)` when the loop must stop before
+    /// this step, `ControlFlow::Continue(())` otherwise.
+    async fn run_step_gates(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+    ) -> std::ops::ControlFlow<StepExit> {
+        let session_id = env.session_id;
+        // T-008 (FR-010, FR-013, FR-014, FR-017): the stop-flag guard.
+        // No stage of this iteration may run once the loop's stop flag is
+        // set; a budget breach stops the run BEFORE the LLM request, and
+        // the per-iteration step counter is persisted back so the gate is
+        // visible to the next iteration and to external terminations.
+        if let Some(tracker) = state.loop_tracker.as_ref() {
+            if tracker.is_stopped() {
+                debug!("Loop already stopped; no further stage will run");
+                return std::ops::ControlFlow::Break(StepExit::Break);
+            }
+        }
+        // T-011 (FR-016): inter-stage safe point - an interrupt raised
+        // since the last stage boundary aborts the loop before any
+        // further stage runs, ahead even of the budget gate (first stop
+        // wins; the user's intervention takes precedence).
+        self.interrupt_safe_point(env, state).await?;
+        // Sub-agent suspension gate (spec `agentui` FR-035): when this
+        // child session was parked by `AgentManager::suspend_task`, wait
+        // here - no further stage runs - until `resume_task` clears the
+        // flag or the user cancels the turn (a set cancel flag falls
+        // through to the cancel branch below). The check is a DashMap
+        // lookup; sessions not spawned by the agent manager (plain chat
+        // turns, ACP and remote dispatch) have no entry and skip the
+        // gate entirely. Suspension takes effect between steps: the LLM
+        // call or tool execution in progress when the request lands
+        // finishes first.
+        self.wait_while_suspended(session_id, env.cancel_flag).await;
+        // Messages the user typed into this running sub-agent's session
+        // join the conversation here, between steps, where the tool
+        // results of the previous step are already in place.
+        self.deliver_user_inbox(session_id, &mut state.chat_messages)
+            .await;
+        if let Some(tracker) = state.loop_tracker.as_mut() {
+            if self
+                .begin_loop_step(session_id, env.turn, env.total_start, tracker)
+                .await
+                .is_break()
+            {
+                return std::ops::ControlFlow::Break(StepExit::Break);
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// A loop safe point: when a goal-driven loop is active and the user has
+    /// interrupted (cancel flag or loop interrupt flag), terminate the loop as
+    /// `interrupted` and mark the turn so the post-loop handler persists the
+    /// partial turn.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    ///
+    /// # Returns
+    ///
+    /// `ControlFlow::Break(StepExit::Break)` when the interrupt fired,
+    /// `ControlFlow::Continue(())` otherwise.
+    async fn interrupt_safe_point(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+    ) -> std::ops::ControlFlow<StepExit> {
+        if state.loop_tracker.is_some() && env.interrupt_requested() {
+            self.terminate_loop_on_interrupt(
+                env.session_id,
+                Some(env.total_start),
+                Some(&env.turn.working_dir),
+            )
+            .await;
+            state.loop_interrupted = true;
+            return std::ops::ControlFlow::Break(StepExit::Break);
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Advance the step counter, enforce the agent's step limit, and honour
+    /// the user's cancel flag.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    ///
+    /// # Returns
+    ///
+    /// `ControlFlow::Continue(step)` with the 1-based number of this step;
+    /// `ControlFlow::Break(StepExit::Break)` when the step limit was reached;
+    /// `ControlFlow::Break(StepExit::Return(..))` with the empty assistant
+    /// message when the turn was cancelled.
+    async fn advance_step(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+    ) -> std::ops::ControlFlow<StepExit, usize> {
+        let session_id = env.session_id;
+        let max_steps = env.max_steps;
+        let step = {
+            let _scope = env.profiler.scope("loop.step.setup");
+            // P-13: compute the new step once, set it, and reuse the
+            // value. The previous form called `current_step` twice
+            // (once to read, once to re-read after `set_step`); the
+            // second read is redundant because we already know the
+            // value we just stored.
+            let new_step = self.event_bus.current_step(session_id) + 1;
+            self.event_bus.set_step(session_id, new_step);
+            new_step as usize
+        };
+        if step > max_steps {
+            warn!("Reached max steps ({}), stopping agent loop", max_steps);
+            self.event_bus.publish(Event::AgentError {
+                session_id: session_id.to_string(),
+                error: format!("Reached maximum steps ({max_steps})"),
+            });
+            return std::ops::ControlFlow::Break(StepExit::Break);
+        }
+
+        if env.cancel_flag.load(Ordering::Relaxed) {
+            let cumulative_model_wait_ms = state.cumulative_model_wait_ms;
+            // One cancellation is one event: the warn carries the step and
+            // the timing breakdown rather than emitting a second info line
+            // for the same cancellation.
+            let total_elapsed_ms = env.total_start.elapsed().as_millis() as u64;
+            let other_ms = total_elapsed_ms.saturating_sub(cumulative_model_wait_ms);
+            warn!(
+                session_id = %session_id,
+                step,
+                total_ms = total_elapsed_ms,
+                model_wait_ms = cumulative_model_wait_ms,
+                other_ms = other_ms,
+                "Agent loop cancelled by user - timing breakdown: total={}ms, model_wait={}ms, other={}ms",
+                total_elapsed_ms,
+                cumulative_model_wait_ms,
+                other_ms
+            );
+            self.finish_cancelled_turn(
+                session_id,
+                std::mem::take(&mut state.assistant_parts),
+                env.assistant_msg_id.clone(),
+                &env.run_id,
+            )
+            .await;
+            tokio::task::yield_now().await;
+            (env.publish_run_cost_summary)(total_elapsed_ms);
+            return std::ops::ControlFlow::Break(StepExit::Return(Ok(Message::new(
+                session_id,
+                Role::Assistant,
+                vec![],
+            ))));
+        }
+        debug!("Agent loop step {}/{}", step, max_steps);
+        std::ops::ControlFlow::Continue(step)
+    }
+
+    /// Publish the turn's tool list (`Event::ToolsSent`) on its first step.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `step` - the 1-based number of the current step.
+    fn publish_tools_sent(&self, env: &TurnEnv<'_>, step: usize) {
+        // P-4: only publish `ToolsSent` on the first step of the turn -
+        // the TUI only renders the tool list once and the previous form
+        // cloned ~111 `String`s (or cloned the cached `Arc<[String]>`
+        // into a `Vec<String>`) on every step. When `cached_tool_names`
+        // is populated we hand the `Arc<[String]>` straight to the event
+        // (P-4/D-1), so the publish is a single refcount bump.
+        if step == 1 && !env.tool_definitions.is_empty() {
+            let _scope = env.profiler.scope("loop.step.publish_tools");
+            let tool_names: Vec<String> = match &env.cached_tool_names {
+                Some(names) => names.iter().cloned().collect(),
+                None => env
+                    .tool_definitions
+                    .iter()
+                    .map(|t| t.name.clone())
+                    .collect(),
+            };
+            self.event_bus.publish(Event::ToolsSent {
+                session_id: env.session_id_arc.to_string(),
+                tools: tool_names,
+            });
+        }
+    }
+
+    /// The per-iteration pre-send compaction check: estimate the request's
+    /// token load and, when the trigger fires, summarise the stored history
+    /// and continue from the compacted form.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state (history, token anchors and
+    ///   compaction flags are updated in place).
+    async fn maybe_compact_before_send(&self, env: &TurnEnv<'_>, state: &mut TurnState) {
+        let session_id = env.session_id;
+        let turn = env.turn;
+        let context_window = env.context_window;
+        if turn.session_config.compaction.auto && !state.compaction_attempted_this_turn {
+            // PERF-036: incremental estimate - only changed messages are
+            // re-costed; the tool term reuses the caller's cached byte
+            // hint so ~111 schemas are not re-serialised each step. The
+            // estimate is always needed: the provider count describes the
+            // previous request and misses the reply and tool results
+            // appended since, which only the local estimate can measure.
+            let estimate = state.token_tracker.estimate(
+                Some(env.system_prompt.as_ref()),
+                &state.chat_messages,
+                &env.tool_definitions[..],
+                self.get_cached_tool_definition_bytes(),
+            );
+            let current_tokens = crate::compaction::anchored_request_tokens(
+                state.last_reported_input_tokens,
+                state.reported_anchor_estimate,
+                estimate,
+            );
+            let decision = crate::compaction::evaluate_trigger(
+                &turn.session_config.compaction,
+                estimate,
+                current_tokens,
+                context_window,
+                0,
+            );
+            // One condensed line per turn: `should_compact` plus the
+            // numbers that explain it. The full decision struct was
+            // logged here on every step, which is noise at `debug` level.
+            if decision.should_compact {
+                tracing::debug!(
+                    session_id,
+                    effective_tokens = decision.effective_tokens,
+                    threshold = decision.threshold,
+                    context_window,
+                    "pre-send compaction trigger fired"
+                );
+            }
+            if decision.should_compact {
+                // Summarise the stored history, replace it in storage
+                // with the compaction message plus the verbatim recent
+                // tail, and send that from this step on.
+                state.compaction_attempted_this_turn = true;
+                if let Some(outcome) = self
+                    .run_pre_send_compaction(
+                        session_id,
+                        turn,
+                        &state.chat_messages,
+                        context_window,
+                        &env.assistant_msg_id,
+                    )
+                    .await
+                {
+                    let new_chat = crate::compaction::convert::messages_to_chat_messages(
+                        &outcome.new_messages,
+                    );
+                    state.chat_messages = Arc::new(new_chat);
+                    state.compressed_this_turn = true;
+                    // The history was replaced: no provider count
+                    // describes it yet, so drop the anchor.
+                    state.reported_anchor_estimate = None;
+                    // Re-arm candidate: the trigger stays disarmed until
+                    // the provider's next report confirms the request is
+                    // back under the threshold (the local estimate can
+                    // undercount system/tool overhead). A summary that
+                    // did not shrink the history never re-arms.
+                    if outcome.compressed_tokens < outcome.original_tokens {
+                        state.rearm_below_threshold = Some(decision.threshold);
+                    }
+                    state.last_reported_input_tokens = outcome.compressed_tokens as u64;
+                    self.persist_last_reported_input_tokens(
+                        session_id,
+                        outcome.compressed_tokens as u64,
+                    );
+                    tracing::info!(
+                        original_tokens = outcome.original_tokens,
+                        compressed_tokens = outcome.compressed_tokens,
+                        kept_messages = outcome.kept_message_count,
+                        "pre-send compaction applied"
+                    );
                 }
             }
-            // T-011 (FR-016): inter-stage safe point - an interrupt raised
-            // since the last stage boundary aborts the loop before any
-            // further stage runs, ahead even of the budget gate (first stop
-            // wins; the user's intervention takes precedence).
-            if loop_tracker.is_some() && interrupt_requested(&cancel_flag) {
-                self.terminate_loop_on_interrupt(
+        }
+    }
+
+    /// Call the LLM for this step (with its internal retry) and fold the
+    /// exchange's bookkeeping back into the turn state: the loop-state fields
+    /// the stage updated, the provider-reported input tokens, the compaction
+    /// re-arm, the token anchor, and the loop tracker's token tally.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    /// * `llm_request_start` - when this step's request started.
+    ///
+    /// # Returns
+    ///
+    /// `ControlFlow::Continue(result)` with the step's LLM result, or
+    /// `ControlFlow::Break(StepExit::Return(Err(..)))` after an exhausted
+    /// LLM-stage failure terminated the loop.
+    async fn run_llm_exchange(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+        llm_request_start: Instant,
+    ) -> std::ops::ControlFlow<StepExit, crate::session::loop_steps::LlmStepResult> {
+        let session_id = env.session_id;
+        let turn = env.turn;
+        // Call LLM with retry + handle stream events
+        let mut loop_state = crate::session::loop_steps::LoopState {
+            chat_messages: std::mem::take(&mut state.chat_messages),
+            assistant_parts: std::sync::Arc::clone(&state.assistant_parts),
+            cumulative_model_wait_ms: state.cumulative_model_wait_ms,
+            compressed_this_turn: state.compressed_this_turn,
+            compaction_attempted_this_turn: state.compaction_attempted_this_turn,
+            last_reported_input_tokens: state.last_reported_input_tokens,
+            last_finish_reason: state.last_finish_reason.clone(),
+        };
+        // T-007 (FR-011): an exhausted LLM-stage failure (transport error
+        // after the internal retry budget, permanent API error, context
+        // overflow that no compaction path could recover) is unrecoverable
+        // - terminate an active loop with status `error`, surface the
+        // reason, and stop without another request.
+        let llm_result = match self
+            .call_llm_step(
+                session_id,
+                env.agent,
+                turn,
+                &mut loop_state,
+                &env.tool_definitions,
+                &env.system_prompt,
+                env.context_window,
+                llm_request_start,
+                env.profiler,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                self.terminate_loop_on_fatal_error(
                     session_id,
-                    Some(total_start),
+                    &e,
+                    Some(env.total_start),
                     Some(&turn.working_dir),
                 )
                 .await;
-                loop_interrupted = true;
-                break;
+                return std::ops::ControlFlow::Break(StepExit::Return(Err(e)));
             }
-            // Sub-agent suspension gate (spec `agentui` FR-035): when this
-            // child session was parked by `AgentManager::suspend_task`, wait
-            // here - no further stage runs - until `resume_task` clears the
-            // flag or the user cancels the turn (a set cancel flag falls
-            // through to the cancel branch below). The check is a DashMap
-            // lookup; sessions not spawned by the agent manager (plain chat
-            // turns, ACP and remote dispatch) have no entry and skip the
-            // gate entirely. Suspension takes effect between steps: the LLM
-            // call or tool execution in progress when the request lands
-            // finishes first.
-            self.wait_while_suspended(session_id, &cancel_flag).await;
-            // Messages the user typed into this running sub-agent's session
-            // join the conversation here, between steps, where the tool
-            // results of the previous step are already in place.
-            self.deliver_user_inbox(session_id, &mut chat_messages)
-                .await;
-            if let Some(tracker) = loop_tracker.as_mut() {
-                if self
-                    .begin_loop_step(session_id, &turn, total_start, tracker)
-                    .await
-                    .is_break()
-                {
-                    break;
-                }
-            }
-            let _step_scope = profiler.scope("loop.step.total");
-            let step = {
-                let _scope = profiler.scope("loop.step.setup");
-                // P-13: compute the new step once, set it, and reuse the
-                // value. The previous form called `current_step` twice
-                // (once to read, once to re-read after `set_step`); the
-                // second read is redundant because we already know the
-                // value we just stored.
-                let new_step = self.event_bus.current_step(session_id) + 1;
-                self.event_bus.set_step(session_id, new_step);
-                new_step as usize
-            };
-            if step > max_steps {
-                warn!("Reached max steps ({}), stopping agent loop", max_steps);
-                self.event_bus.publish(Event::AgentError {
-                    session_id: session_id.to_string(),
-                    error: format!("Reached maximum steps ({max_steps})"),
-                });
-                break;
-            }
+        };
+        state.chat_messages = loop_state.chat_messages;
+        state.compressed_this_turn = loop_state.compressed_this_turn;
+        state.compaction_attempted_this_turn = loop_state.compaction_attempted_this_turn;
+        state.last_reported_input_tokens = loop_state.last_reported_input_tokens;
+        if let Some(reason) = loop_state.last_finish_reason.clone() {
+            state.last_finish_reason = Some(reason);
+        }
 
-            if cancel_flag.load(Ordering::Relaxed) {
-                // One cancellation is one event: the warn carries the step and
-                // the timing breakdown rather than emitting a second info line
-                // for the same cancellation.
-                let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
-                let other_ms = total_elapsed_ms.saturating_sub(cumulative_model_wait_ms);
-                warn!(
-                    session_id = %session_id,
-                    step,
-                    total_ms = total_elapsed_ms,
-                    model_wait_ms = cumulative_model_wait_ms,
-                    other_ms = other_ms,
-                    "Agent loop cancelled by user - timing breakdown: total={}ms, model_wait={}ms, other={}ms",
-                    total_elapsed_ms,
-                    cumulative_model_wait_ms,
-                    other_ms
-                );
-                self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, &run_id)
-                    .await;
-                tokio::task::yield_now().await;
-                publish_run_cost_summary(total_elapsed_ms);
-                return Ok(Message::new(session_id, Role::Assistant, vec![]));
+        if llm_result.last_input_tokens > 0 {
+            state.last_reported_input_tokens = llm_result.last_input_tokens;
+            // Persist the provider-reported input tokens into the session state cache
+            // so the next turn starts with the same usage value shown in the TUI.
+            self.persist_last_reported_input_tokens(session_id, llm_result.last_input_tokens);
+            // First provider report after a reducing compaction: re-arm
+            // auto-compaction only when it confirms usage recovered below
+            // the threshold; otherwise stay disarmed for the turn.
+            if let Some(threshold) = state.rearm_below_threshold.take()
+                && llm_result.last_input_tokens <= threshold as u64
+            {
+                state.compaction_attempted_this_turn = false;
             }
-            debug!("Agent loop step {}/{}", step, max_steps);
-
-            // P-4: only publish `ToolsSent` on the first step of the turn -
-            // the TUI only renders the tool list once and the previous form
-            // cloned ~111 `String`s (or cloned the cached `Arc<[String]>`
-            // into a `Vec<String>`) on every step. When `cached_tool_names`
-            // is populated we hand the `Arc<[String]>` straight to the event
-            // (P-4/D-1), so the publish is a single refcount bump.
-            if step == 1 && !tool_definitions.is_empty() {
-                let _scope = profiler.scope("loop.step.publish_tools");
-                let tool_names: Vec<String> = match &cached_tool_names {
-                    Some(names) => names.iter().cloned().collect(),
-                    None => tool_definitions.iter().map(|t| t.name.clone()).collect(),
-                };
-                self.event_bus.publish(Event::ToolsSent {
-                    session_id: session_id_arc.to_string(),
-                    tools: tool_names,
-                });
-            }
-
-            // Maybe compact (per-iteration pre-send check) - T-008, FR-003,
-            // FR-006, FR-008. When `compaction.auto` is enabled and compaction
-            // has not already run this turn, estimate the request token load
-            // and - if it exceeds `context_window - max(output, buffer)` -
-            // invoke the OpenCode-derived summarisation runner before sending
-            // the user prompt to the LLM.
-            let llm_request_start = std::time::Instant::now();
-
-            if turn.session_config.compaction.auto && !compaction_attempted_this_turn {
-                // PERF-036: incremental estimate - only changed messages are
-                // re-costed; the tool term reuses the caller's cached byte
-                // hint so ~111 schemas are not re-serialised each step. The
-                // estimate is always needed: the provider count describes the
-                // previous request and misses the reply and tool results
-                // appended since, which only the local estimate can measure.
-                let estimate = token_tracker.estimate(
-                    Some(system_prompt.as_ref()),
-                    &chat_messages,
-                    &tool_definitions[..],
+            // Anchor the provider count to the local estimate of the
+            // request it describes (`chat_messages` is still exactly what
+            // was sent; this step's reply is appended below).
+            if turn.session_config.compaction.auto {
+                state.reported_anchor_estimate = Some(state.token_tracker.estimate(
+                    Some(env.system_prompt.as_ref()),
+                    &state.chat_messages,
+                    &env.tool_definitions[..],
                     self.get_cached_tool_definition_bytes(),
+                ));
+            }
+        }
+        // T-008 (FR-014): tally this exchange's tokens into the loop
+        // tracker so the next iteration's budget gate sees the updated
+        // cost (the gate fires BEFORE the next request).
+        if let Some(tracker) = state.loop_tracker.as_mut() {
+            tracker.record_tokens(llm_result.last_input_tokens, llm_result.last_output_tokens);
+            self.persist_loop_tracker(session_id, tracker).await;
+        }
+        std::ops::ControlFlow::Continue(llm_result)
+    }
+
+    /// Record this step's response: push the reasoning and text parts onto the
+    /// assistant message, publish `Event::ModelResponse` with the model
+    /// timing, and log the assistant text and the model step in the activity
+    /// log.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    /// * `step` - the 1-based number of the current step.
+    /// * `llm_result` - the step's LLM result.
+    /// * `llm_request_start` - when this step's request started.
+    async fn collect_response_parts(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+        step: usize,
+        llm_result: &crate::session::loop_steps::LlmStepResult,
+        llm_request_start: Instant,
+    ) {
+        let session_id = env.session_id;
+        let turn = env.turn;
+        // Collect parts from this turn
+        {
+            let _scope = env.profiler.scope("loop.response.process");
+            if !llm_result.reasoning_buffer.is_empty() {
+                // FR-011: the provider's signature is recorded beside the
+                // reasoning text, so a profile that declares
+                // `echo_reasoning` can replay the signed block verbatim.
+                std::sync::Arc::make_mut(&mut state.assistant_parts).push(MessagePart::Reasoning {
+                    text: llm_result.reasoning_buffer.clone(),
+                    signature: llm_result.reasoning_signature.clone(),
+                });
+            }
+            if !llm_result.text_buffer.is_empty() {
+                let response_preview =
+                    codemason_types::truncate_bytes(&llm_result.text_buffer, 200);
+                let model_elapsed_ms = llm_request_start.elapsed().as_millis() as u64;
+                state.cumulative_model_wait_ms += model_elapsed_ms;
+                let llm_recorder = LlmRecorder::from_subsystem(&self.telemetry);
+                llm_recorder.record_duration(
+                    &turn.model_ref.model_id,
+                    &turn.model_ref.provider_id,
+                    model_elapsed_ms as f64,
                 );
-                let current_tokens = crate::compaction::anchored_request_tokens(
-                    last_reported_input_tokens,
-                    reported_anchor_estimate,
-                    estimate,
-                );
-                let decision = crate::compaction::evaluate_trigger(
-                    &turn.session_config.compaction,
-                    estimate,
-                    current_tokens,
-                    context_window,
-                    0,
-                );
-                // One condensed line per turn: `should_compact` plus the
-                // numbers that explain it. The full decision struct was
-                // logged here on every step, which is noise at `debug` level.
-                if decision.should_compact {
-                    tracing::debug!(
-                        session_id,
-                        effective_tokens = decision.effective_tokens,
-                        threshold = decision.threshold,
-                        context_window,
-                        "pre-send compaction trigger fired"
-                    );
-                }
-                if decision.should_compact {
-                    // Summarise the stored history, replace it in storage
-                    // with the compaction message plus the verbatim recent
-                    // tail, and send that from this step on.
-                    compaction_attempted_this_turn = true;
-                    if let Some(outcome) = self
-                        .run_pre_send_compaction(
-                            session_id,
-                            &turn,
-                            &chat_messages,
-                            context_window,
-                            &assistant_msg_id,
-                        )
-                        .await
-                    {
-                        let new_chat = crate::compaction::convert::messages_to_chat_messages(
-                            &outcome.new_messages,
-                        );
-                        chat_messages = Arc::new(new_chat);
-                        compressed_this_turn = true;
-                        // The history was replaced: no provider count
-                        // describes it yet, so drop the anchor.
-                        reported_anchor_estimate = None;
-                        // Re-arm candidate: the trigger stays disarmed until
-                        // the provider's next report confirms the request is
-                        // back under the threshold (the local estimate can
-                        // undercount system/tool overhead). A summary that
-                        // did not shrink the history never re-arms.
-                        if outcome.compressed_tokens < outcome.original_tokens {
-                            rearm_below_threshold = Some(decision.threshold);
-                        }
-                        last_reported_input_tokens = outcome.compressed_tokens as u64;
-                        self.persist_last_reported_input_tokens(
-                            session_id,
-                            outcome.compressed_tokens as u64,
-                        );
-                        tracing::info!(
-                            original_tokens = outcome.original_tokens,
-                            compressed_tokens = outcome.compressed_tokens,
-                            kept_messages = outcome.kept_message_count,
-                            "pre-send compaction applied"
-                        );
-                    }
-                }
-            }
-
-            // Call LLM with retry + handle stream events
-            let mut loop_state = crate::session::loop_steps::LoopState {
-                chat_messages: std::mem::take(&mut chat_messages),
-                assistant_parts: std::sync::Arc::clone(&assistant_parts),
-                cumulative_model_wait_ms,
-                compressed_this_turn,
-                compaction_attempted_this_turn,
-                last_reported_input_tokens,
-                last_finish_reason: last_finish_reason.clone(),
-            };
-            // T-007 (FR-011): an exhausted LLM-stage failure (transport error
-            // after the internal retry budget, permanent API error, context
-            // overflow that no compaction path could recover) is unrecoverable
-            // - terminate an active loop with status `error`, surface the
-            // reason, and stop without another request.
-            let mut llm_result = match self
-                .call_llm_step(
-                    session_id,
-                    agent,
-                    &turn,
-                    &mut loop_state,
-                    &tool_definitions,
-                    &system_prompt,
-                    context_window,
-                    llm_request_start,
-                    &profiler,
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    self.terminate_loop_on_fatal_error(
-                        session_id,
-                        &e,
-                        Some(total_start),
-                        Some(&turn.working_dir),
-                    )
-                    .await;
-                    return Err(e);
-                }
-            };
-            chat_messages = loop_state.chat_messages;
-            compressed_this_turn = loop_state.compressed_this_turn;
-            compaction_attempted_this_turn = loop_state.compaction_attempted_this_turn;
-            last_reported_input_tokens = loop_state.last_reported_input_tokens;
-            if let Some(reason) = loop_state.last_finish_reason.clone() {
-                last_finish_reason = Some(reason);
-            }
-
-            if llm_result.last_input_tokens > 0 {
-                last_reported_input_tokens = llm_result.last_input_tokens;
-                // Persist the provider-reported input tokens into the session state cache
-                // so the next turn starts with the same usage value shown in the TUI.
-                self.persist_last_reported_input_tokens(session_id, llm_result.last_input_tokens);
-                // First provider report after a reducing compaction: re-arm
-                // auto-compaction only when it confirms usage recovered below
-                // the threshold; otherwise stay disarmed for the turn.
-                if let Some(threshold) = rearm_below_threshold.take()
-                    && llm_result.last_input_tokens <= threshold as u64
-                {
-                    compaction_attempted_this_turn = false;
-                }
-                // Anchor the provider count to the local estimate of the
-                // request it describes (`chat_messages` is still exactly what
-                // was sent; this step's reply is appended below).
-                if turn.session_config.compaction.auto {
-                    reported_anchor_estimate = Some(token_tracker.estimate(
-                        Some(system_prompt.as_ref()),
-                        &chat_messages,
-                        &tool_definitions[..],
-                        self.get_cached_tool_definition_bytes(),
-                    ));
-                }
-            }
-            // T-008 (FR-014): tally this exchange's tokens into the loop
-            // tracker so the next iteration's budget gate sees the updated
-            // cost (the gate fires BEFORE the next request).
-            if let Some(tracker) = loop_tracker.as_mut() {
-                tracker.record_tokens(llm_result.last_input_tokens, llm_result.last_output_tokens);
-                self.persist_loop_tracker(session_id, tracker).await;
-            }
-
-            // Collect parts from this turn
-            {
-                let _scope = profiler.scope("loop.response.process");
-                if !llm_result.reasoning_buffer.is_empty() {
-                    // FR-011: the provider's signature is recorded beside the
-                    // reasoning text, so a profile that declares
-                    // `echo_reasoning` can replay the signed block verbatim.
-                    std::sync::Arc::make_mut(&mut assistant_parts).push(MessagePart::Reasoning {
-                        text: llm_result.reasoning_buffer.clone(),
-                        signature: llm_result.reasoning_signature.clone(),
-                    });
-                }
-                if !llm_result.text_buffer.is_empty() {
-                    let response_preview =
-                        codemason_types::truncate_bytes(&llm_result.text_buffer, 200);
-                    let model_elapsed_ms = llm_request_start.elapsed().as_millis() as u64;
-                    cumulative_model_wait_ms += model_elapsed_ms;
-                    let llm_recorder = LlmRecorder::from_subsystem(&self.telemetry);
-                    llm_recorder.record_duration(
-                        &turn.model_ref.model_id,
-                        &turn.model_ref.provider_id,
-                        model_elapsed_ms as f64,
-                    );
-                    self.event_bus.publish(Event::ModelResponse {
-                        session_id: session_id.to_string(),
-                        text: response_preview,
-                        elapsed_ms: model_elapsed_ms,
-                        input_tokens: llm_result.last_input_tokens,
-                        output_tokens: llm_result.last_output_tokens,
-                    });
-                    std::sync::Arc::make_mut(&mut assistant_parts).push(MessagePart::Text {
-                        text: llm_result.text_buffer.clone(),
-                    });
-                    // Activity log: record the assistant's text response.
-                    let assistant_text = llm_result.text_buffer.clone();
-                    let assistant_msg_id_for_log = assistant_msg_id.clone();
-                    let run_id_for_msg = run_id.clone();
-                    self.record_activity_event(move |log| {
-                        log.record_model_message(
-                            &run_id_for_msg,
-                            "assistant",
-                            &assistant_text,
-                            Some(assistant_msg_id_for_log),
-                        )
-                        .map(Some)
-                    })
-                    .await;
-                }
-            }
-
-            // Activity log: how this model response ended, so a step that
-            // ended a turn can be compared with normal tool-calling steps.
-            {
-                let model_step = codemason_types::activity::ModelStep {
-                    step: step as u64,
-                    model: format!("{}/{}", turn.model_ref.provider_id, turn.model_ref.model_id),
-                    finish_reason: last_finish_reason
-                        .as_ref()
-                        .map_or("none", crate::session::finish_reason_label)
-                        .to_string(),
+                self.event_bus.publish(Event::ModelResponse {
+                    session_id: session_id.to_string(),
+                    text: response_preview,
+                    elapsed_ms: model_elapsed_ms,
                     input_tokens: llm_result.last_input_tokens,
                     output_tokens: llm_result.last_output_tokens,
-                    text_bytes: llm_result.text_buffer.len() as u64,
-                    reasoning_bytes: llm_result.reasoning_buffer.len() as u64,
-                    tool_calls: llm_result.tool_calls.len() as u64,
-                    elapsed_ms: llm_request_start.elapsed().as_millis() as u64,
-                };
-                let run_id_for_step = run_id.clone();
+                });
+                std::sync::Arc::make_mut(&mut state.assistant_parts).push(MessagePart::Text {
+                    text: llm_result.text_buffer.clone(),
+                });
+                // Activity log: record the assistant's text response.
+                let assistant_text = llm_result.text_buffer.clone();
+                let assistant_msg_id_for_log = env.assistant_msg_id.clone();
+                let run_id_for_msg = env.run_id.clone();
                 self.record_activity_event(move |log| {
-                    log.record_model_step(&run_id_for_step, model_step)
-                        .map(Some)
+                    log.record_model_message(
+                        &run_id_for_msg,
+                        "assistant",
+                        &assistant_text,
+                        Some(assistant_msg_id_for_log),
+                    )
+                    .map(Some)
                 })
                 .await;
             }
+        }
 
-            // No tool calls - the loop ends here. The agent's text response
-            // is the final answer for this turn.
-            if llm_result.tool_calls.is_empty() {
-                // The user wrote to this sub-agent while it was answering:
-                // keep the answer, then continue so the next step reads the
-                // message instead of ending the run without it.
-                if self
-                    .agent_manager
-                    .get()
-                    .is_some_and(|m| m.has_inbox(session_id))
-                {
-                    if !llm_result.text_buffer.is_empty() {
-                        Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                            role: "assistant".to_string(),
-                            content: ChatContent::Text(llm_result.text_buffer.clone()),
-                        });
-                    }
-                    continue;
-                }
-                // Sub-agent premature-termination guard: when a sub-agent that
-                // was actively calling tools (step > 1 implies prior tool-use
-                // steps, otherwise the loop would have broken earlier) produces
-                // a SHORT text-only response, it is almost always narration
-                // ("Now let me check ...") rather than the findings report. The
-                // model forgot to call a tool or emit findings, and the loop
-                // would silently accept the narration as the deliverable.
-                //
-                // Inject a one-shot nudge asking the model to produce its
-                // complete findings report now, then continue the loop. The
-                // next text-only response (the actual findings) terminates the
-                // loop normally.
-                if agent.mode == crate::agent::AgentMode::Subagent
-                    && step > 1
-                    && !subagent_summary_nudged
-                    && llm_result.text_buffer.len() < SUBAGENT_NARRATION_BYTE_LIMIT
-                {
-                    subagent_summary_nudged = true;
-                    let narration = std::mem::take(&mut llm_result.text_buffer);
-                    self.inject_subagent_summary_nudge(
-                        session_id,
-                        step,
-                        narration,
-                        &mut assistant_parts,
-                        &mut chat_messages,
-                    );
-                    continue;
-                }
-                // Primary-agent stall guard: a turn that ran tools and then
-                // ended on a progress note announcing its next step ("Now the
-                // full test suite."), or on a provider-truncated reply, did
-                // not finish.
-                let stalled = agent.mode != crate::agent::AgentMode::Subagent
-                    && crate::session::stall_guard::is_stalled_turn(
-                        last_finish_reason.as_ref(),
-                        step > 1,
-                        &llm_result.text_buffer,
-                    );
-                // Diagnostic for turns that end without a tool call after tool
-                // work. Every such end is logged; only a detected stall is
-                // also shown in the transcript, so a normal finish does not
-                // read as a stall. The values sit in the message text because
-                // the GUI log window drops structured fields. A large
-                // output-token count against little visible text means tokens
-                // the provider never delivered (a lost tool call); a matching
-                // count with `finish=stop` means the model chose to end the
-                // turn. The `/alog` `model_step` event records every step.
-                if step > 1 {
-                    let diagnostic = format!(
-                        "Turn ended without a tool call after tool work: step={step} \
-                         finish={} output_tokens={} text_bytes={} reasoning_bytes={}",
-                        last_finish_reason
-                            .as_ref()
-                            .map_or("none", crate::session::finish_reason_label),
-                        llm_result.last_output_tokens,
-                        llm_result.text_buffer.len(),
-                        llm_result.reasoning_buffer.len(),
-                    );
-                    tracing::warn!(session_id = %session_id, "{diagnostic}");
-                    if stalled {
-                        self.event_bus.publish(Event::AgentNotice {
-                            session_id: session_id.to_string(),
-                            message: format!("Stall detected. {diagnostic}"),
-                        });
-                    }
-                }
-                // Feed back the "continue" the user would otherwise have to
-                // type, a bounded number of times.
-                if stalled && stall_nudges < crate::session::stall_guard::MAX_STALL_NUDGES {
-                    stall_nudges += 1;
-                    self.inject_stall_nudge(
-                        session_id,
-                        step,
-                        &llm_result.text_buffer,
-                        &mut chat_messages,
-                    );
-                    continue;
-                }
-                // T-005 (FR-007, FR-010): the verification gate. A
-                // no-tool-call response from a loop with a verification
-                // command does not complete the run directly - the command's
-                // exit status decides. Success terminates with `completed`;
-                // failure with steps remaining appends the failure output as
-                // an observation and continues; failure with the budget
-                // breached ends the run as `budget_exhausted`.
-                match self
-                    .run_verification_gate(
-                        session_id,
-                        &turn,
-                        total_start,
-                        (llm_result.last_input_tokens, llm_result.last_output_tokens),
-                        loop_tracker.as_ref(),
-                    )
-                    .await
-                {
-                    Some(std::ops::ControlFlow::Break(())) => break,
-                    Some(std::ops::ControlFlow::Continue(observation)) => {
-                        Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                            role: "user".to_string(),
-                            content: ChatContent::Text(observation),
-                        });
-                        // The verification observation is a successful
-                        // observation append: reset the consecutive-failure
-                        // counter so unrelated recoverable failures do not
-                        // accumulate against the retry allowance (FR-012).
-                        if let Some(tracker) = loop_tracker.as_mut() {
-                            tracker.record_success();
-                            self.persist_loop_tracker(session_id, &tracker).await;
-                        }
-                        continue;
-                    }
-                    None => {}
-                }
-                // Goal-driven loop stop condition 1 (FR-010): a no-tool-call
-                // response with no verification command means the goal was
-                // reached - terminate with `GoalAchieved`, publish
-                // `Event::LoopTerminated`, and stop.
-                self.terminate_loop_inner(
-                    session_id,
-                    crate::session::loop_state::StopCondition::GoalAchieved,
-                    Some(total_start),
-                    Some((llm_result.last_input_tokens, llm_result.last_output_tokens)),
-                    None,
-                    None,
-                    Some(&turn.working_dir),
-                )
-                .await;
+        // Activity log: how this model response ended, so a step that
+        // ended a turn can be compared with normal tool-calling steps.
+        {
+            let model_step = codemason_types::activity::ModelStep {
+                step: step as u64,
+                model: format!("{}/{}", turn.model_ref.provider_id, turn.model_ref.model_id),
+                finish_reason: state
+                    .last_finish_reason
+                    .as_ref()
+                    .map_or("none", crate::session::finish_reason_label)
+                    .to_string(),
+                input_tokens: llm_result.last_input_tokens,
+                output_tokens: llm_result.last_output_tokens,
+                text_bytes: llm_result.text_buffer.len() as u64,
+                reasoning_bytes: llm_result.reasoning_buffer.len() as u64,
+                tool_calls: llm_result.tool_calls.len() as u64,
+                elapsed_ms: llm_request_start.elapsed().as_millis() as u64,
+            };
+            let run_id_for_step = env.run_id.clone();
+            self.record_activity_event(move |log| {
+                log.record_model_step(&run_id_for_step, model_step)
+                    .map(Some)
+            })
+            .await;
+        }
+    }
 
-                // FR-033: a Stop (`on_session_end`) hook may block the turn and
-                // return findings (the Claude `asyncRewake` shape). Fold them
-                // into a synthetic user turn and keep going, so a plugin
-                // security review can feed corrections back before the turn is
-                // accepted. Bounded so a hook that always blocks cannot loop.
-                let stop_guidance = crate::hooks::run_stop_hooks(
-                    &turn.parsed_hook_configs,
-                    &turn.working_dir,
-                    session_id,
-                )
-                .await;
-                let stop_guidance: Vec<String> = stop_guidance
-                    .into_iter()
-                    .filter(|text| !text.trim().is_empty())
-                    .collect();
-                if !stop_guidance.is_empty() && stop_continuations < MAX_STOP_CONTINUATIONS {
-                    stop_continuations += 1;
-                    self.event_bus.publish(Event::AgentNotice {
-                        session_id: session_id.to_string(),
-                        message: "A Stop hook returned findings; feeding them \
-                                  back to the model before ending the turn."
-                            .to_string(),
-                    });
-                    Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                        role: "user".to_string(),
-                        content: ChatContent::Text(stop_guidance.join("\n\n")),
-                    });
-                    continue;
-                }
-                break;
-            }
-
-            // T-011 (FR-016): safe point between the LLM response and the
-            // tool phase - an interrupt raised while the model was responding
-            // aborts the run before any tool executes.
-            if loop_tracker.is_some() && interrupt_requested(&cancel_flag) {
-                self.terminate_loop_on_interrupt(
-                    session_id,
-                    Some(total_start),
-                    Some(&turn.working_dir),
-                )
-                .await;
-                loop_interrupted = true;
-                break;
-            }
-
-            // Tool dispatch phase (kept inline due to closure complexity)
-            {
-                let _scope = profiler.scope("loop.tool_phase.total");
-                // P-17: clear the reused per-step buffers (cheap - the
-                // allocations from the previous step are retained).
-                assistant_content_parts.clear();
-                tool_result_parts.clear();
-                // FR-011 (T-018): the signed reasoning block is pushed FIRST, so
-                // it precedes both the text and the tool-use blocks of the
-                // assistant turn that answers it. Anthropic requires the
-                // thinking that decided a call to arrive before the call, which
-                // is why this push is above the text push rather than beside the
-                // tool-use push below.
-                //
-                // This is the *within-turn* half of the replay, and it is the
-                // half a history converter cannot provide: the next request of
-                // this turn is built from `chat_messages`, and this message is
-                // what gets appended to it at the end of the phase. A block
-                // recorded only in `assistant_parts` would reach the provider on
-                // next turn's rebuilt history, i.e. after the echoing turn - too
-                // late for the provider that requires it.
-                //
-                // The part is pushed unconditionally, with no profile check: the
-                // omission for a profile declaring `echo_reasoning == false` is
-                // the encoder's decision (FR-011, and
-                // `tests/test_tool_input_error.rs` refuses a converter that
-                // re-implements it here).
-                if !llm_result.reasoning_buffer.is_empty() {
-                    let text = std::mem::take(&mut llm_result.reasoning_buffer);
-                    let signature = llm_result.reasoning_signature.take();
-                    assistant_content_parts.push(ContentPart::Reasoning { text, signature });
-                }
-                // P-18: move `text_buffer` into the `ContentPart::Text` rather
-                // than cloning it. The buffer is not referenced after this
-                // point (the response-preview and no-tool-nudge paths ran
-                // earlier and already consumed whatever they needed).
-                if !llm_result.text_buffer.is_empty() {
-                    let text = std::mem::take(&mut llm_result.text_buffer);
-                    assistant_content_parts.push(ContentPart::Text { text });
-                }
-                let parallel_tool_calls = turn.session_config.experimental.parallel_tool_calls;
-                // FR-010 (T-015): a provider whose wire contract declares
-                // `supports_parallel == false` cannot carry a parallel step, so
-                // the user's `experimental.parallel_tool_calls` opt-in is
-                // demoted here - once per step, before any call is prepared -
-                // and every call below runs through the sequential arm. That
-                // arm is the same ordered pipeline with the same recorded
-                // order (FR-012), so forcing it changes the concurrency of a
-                // step and never the history it produces.
-                //
-                // The gate is a demotion only: it never turns concurrency on,
-                // and a provider that does support parallel calls is not
-                // touched. It is read per step rather than cached per turn
-                // because the lookup is a scan of fifteen rows, and a step
-                // never spans two providers.
-                //
-                // The router is the one id whose contract is not settled here:
-                // `RouterClient` forwards the canonical request to whichever
-                // downstream provider its classification picked, so the row
-                // `profile_for("router")` returns describes the canonical
-                // encoding and not the effective contract. A downstream
-                // provider that declares `supports_parallel == false` cannot be
-                // honoured through this gate (the selection is made inside
-                // `chat`, after this decision), which is a recorded gap in the
-                // task doc rather than a silently wrong answer.
-                let mut parallel_tool_calls = parallel_tool_calls;
-                if parallel_tool_calls
-                    && crate::provider::wire::profile_table::profile_for(
-                        &turn.model_ref.provider_id,
-                    )
-                    .is_none_or(|profile| !profile.supports_parallel)
-                {
-                    parallel_tool_calls = false;
-                    tracing::info!(
-                        provider = %turn.model_ref.provider_id,
-                        reason = "the provider's wire profile declares \
-                                  supports_parallel == false, so the step's tool \
-                                  calls run sequentially (FR-010)",
-                        "parallel tool dispatch demoted to sequential"
-                    );
-                }
-                // One entry per call of this step, in the provider's order.
-                let mut futures: Vec<PendingStepCall> = Vec::new();
-                // P-8/P-9: build a single `ToolContext` for this step and clone
-                // it per tool call. `active_spec` is read once here (P-9) so
-                // the async lock is acquired at most once per step instead of
-                // once per tool call. The cloned value is also reused by the
-                // auto-spec-task-update block below (P-10).
-                let active_spec_id = self.active_spec.read().await.clone();
-                let allowed_roots = turn
-                    .session_config
-                    .dirs
-                    .allowed_roots
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect();
-                // FR-015: resolve a provider spelling onto the codemason tool BEFORE
-                // the unknown-tool check, and rewrite the pending call so every
-                // later stage - the loop restriction, `LOOP_WRITE_TOOLS`, the
-                // destructive-action classifier, the hooks, the permission
-                // layer, the repeat guard, the telemetry key and the history
-                // record - sees one canonical name, and the provider spelling
-                // never reaches the persisted form (FR-001).
-                //
-                // This sits at the top of the tool phase rather than above it so
-                // the per-call decision below reads the name it dispatches: a
-                // step with no tool calls never builds a table, and a call is
-                // canonicalised exactly when it is about to be resolved (FR-012's
-                // "before any guard").
-                //
-                // A registered name always wins (the resolver checks the
-                // registry first), and a spelling the table cannot resolve - or
-                // whose target this build does not register - is left untouched,
-                // so it reaches the unknown-tool refusal naming the spelling the
-                // client actually sent. With `tools.aliases` absent this loop is
-                // a no-op over an empty table (FR-015's "behaviour shall be
-                // unchanged").
-                for tc in &mut llm_result.tool_calls {
-                    // Two spellings resolve onto a registered tool, in this
-                    // order: the declarative alias table (FR-015), then the
-                    // registry's own unique ASCII-case-insensitive match - so
-                    // `CALCULATOR` for `calculator`, or `bash` for `Bash`,
-                    // reaches the tool instead of being refused as unknown. The
-                    // exact spelling still wins both lookups, and a name neither
-                    // resolves is left untouched so it reaches the unknown-tool
-                    // refusal naming the spelling the client actually sent.
-                    let canonical = crate::tool::alias_table::resolve_inbound_tool_name(
-                        &turn.tool_registry,
-                        &turn.alias_table,
-                        &tc.name,
-                    )
-                    .or_else(|| canonical_dispatch_name(&turn.tool_registry, &tc.name));
-                    let Some(canonical) = canonical else {
-                        continue;
-                    };
-                    tracing::info!(
-                        spelling = %tc.name,
-                        tool = %canonical,
-                        "alias spelling resolved to a codemason tool name (FR-015)"
-                    );
-                    tc.name = canonical;
-                }
-                // Teams outside the TUI (`run`, `serve`, ACP): bind the team
-                // runtime for the team this session leads before any team
-                // tool runs, so `team_spawn` has a manager to spawn with.
-                self.ensure_team_manager(
-                    turn.team_context.as_deref(),
-                    &turn.working_dir,
-                    &turn.model_ref,
-                );
-                let base_tool_ctx = ToolContext {
-                    session_id: session_id.to_string(),
-                    working_dir: turn.working_dir.clone(),
-                    event_bus: self.event_bus.clone(),
-                    storage: Some(self.session_manager.storage().clone()),
-                    agent_manager: self.agent_manager.get().cloned(),
-                    active_model: Some(turn.model_ref.clone()),
-                    provider_registry: Some(Arc::clone(&self.provider_registry)),
-                    team_context: turn.team_context.clone(),
-                    team_manager: self
-                        .team_manager
-                        .get()
-                        .map(|tm| tm as Arc<dyn crate::tool::TeamManagerInterface>),
-                    code_index: self.code_index_for(&turn.working_dir),
-                    bg_service: self.bg_service.get().cloned(),
-                    spec_manager: self.spec_manager.get().cloned(),
-                    active_spec_id: active_spec_id.clone(),
-                    config: Some(std::sync::Arc::clone(&turn.session_config)),
-                    allowed_roots,
-                    cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
-                    // SEC-codemason-team-001: blueprint seed files must run through
-                    // the same permission decision as ordinary tool calls.
-                    permission_checker: Some(self.permission_checker.clone()),
-                    read_timestamps: self.read_timestamps.clone(),
-                    canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
-                    tool_registry: turn.tool_registry.clone(),
-                };
-                // FR-012: one dispatched call's outcome in the concurrent arm,
-                // carrying the position the call had in the provider's step so
-                // the batch is applied in that order whichever arm produced it.
-                type ToolStepResult = (
-                    ToolExecutionResult,
-                    Option<WatchdogIdentity>,
-                    Option<String>,
-                    usize,
-                );
-                // A step's outcome as the concurrent arm holds it: either the
-                // outcome a *run* will produce (a future) or an outcome the
-                // prepare loop already decided and that is emitted in its own
-                // position by the drain below (a refused call). Both are kept in
-                // one list, so a refused call's record lands exactly where the
-                // provider put the call instead of ahead of every sibling.
-                type StepOutcomeSlot =
-                    std::pin::Pin<Box<dyn std::future::Future<Output = ToolStepResult> + Send>>;
-                type PendingStepCall = Result<StepOutcomeSlot, Box<ToolStepResult>>;
-                type ToolExecutionResult = Result<
-                    (
-                        PendingToolCall,
-                        Value,
-                        ToolCallStatus,
-                        Option<Value>,
-                        Option<String>,
-                        u64,
-                        String,
-                        Option<Value>,
-                        Vec<String>,
-                    ),
-                    ToolTaskError,
-                >;
-                let result_profiler = profiler.clone();
-                // P-15: collect one `ToolCallBatchEntry` per tool call so a
-                // single `Event::ToolCallBatch` can be published at the end of
-                // the step, giving consumers an atomic view of all tool calls.
-                // The per-call events are still published inside the spawned
-                // task as a fallback (PERFPLAN Milestone D risk note).
-                let mut batch_entries: Vec<codemason_types::event::ToolCallBatchEntry> = Vec::new();
-                // T-007 (FR-011): set when a tool task panicked or failed to
-                // join - an unrecoverable failure that terminates an active
-                // loop after the tool phase. Panics discovered OUTSIDE the
-                // result handler are staged here first: the closure captures
-                // `tool_panic` mutably, so direct writes elsewhere are
-                // rejected by the borrow checker.
-                let mut tool_panic: Option<String> = None;
-                let mut staged_tool_panic: Option<String> = None;
-                // FR-013: the step's view of the unresolved-approval tracker.
-                //
-                // Read through a free function rather than captured by the
-                // handler: the handler already borrows three step-local buffers
-                // mutably, so it must stay a borrowing closure, and a captured
-                // tracker would make it a `move` closure that takes those
-                // buffers with it. Passing the tracker per call keeps the one
-                // shared state - not a copy of it - on the FR-013 guard.
-                let step_pending_verdicts = self.pending_verdicts.clone();
-                let mut handle_tool_execution_result = |result: ToolExecutionResult| {
-                    let _scope = result_profiler.scope("loop.tool_phase.handle_result");
-                    match result {
-                        Ok((
-                            tc,
-                            input,
-                            status,
-                            output_value,
-                            error,
-                            duration_ms,
-                            result_content,
-                            tool_metadata,
-                            additional_contexts,
-                        )) => {
-                            let success = status == ToolCallStatus::Completed;
-                            // FR-013 (T-016): a result is appended only for a
-                            // call whose permission verdict has resolved - so no
-                            // history append can run while a permission verdict
-                            // is unresolved. The record is still written, so the
-                            // conversation carries the `tool_use` the provider
-                            // listed and no model call is left orphaned, but it
-                            // carries no output and no error: an unapproved
-                            // call's outcome must never reach the model as if it
-                            // had run. The guard reads a state the permission
-                            // stage settled on every exit path, so reaching it
-                            // means a verdict did not resolve - a wedged wait, an
-                            // aborted task - and it is logged rather than passed
-                            // over.
-                            let verdict_resolved =
-                                result_is_appendable(&step_pending_verdicts, session_id, &tc.id);
-                            if !verdict_resolved {
-                                tracing::warn!(
-                                    session_id = %session_id,
-                                    call_id = %tc.id,
-                                    tool = %tc.name,
-                                    "tool result withheld: the call's permission verdict \
-                                     has not resolved (FR-013)"
-                                );
-                            }
-                            std::sync::Arc::make_mut(&mut assistant_parts).push(
-                                MessagePart::ToolCall {
-                                    tool: tc.name.clone(),
-                                    call_id: tc.id.clone(),
-                                    state: Box::new(ToolCallState {
-                                        status: if verdict_resolved {
-                                            status
-                                        } else {
-                                            ToolCallStatus::Pending
-                                        },
-                                        input,
-                                        output: if verdict_resolved { output_value } else { None },
-                                        error: if verdict_resolved {
-                                            error.clone()
-                                        } else {
-                                            None
-                                        },
-                                        duration_ms: Some(duration_ms),
-                                    }),
-                                },
-                            );
-                            // The result content: nothing for an unresolved
-                            // verdict (FR-013), the rendered result otherwise.
-                            if verdict_resolved {
-                                tool_result_parts.push(ContentPart::ToolResult {
-                                    tool_use_id: tc.id.clone(),
-                                    content: tool_result_content_for_llm(
-                                        &tc.name,
-                                        &result_content,
-                                        tool_metadata.as_ref(),
-                                    ),
-                                    // FR-014/T-017: from the recorded status.
-                                    is_error: status.is_error(),
-                                });
-                            }
-                            // FR-033: a PostToolUse hook (for example a Claude
-                            // security-guidance pattern check) may return
-                            // `hookSpecificOutput.additionalContext`; fold it
-                            // into this tool's result so the model sees the
-                            // guidance on the next iteration.
-                            for guidance in additional_contexts {
-                                tool_result_parts.push(ContentPart::Text {
-                                    text: format!("[{} hook guidance]\n{guidance}", tc.name),
-                                });
-                            }
-                            // P-15: capture the per-call summary for the batch
-                            // event. Reuse the already-computed line count and
-                            // preview from the spawned task where available;
-                            // fall back to computing them here for the batch.
-                            let content_line_count = tool_metadata
-                                .as_ref()
-                                .and_then(|m| m.get("lines"))
-                                .and_then(serde_json::Value::as_u64)
-                                .map_or_else(|| result_content.lines().count(), |n| n as usize);
-                            // M-007: the batch event carries a truncated display
-                            // preview too (the full content is preserved in
-                            // `assistant_parts` and the activity log).
-                            const BATCH_PREVIEW_CHARS: usize = 2000;
-                            let batch_content =
-                                truncate_preview(&result_content, BATCH_PREVIEW_CHARS);
-                            batch_entries.push(codemason_types::event::ToolCallBatchEntry {
-                                call_id: tc.id.clone(),
-                                tool: tc.name.clone(),
-                                args: tc.args_json.clone(),
-                                error: error.clone(),
-                                duration_ms,
-                                content: batch_content,
-                                content_line_count,
-                                metadata: tool_metadata.clone(),
-                                success,
-                            });
-                            if let Some(meta) = tool_metadata.as_ref() {
-                                if meta.get("agent_switch").is_some()
-                                    || meta.get("agent_restore").is_some()
-                                {
-                                    agent_switch_requested = true;
-                                    return true;
-                                }
-                                if meta.get("agent_complete").is_some() {
-                                    agent_complete_requested = true;
-                                    return true;
-                                }
-                            }
-                            false
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Tool execution task panicked");
-                            tool_panic = Some(e.to_string());
-                            false
-                        }
-                    }
-                };
-
-                for (dispatch_order, tc) in llm_result.tool_calls.iter().enumerate() {
-                    let _scope = profiler.scope("loop.tool_phase.prepare_call");
-                    // C4: an interrupt raised mid-phase stops further
-                    // dispatch. Not-yet-started calls have no `ToolUse`
-                    // record in the assistant parts, so breaking here keeps
-                    // the conversation history consistent (no orphaned
-                    // tool_use); in-flight tasks complete under the
-                    // watchdog as before.
-                    if interrupt_requested(&cancel_flag) {
-                        tracing::info!(
-                            session_id = %session_id,
-                            "interrupt during tool phase; skipping remaining tool calls"
-                        );
-                        break;
-                    }
-                    // Stages 1-3 of the one ordered pipeline (FR-012): decode
-                    // the accumulated argument text once (FR-007), resolve the
-                    // tool, then validate against its declared schema (FR-008,
-                    // FR-009, FR-021). A malformed args JSON used to be silently
-                    // coerced to `{}` (six parse sites), so the tool executed
-                    // with empty arguments and the model only saw a misleading
-                    // "missing parameter X" error; and an unregistered name used
-                    // to be answered by a second, ad-hoc error. Both are now
-                    // `ToolInputError` values built by the pipeline, so the
-                    // sentence, the record status and the `is_error` flag are one
-                    // derivation and a call can be measured against the tool it
-                    // will not run.
-                    let resolved = resolve_tool_call(&turn.tool_registry, tc);
-                    // The decoded, schema-validated arguments. A refused call
-                    // keeps them in its record so the TUI can render what the
-                    // model sent; it is `Value::Null` only when the payload would
-                    // not decode at all.
-                    let input: Value = resolved.input.clone();
-                    if let Err(refusal) = &resolved.tool {
-                        // A refusal is answered here, before the tool task is
-                        // spawned, so no hook, permission check or backend call
-                        // sees it. The outcome is built by the pipeline's refusal
-                        // constructor: the loop states the content of a refusal
-                        // nowhere, so its sentence, record status and `is_error`
-                        // flag are one derivation (FR-008, FR-009, FR-021).
-                        let synthetic = ToolDispatchPipeline::refusal(
-                            &tc,
-                            refusal,
-                            input,
-                            &self.event_bus,
-                            session_id,
-                        );
-                        if parallel_tool_calls {
-                            // A refused call still occupies its position: the
-                            // record is emitted by the drain in the provider's
-                            // order, so this step and the sequential one produce
-                            // the same history (FR-012). Only the refusal's
-                            // `ToolCallEnd` is published now, by the constructor
-                            // above, so the UI closes the call out promptly.
-                            futures.push(Err(Box::new((
-                                Ok(synthetic),
-                                None,
-                                None,
-                                dispatch_order,
-                            ))));
-                            continue;
-                        }
-                        if handle_tool_execution_result(Ok(synthetic)) {
-                            break;
-                        }
-                        continue;
-                    }
-                    assistant_content_parts.push(ContentPart::ToolUse {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        input: input.clone(),
-                    });
-                    // Publish the fully-assembled tool arguments so the TUI can
-                    // render the call summary regardless of provider-specific
-                    // streaming quirks (some local providers omit ToolCallEnd
-                    // stream events for the argument payload).
-                    self.event_bus.publish(Event::ToolCallArgs {
-                        session_id: session_id.to_string(),
-                        call_id: tc.id.clone(),
-                        tool: tc.name.clone(),
-                        args: tc.args_json.clone(),
-                    });
-                    // Activity log: record the tool call.
-                    let tc_id = tc.id.clone();
-                    let tc_name = tc.name.clone();
-                    let tc_args = tc.args_json.clone();
-                    let run_id_for_tc = run_id.clone();
-                    self.record_activity_event(move |log| {
-                        log.record_tool_call(&run_id_for_tc, tc_id, tc_name, tc_args)
-                            .map(Some)
-                    })
-                    .await;
-                    // P-8/P-9: clone the per-step `ToolContext` rather than
-                    // rebuilding it (and re-acquiring the `active_spec` async
-                    // lock) for every tool call. `base_tool_ctx` is built once
-                    // before the loop; the clone is cheap (Arc refcount bumps
-                    // plus a `PathBuf`/`String` clone).
-                    let tool_ctx = base_tool_ctx.clone();
-                    let tc_clone = tc.clone();
-                    // The pipeline's context borrows these rather than cloning
-                    // them per stage: one `Arc` bump each, taken once per call.
-                    let storage_clone = self.session_manager.storage().clone();
-                    // T-015 (FR-006): resolve the analyzer client once per tool
-                    // call, outside the spawned task (the resolve performs async
-                    // config + provider I/O). `None` when the analyzer is
-                    // disabled, so the task skips it entirely.
-                    let security_analyzer = self.security_analyzer_client(&turn.model_ref).await;
-                    // T-009 (FR-008/FR-009/FR-021/FR-022): the loop
-                    // restriction guard runs inside the pipeline, before hooks
-                    // and the permission checker, so a restricted loop
-                    // cannot execute a call outside its tool set or scope.
-                    let loop_spec = self.active_loop_specs.read().await.get(session_id).cloned();
-                    // T-010 (FR-015): when the loop has destructive-action
-                    // checkpoints enabled, `auto_approve` becomes `None` so
-                    // `check_permission_with_prompt` forces the checkpoint
-                    // prompt for destructive calls even under allow rules and
-                    // in auto-approve mode (FR-024). Plain turns keep
-                    // `Some(self.auto_approve)`.
-                    let loop_checkpoint = loop_spec.as_ref().is_some_and(|spec| spec.checkpoints);
-                    let auto_approve = if loop_checkpoint {
-                        None
-                    } else {
-                        Some(self.auto_approve)
-                    };
-                    let checkpoint_timeout_secs = loop_spec
-                        .as_ref()
-                        .and_then(|spec| spec.checkpoint_timeout_secs)
-                        .map_or_else(
-                            || u64::from(self.load_config_cached().r#loop.checkpoint_timeout_secs),
-                            u64::from,
-                        );
-                    // `/undo`: record the workspace as this turn found it, before
-                    // its first tool call can change anything. Only a top-level
-                    // run on the local backend is recorded; a failure costs the
-                    // turn its file undo and nothing else.
-                    if !turn_snapshot_taken {
-                        turn_snapshot_taken = true;
-                        if agent.mode != crate::agent::AgentMode::Subagent
-                            && turn.session_config.effective_execution_backend()
-                                == codemason_config::ExecutionBackendKind::Local
-                            && let Some(repo) =
-                                crate::session::turn_snapshot::SnapshotRepo::for_working_dir(
-                                    &turn.working_dir,
-                                )
-                            && let Err(e) = repo.record_turn(session_id, &turn_user_msg_id).await
-                        {
-                            tracing::warn!(
-                                session_id = %session_id,
-                                error = %e,
-                                "pre-turn workspace snapshot failed; /undo will not restore files"
-                            );
-                        }
-                    }
-                    // T-012 (FR-018): capture the workspace BEFORE the first
-                    // write action executes. The check is cheap when already
-                    // captured (a map read); when armed, the storage-backed
-                    // snapshot runs synchronously here so no write can slip
-                    // through before the capture. Failures surface as a tool
-                    // error observation instead of executing the call.
-                    if loop_tracker.is_some()
-                        && crate::session::loop_state::LOOP_WRITE_TOOLS.contains(&tc.name.as_str())
-                    {
-                        if let Err(e) = self
-                            .ensure_pre_loop_capture(session_id, &turn.working_dir, &tc.id)
-                            .await
-                        {
-                            let err_msg = format!("pre-loop workspace snapshot failed: {e:#}");
-                            tracing::error!(
-                                session_id = %session_id,
-                                reason = %err_msg,
-                                "loop terminated: workspace capture failed (FR-018)"
-                            );
-                            self.terminate_loop_inner(
-                                session_id,
-                                crate::session::loop_state::StopCondition::UnrecoverableError,
-                                Some(total_start),
-                                None,
-                                None,
-                                Some(format!("unrecoverable error: {err_msg}")),
-                                Some(&turn.working_dir),
-                            )
-                            .await;
-                            return Err(anyhow::anyhow!(err_msg));
-                        }
-                    }
-                    // Every stage after this point lives in
-                    // `ToolDispatchPipeline::run` and nowhere
-                    // else: the task below is a thin shell that awaits it, so the
-                    // sequential arm (which awaits that future) and the concurrent
-                    // arm (which collects it into `join_all`) cannot run a
-                    // different pipeline (FR-012). This block owns only what is
-                    // per-turn rather than per-call - the loop's first-write
-                    // capture above, and the turn's borrows, cloned once here.
-                    let dispatch_ctx = ToolDispatchContext {
-                        session_id: session_id.to_string(),
-                        permission_checker: self.permission_checker.clone(),
-                        event_bus: self.event_bus.clone(),
-                        tool_ctx: tool_ctx.clone(),
-                        loop_spec: loop_spec.clone(),
-                        hook_configs: turn.parsed_hook_configs.clone(),
-                        hook_working_dir: turn.working_dir.clone(),
-                        tool_repeat_guard: self.tool_repeat_guard.clone(),
-                        telemetry: Arc::clone(&self.telemetry),
-                        extraction_engine: self.extraction_engine.clone(),
-                        storage: storage_clone.clone(),
-                        team_context_cache: self.team_context_cache.clone(),
-                        security_analyzer: security_analyzer.clone(),
-                        agent_is_subagent: agent.mode == crate::agent::AgentMode::Subagent,
-                        // The automatic sub-agent YOLO scope's membership test,
-                        // resolved once from the surface this turn was offered. A
-                        // read-only run yields an empty set, so an `explore`
-                        // sub-agent keeps the ordinary prompt policy.
-                        write_capable_tools: write_capable_tools.clone(),
-                        auto_approve,
-                        loop_checkpoint,
-                        checkpoint_timeout_secs,
-                        pending_verdicts: self.pending_verdicts.clone(),
-                    };
-                    let profiler_clone = profiler.clone();
-                    let fut = tokio::spawn(async move {
-                        ToolDispatchPipeline::run(
-                            &dispatch_ctx,
-                            &tc_clone,
-                            resolved,
-                            &profiler_clone,
-                        )
-                        .await
-                    });
-                    if parallel_tool_calls {
-                        // Capture the real call identity for the watchdog and
-                        // panic paths BEFORE `tc` is borrowed/moved. C2 used
-                        // to publish a placeholder `watchdog-parallel` call id
-                        // and C1 dropped sibling results on the first failure.
-                        let parallel_call_id = tc.id.clone();
-                        let parallel_tool_name = tc.name.clone();
-                        let parallel_args_json = tc.args_json.clone();
-                        // The synthesised-outcome constructor publishes
-                        // `ToolCallEnd` itself, so it needs its own handles: the
-                        // ones above are moved into the spawned tool task.
-                        let parallel_event_bus = self.event_bus.clone();
-                        let parallel_session_id = session_id.to_string();
-                        let watchdog_identity: WatchdogIdentity = (tc.id.clone(), tc.name.clone());
-                        // The join-failure answer is built here, before the
-                        // future is moved into the `join_all`, by the one
-                        // synthesised-outcome constructor the sequential arm
-                        // also uses (FR-012). It is a plain function returning
-                        // the outcome, so neither arm assembles the tuple itself.
-                        let synthesise_failure =
-                            move |call_id: String,
-                                  name: String,
-                                  join_err: &dyn std::fmt::Display| {
-                                let msg = format!("Tool task failed: {join_err}");
-                                let synthetic_tc = crate::session::history::PendingToolCall {
-                                    id: call_id,
-                                    name,
-                                    args_json: parallel_args_json.clone(),
-                                };
-                                crate::session::dispatch::ToolDispatchPipeline::synthesised(
-                                    &synthetic_tc,
-                                    &msg,
-                                    0,
-                                    &parallel_event_bus,
-                                    &parallel_session_id,
-                                )
-                            };
-                        let abort_handle = fut.abort_handle();
-                        futures.push(Ok(Box::pin(async move {
-                            // A tuple rather than a bare `None`, so the arm's
-                            // shape is inferable from this line alone.
-                            let no_stall: Option<(String, String)> = None;
-                            let no_join_error: Option<String> = None;
-                            match tokio::time::timeout(TOOL_WATCHDOG_TIMEOUT, fut).await {
-                                Ok(Ok(ok)) => (Ok(ok), no_stall, no_join_error, dispatch_order),
-                                Ok(Err(join_err)) => {
-                                    // C1: the tool task panicked or failed to
-                                    // join. Synthesise an error result so the
-                                    // tool_use record is not orphaned in the
-                                    // conversation history, and surface the
-                                    // panic so loop sessions still terminate.
-                                    // The outcome comes from the pipeline's one
-                                    // synthesised-outcome constructor, so this
-                                    // shape and the sequential one cannot word
-                                    // the same failure differently (FR-012).
-                                    let outcome = synthesise_failure(
-                                        parallel_call_id,
-                                        parallel_tool_name,
-                                        &join_err,
-                                    );
-                                    (
-                                        Ok(outcome),
-                                        None,
-                                        Some(join_err.to_string()),
-                                        dispatch_order,
-                                    )
-                                }
-                                Err(_) => {
-                                    abort_handle.abort();
-                                    (
-                                        Err(ToolTaskError::WatchdogAbort),
-                                        Some(watchdog_identity),
-                                        None,
-                                        dispatch_order,
-                                    )
-                                }
-                            }
-                        }) as StepOutcomeSlot));
-                    } else {
-                        let watchdog_identity: WatchdogIdentity = (tc.id.clone(), tc.name.clone());
-                        let abort_handle = fut.abort_handle();
-                        let result = match tokio::time::timeout(TOOL_WATCHDOG_TIMEOUT, fut).await {
-                            Ok(result) => result.map_err(ToolTaskError::Join),
-                            Err(_) => {
-                                abort_handle.abort();
-                                watchdog_timed_out = true;
-                                let msg = watchdog_timeout_msg(
-                                    &watchdog_identity.1,
-                                    &watchdog_identity.0,
-                                );
-                                // Structured fields so a structured consumer can
-                                // attribute the timeout without parsing the message
-                                // text (audit finding).
-                                warn!(
-                                    tool = %watchdog_identity.1,
-                                    call_id = %watchdog_identity.0,
-                                    timeout_ms = TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
-                                    msg = %msg,
-                                    "tool watchdog timed out; call aborted"
-                                );
-                                // Close out the tool call in the UI: no `ToolCallEnd`
-                                // was published because the spawned task was aborted.
-                                self.event_bus.publish(Event::ToolCallEnd {
-                                    session_id: session_id.to_string(),
-                                    call_id: watchdog_identity.0,
-                                    tool: watchdog_identity.1,
-                                    error: Some(msg.clone()),
-                                    duration_ms: TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
-                                });
-                                self.event_bus.publish(Event::AgentError {
-                                    session_id: session_id.to_string(),
-                                    error: msg.clone(),
-                                });
-                                self.event_bus.publish(Event::AgentNotice {
-                                    session_id: session_id.to_string(),
-                                    message: msg,
-                                });
-                                // Stop processing further tool calls for this turn.
-                                break;
-                            }
-                        };
-                        match result {
-                            Ok(ok) => {
-                                if handle_tool_execution_result(Ok(ok)) {
-                                    break;
-                                }
-                            }
-                            Err(join_err) => {
-                                // C1: a panicked/failed tool task must not
-                                // orphan its tool_use record. Synthesise an
-                                // error result (rendered through the normal
-                                // handler) and stage the panic so active
-                                // loops still terminate (T-007).
-                                let msg = format!("Tool task failed: {join_err}");
-                                warn!(error = %join_err, "Tool execution task panicked");
-                                staged_tool_panic = Some(join_err.to_string());
-                                let synthetic = Ok(ToolDispatchPipeline::synthesised(
-                                    &tc,
-                                    &msg,
-                                    0,
-                                    &self.event_bus,
-                                    session_id,
-                                ));
-                                if handle_tool_execution_result(synthetic) {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                if parallel_tool_calls {
-                    // FR-012: the outcomes are applied in the provider's
-                    // order, in this arm exactly as in the sequential one. The
-                    // step is a list of slots in that order - a future for a
-                    // call that runs, an already-decided outcome for a call the
-                    // prepare loop refused - so waiting and then draining the
-                    // list yields the calls in the order the provider listed
-                    // them. Applying each outcome as it finished (or appending
-                    // refusals where they were decided) would make the same step
-                    // produce two different histories depending on
-                    // `parallel_tool_calls`, which is what the one pipeline
-                    // exists to prevent.
-                    let results: Vec<ToolStepResult> = {
-                        let _scope = profiler.scope("loop.tool_phase.join_parallel");
-                        let settled =
-                            futures::future::join_all(futures.into_iter().map(|slot| async move {
-                                match slot {
-                                    Ok(future) => Some(future.await),
-                                    Err(outcome) => Some(*outcome),
-                                }
-                            }))
-                            .await;
-                        settled.into_iter().flatten().collect()
-                    };
-                    for (result, stalled_tool, panic_msg, _order) in results {
-                        if let Some((call_id, tool_name)) = stalled_tool {
-                            watchdog_timed_out = true;
-                            let msg = watchdog_timeout_msg(&tool_name, &call_id);
-                            warn!(
-                                tool = %tool_name,
-                                call_id = %call_id,
-                                timeout_ms = TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
-                                msg = %msg,
-                                "tool watchdog timed out; call aborted"
-                            );
-                            // C2: close out the stalled call with its REAL
-                            // call id (a placeholder id left the TUI part
-                            // open) and keep draining sibling results so
-                            // completed calls are not dropped.
-                            self.event_bus.publish(Event::ToolCallEnd {
-                                session_id: session_id.to_string(),
-                                call_id,
-                                tool: tool_name,
-                                error: Some(msg.clone()),
-                                duration_ms: TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
-                            });
-                            self.event_bus.publish(Event::AgentError {
-                                session_id: session_id.to_string(),
-                                error: msg.clone(),
-                            });
-                            self.event_bus.publish(Event::AgentNotice {
-                                session_id: session_id.to_string(),
-                                message: msg,
-                            });
-                            continue;
-                        }
-                        if let Some(panic) = panic_msg {
-                            staged_tool_panic = Some(panic);
-                        }
-                        match result {
-                            Ok(ok) => {
-                                if handle_tool_execution_result(Ok(ok)) {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                // Defense-in-depth: the wrapper converts every
-                                // join `Err` into `Ok(synthetic)` + a panic
-                                // message, and the only remaining `Err` here is
-                                // `WatchdogAbort`, which is paired with
-                                // `stalled_tool` and handled above. If this arm
-                                // ever fires, log LOUDLY - it means the wrapper
-                                // contract was broken.
-                                warn!(error = %e, "unreachable: tool task returned Err without a stalled-tool identity; wrapper contract violated");
-                                staged_tool_panic = Some(e.to_string());
-                                // C2: keep draining sibling results.
-                                continue;
-                            }
-                        }
-                    }
-                }
-                // Merge any staged panic from the parallel drain paths.
-                if tool_panic.is_none() {
-                    tool_panic = staged_tool_panic.take();
-                }
-                // P-15: publish a single `ToolCallBatch` for this step with
-                // all per-call summaries, so consumers can render atomically.
-                if !batch_entries.is_empty() {
-                    // Activity log: record each tool result from the batch
-                    // (PERF-040: queued onto the background writer task, which
-                    // batches the whole step into one blocking hop).
-                    self.record_step_tool_results(&run_id, &batch_entries).await;
-                    // T-017 (FR-025): tally this iteration's tool calls into
-                    // the loop tracker so the run's tool-call total is
-                    // published with the loop telemetry on termination. The
-                    // tool-dispatch phase only runs when the response carried
-                    // tool calls, so a no-tool-call step cannot double-count.
-                    if let Some(tracker) = loop_tracker.as_mut() {
-                        tracker.record_tool_calls(llm_result.tool_calls.len() as u64);
-                        self.persist_loop_tracker(session_id, &tracker).await;
-                    }
-                    self.event_bus.publish(Event::ToolCallBatch {
-                        session_id: session_id_arc.to_string(),
-                        step: step as u64,
-                        calls: batch_entries.clone(),
-                    });
-                }
-                if agent_switch_requested || agent_complete_requested || watchdog_timed_out {
-                    break;
-                }
-                // T-007 (FR-011, FR-012): classify this step's tool results.
-                // A panic/join failure or a permission hard-deny terminates an
-                // active loop immediately (FR-011, no retry); recoverable
-                // failures were appended as observations above and only
-                // terminate the loop once the consecutive count exceeds the
-                // retry allowance (FR-012). Successful steps reset the
-                // consecutive-failure counter.
-                if let Some(tracker) = loop_tracker.as_mut() {
-                    if self
-                        .classify_step_failures(
-                            session_id,
-                            &turn,
-                            total_start,
-                            tracker,
-                            &batch_entries,
-                            tool_panic.clone(),
-                        )
-                        .await
-                        .is_break()
-                    {
-                        break;
-                    }
-                }
-                // Auto task status updates (P-10: reuse the `active_spec_id`
-                // already read above for the `ToolContext`, and short-circuit
-                // when no spec is active or no file-write tool was called).
-                self.auto_complete_spec_tasks(
-                    active_spec_id.as_deref(),
-                    &llm_result.tool_calls,
-                    &turn.working_dir,
-                )
-                .await;
-                // Append to chat history (P-17: `std::mem::take` moves the
-                // contents into `ChatContent::Parts` while leaving the Vec
-                // buffer allocated for reuse on the next step). P-6: mutate the
-                // shared `Arc<Vec>` via `Arc::make_mut` so an unchanged
-                // history is not cloned.
-                //
-                // FR-013 (T-016): the turn's history is appended only here,
-                // after every call of the step has been awaited and its
-                // permission verdict settled, so this line can never run while
-                // a verdict is unresolved - the step could not have reached it.
-                Arc::make_mut(&mut chat_messages).push(ChatMessage {
+    /// Decide how a step whose response carried no tool calls ends: keep going
+    /// for a pending user-inbox message, the one-shot sub-agent summary
+    /// nudge, a bounded stall nudge, a failed verification gate, or a blocking
+    /// Stop hook; otherwise terminate the loop as goal-achieved and stop.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    /// * `step` - the 1-based number of the current step.
+    /// * `llm_result` - the step's LLM result (the narration nudge takes its
+    ///   text buffer).
+    ///
+    /// # Returns
+    ///
+    /// `StepExit::Continue` to run another step, `StepExit::Break` to end the
+    /// loop.
+    async fn finish_text_only_step(
+        &self,
+        env: &TurnEnv<'_>,
+        state: &mut TurnState,
+        step: usize,
+        llm_result: &mut crate::session::loop_steps::LlmStepResult,
+    ) -> StepExit {
+        // FR-033: how many times a blocking Stop hook has already been fed back
+        // to the model this turn. Bounded so a hook that always blocks cannot
+        // spin the loop forever.
+        const MAX_STOP_CONTINUATIONS: u32 = 3;
+        let session_id = env.session_id;
+        let agent = env.agent;
+        let turn = env.turn;
+        // The user wrote to this sub-agent while it was answering:
+        // keep the answer, then continue so the next step reads the
+        // message instead of ending the run without it.
+        if self
+            .agent_manager
+            .get()
+            .is_some_and(|m| m.has_inbox(session_id))
+        {
+            if !llm_result.text_buffer.is_empty() {
+                Arc::make_mut(&mut state.chat_messages).push(ChatMessage {
                     role: "assistant".to_string(),
-                    content: ChatContent::Parts(std::mem::take(&mut assistant_content_parts)),
-                });
-                Arc::make_mut(&mut chat_messages).push(ChatMessage {
-                    role: "user".to_string(),
-                    content: ChatContent::Parts(std::mem::take(&mut tool_result_parts)),
+                    content: ChatContent::Text(llm_result.text_buffer.clone()),
                 });
             }
-
-            // Background task injection (sub-agents)
-            {
-                let _scope = profiler.scope("loop.background.total");
-                self.inject_background_task_results(
-                    session_id,
-                    &profiler,
-                    &mut chat_messages,
-                    &mut bg_parts,
-                )
-                .await;
-            }
-
-            // Background shell task injection (M3 / T-023)
-            {
-                let _scope = profiler.scope("loop.background.bg_shell");
-                self.inject_background_shell_results(session_id, &mut chat_messages, &mut bg_parts)
-                    .await;
-            }
-            // Interim save
-            {
-                let _scope = profiler.scope("storage.assistant_interim.update");
-                self.save_interim_assistant(
-                    session_id,
-                    &assistant_parts,
-                    &assistant_msg_id,
-                    &mut last_interim_parts_count,
-                )
-                .await;
+            return StepExit::Continue;
+        }
+        // Sub-agent premature-termination guard: when a sub-agent that
+        // was actively calling tools (step > 1 implies prior tool-use
+        // steps, otherwise the loop would have broken earlier) produces
+        // a SHORT text-only response, it is almost always narration
+        // ("Now let me check ...") rather than the findings report. The
+        // model forgot to call a tool or emit findings, and the loop
+        // would silently accept the narration as the deliverable.
+        //
+        // Inject a one-shot nudge asking the model to produce its
+        // complete findings report now, then continue the loop. The
+        // next text-only response (the actual findings) terminates the
+        // loop normally.
+        if agent.mode == crate::agent::AgentMode::Subagent
+            && step > 1
+            && !state.subagent_summary_nudged
+            && llm_result.text_buffer.len() < SUBAGENT_NARRATION_BYTE_LIMIT
+        {
+            state.subagent_summary_nudged = true;
+            let narration = std::mem::take(&mut llm_result.text_buffer);
+            self.inject_subagent_summary_nudge(
+                session_id,
+                step,
+                narration,
+                &mut state.assistant_parts,
+                &mut state.chat_messages,
+            );
+            return StepExit::Continue;
+        }
+        // Primary-agent stall guard: a turn that ran tools and then
+        // ended on a progress note announcing its next step ("Now the
+        // full test suite."), or on a provider-truncated reply, did
+        // not finish.
+        let stalled = agent.mode != crate::agent::AgentMode::Subagent
+            && crate::session::stall_guard::is_stalled_turn(
+                state.last_finish_reason.as_ref(),
+                step > 1,
+                &llm_result.text_buffer,
+            );
+        // Diagnostic for turns that end without a tool call after tool
+        // work. Every such end is logged; only a detected stall is
+        // also shown in the transcript, so a normal finish does not
+        // read as a stall. The values sit in the message text because
+        // the GUI log window drops structured fields. A large
+        // output-token count against little visible text means tokens
+        // the provider never delivered (a lost tool call); a matching
+        // count with `finish=stop` means the model chose to end the
+        // turn. The `/alog` `model_step` event records every step.
+        if step > 1 {
+            let diagnostic = format!(
+                "Turn ended without a tool call after tool work: step={step} \
+                 finish={} output_tokens={} text_bytes={} reasoning_bytes={}",
+                state
+                    .last_finish_reason
+                    .as_ref()
+                    .map_or("none", crate::session::finish_reason_label),
+                llm_result.last_output_tokens,
+                llm_result.text_buffer.len(),
+                llm_result.reasoning_buffer.len(),
+            );
+            tracing::warn!(session_id = %session_id, "{diagnostic}");
+            if stalled {
+                self.event_bus.publish(Event::AgentNotice {
+                    session_id: session_id.to_string(),
+                    message: format!("Stall detected. {diagnostic}"),
+                });
             }
         }
+        // Feed back the "continue" the user would otherwise have to
+        // type, a bounded number of times.
+        if stalled && state.stall_nudges < crate::session::stall_guard::MAX_STALL_NUDGES {
+            state.stall_nudges += 1;
+            self.inject_stall_nudge(
+                session_id,
+                step,
+                &llm_result.text_buffer,
+                &mut state.chat_messages,
+            );
+            return StepExit::Continue;
+        }
+        // T-005 (FR-007, FR-010): the verification gate. A
+        // no-tool-call response from a loop with a verification
+        // command does not complete the run directly - the command's
+        // exit status decides. Success terminates with `completed`;
+        // failure with steps remaining appends the failure output as
+        // an observation and continues; failure with the budget
+        // breached ends the run as `budget_exhausted`.
+        match self
+            .run_verification_gate(
+                session_id,
+                turn,
+                env.total_start,
+                (llm_result.last_input_tokens, llm_result.last_output_tokens),
+                state.loop_tracker.as_ref(),
+            )
+            .await
+        {
+            Some(std::ops::ControlFlow::Break(())) => return StepExit::Break,
+            Some(std::ops::ControlFlow::Continue(observation)) => {
+                Arc::make_mut(&mut state.chat_messages).push(ChatMessage {
+                    role: "user".to_string(),
+                    content: ChatContent::Text(observation),
+                });
+                // The verification observation is a successful
+                // observation append: reset the consecutive-failure
+                // counter so unrelated recoverable failures do not
+                // accumulate against the retry allowance (FR-012).
+                if let Some(tracker) = state.loop_tracker.as_mut() {
+                    tracker.record_success();
+                    self.persist_loop_tracker(session_id, &tracker).await;
+                }
+                return StepExit::Continue;
+            }
+            None => {}
+        }
+        // Goal-driven loop stop condition 1 (FR-010): a no-tool-call
+        // response with no verification command means the goal was
+        // reached - terminate with `GoalAchieved`, publish
+        // `Event::LoopTerminated`, and stop.
+        self.terminate_loop_inner(
+            session_id,
+            crate::session::loop_state::StopCondition::GoalAchieved,
+            Some(env.total_start),
+            Some((llm_result.last_input_tokens, llm_result.last_output_tokens)),
+            None,
+            None,
+            Some(&turn.working_dir),
+        )
+        .await;
+
+        // FR-033: a Stop (`on_session_end`) hook may block the turn and
+        // return findings (the Claude `asyncRewake` shape). Fold them
+        // into a synthetic user turn and keep going, so a plugin
+        // security review can feed corrections back before the turn is
+        // accepted. Bounded so a hook that always blocks cannot loop.
+        let stop_guidance =
+            crate::hooks::run_stop_hooks(&turn.parsed_hook_configs, &turn.working_dir, session_id)
+                .await;
+        let stop_guidance: Vec<String> = stop_guidance
+            .into_iter()
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        if !stop_guidance.is_empty() && state.stop_continuations < MAX_STOP_CONTINUATIONS {
+            state.stop_continuations += 1;
+            self.event_bus.publish(Event::AgentNotice {
+                session_id: session_id.to_string(),
+                message: "A Stop hook returned findings; feeding them \
+                          back to the model before ending the turn."
+                    .to_string(),
+            });
+            Arc::make_mut(&mut state.chat_messages).push(ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text(stop_guidance.join("\n\n")),
+            });
+            return StepExit::Continue;
+        }
+        StepExit::Break
+    }
+
+    /// End-of-step bookkeeping: inject finished background sub-agent and
+    /// background shell results into the history, then save the interim
+    /// assistant message.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context.
+    /// * `state` - the turn's mutable loop state.
+    async fn inject_background_and_save(&self, env: &TurnEnv<'_>, state: &mut TurnState) {
+        let session_id = env.session_id;
+        // Background task injection (sub-agents)
+        {
+            let _scope = env.profiler.scope("loop.background.total");
+            self.inject_background_task_results(
+                session_id,
+                env.profiler,
+                &mut state.chat_messages,
+                &mut state.bg_parts,
+            )
+            .await;
+        }
+
+        // Background shell task injection (M3 / T-023)
+        {
+            let _scope = env.profiler.scope("loop.background.bg_shell");
+            self.inject_background_shell_results(
+                session_id,
+                &mut state.chat_messages,
+                &mut state.bg_parts,
+            )
+            .await;
+        }
+        // Interim save
+        {
+            let _scope = env.profiler.scope("storage.assistant_interim.update");
+            self.save_interim_assistant(
+                session_id,
+                &state.assistant_parts,
+                &env.assistant_msg_id,
+                &mut state.last_interim_parts_count,
+            )
+            .await;
+        }
+    }
+
+    /// Finish the turn after the agent loop ended: persist a partial turn on a
+    /// human interrupt, fail the run on a watchdog abort, or save the final
+    /// assistant message, record the run telemetry, publish the cost summary
+    /// and end the turn.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - the turn's read-only context (consumed).
+    /// * `state` - the turn's loop state (consumed).
+    /// * `session_recorder` - the session telemetry recorder.
+    ///
+    /// # Returns
+    ///
+    /// The saved assistant message (an empty one for an interrupted turn), or
+    /// the watchdog error / storage error that failed the turn.
+    async fn finish_turn(
+        &self,
+        env: TurnEnv<'_>,
+        state: TurnState,
+        session_recorder: &SessionRecorder,
+    ) -> Result<Message> {
+        let session_id = env.session_id;
+        let total_start = env.total_start;
+        let run_id = &env.run_id;
+        let assistant_parts = state.assistant_parts;
+        let assistant_msg_id = env.assistant_msg_id.clone();
+        let cumulative_model_wait_ms = state.cumulative_model_wait_ms;
+        let publish_run_cost_summary = env.publish_run_cost_summary;
 
         // T-011 (FR-016): a human interrupt stops the loop with `interrupted`
         // (terminated at the safe point above); persist the partial assistant
         // message and end the turn normally so the session stays persisted
         // and resumable.
-        if loop_interrupted {
+        if state.loop_interrupted {
             let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
-            self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, &run_id)
+            self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, run_id)
                 .await;
             tokio::task::yield_now().await;
             publish_run_cost_summary(total_elapsed_ms);
@@ -4101,9 +3532,9 @@ impl SessionProcessor {
         // Watchdog termination: persist the accumulated assistant parts, end the
         // message with the cancelled reason (the closest existing variant to a
         // watchdog-forced stop), and return a fatal error for the run.
-        if watchdog_timed_out {
+        if state.watchdog_timed_out {
             let total_elapsed_ms = total_start.elapsed().as_millis() as u64;
-            self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, &run_id)
+            self.finish_cancelled_turn(session_id, assistant_parts, assistant_msg_id, run_id)
                 .await;
             tokio::task::yield_now().await;
             publish_run_cost_summary(total_elapsed_ms);
@@ -4117,13 +3548,12 @@ impl SessionProcessor {
                 session_id,
                 &watchdog_err,
                 Some(total_start),
-                Some(&turn.working_dir),
+                Some(&env.turn.working_dir),
             )
             .await;
             return Err(watchdog_err);
         }
 
-        // 7. Finalize
         let parts_owned =
             std::sync::Arc::try_unwrap(assistant_parts).unwrap_or_else(|arc| (*arc).clone());
         let mut assistant_msg = Message::new(session_id, Role::Assistant, parts_owned);
@@ -4166,8 +3596,8 @@ impl SessionProcessor {
         // deadlock.
         tokio::task::yield_now().await;
         publish_run_cost_summary(total_elapsed_ms);
-        let end_reason = last_finish_reason.unwrap_or(FinishReason::Stop);
-        self.publish_turn_end(session_id, agent, end_reason, msg_id_for_end, &run_id)
+        let end_reason = state.last_finish_reason.unwrap_or(FinishReason::Stop);
+        self.publish_turn_end(session_id, env.agent, end_reason, msg_id_for_end, run_id)
             .await;
         // FR-033: the Stop (`on_session_end`) hooks have already run inside the
         // loop, where a blocking hook can feed findings back to the model, so no
@@ -5324,4 +4754,1151 @@ impl SessionProcessor {
 /// char-boundary logic lives in one place.
 pub(crate) fn truncate_preview(s: &str, max_chars: usize) -> String {
     codemason_types::strutil::truncate_chars(s.trim(), max_chars)
+}
+
+/// How a phase of an agent-loop step tells
+/// [`SessionProcessor::process_user_message`] to leave the step early.
+///
+/// Carried in `std::ops::ControlFlow::Break` by the step phases; a phase that
+/// returns `ControlFlow::Continue` lets the step run on.
+enum StepExit {
+    /// Start the next iteration of the agent loop (`continue`).
+    Continue,
+    /// Leave the agent loop and finish the turn (`break`).
+    Break,
+    /// Return this result from the turn immediately (`return`).
+    Return(Result<Message>),
+}
+
+/// The borrowed inputs a turn hands to
+/// [`SessionProcessor::prepare_turn_loop`] once its client is prepared.
+struct TurnScope<'a> {
+    /// The session the turn belongs to.
+    session_id: &'a str,
+    /// The same session id as a shared string, for events that take one.
+    session_id_arc: &'a Arc<str>,
+    /// The agent running the turn.
+    agent: &'a AgentInfo,
+    /// The turn's prepared client, config, working dir and team context.
+    turn: &'a crate::session::loop_steps::TurnClient,
+    /// The agent-loop profiler.
+    profiler: &'a Arc<crate::session::profiler::AgentLoopProfiler>,
+    /// The user's cancel flag for this turn.
+    cancel_flag: &'a AtomicBool,
+    /// The activity-log run id linking every event of this turn.
+    run_id: codemason_types::id::RunId,
+    /// The id of the user message that opened the turn.
+    turn_user_msg_id: String,
+    /// Publishes the turn's `Event::RunCostSummary` for a run duration.
+    publish_run_cost_summary: &'a (dyn Fn(u64) + Sync),
+}
+
+/// The read-only context every phase of the agent loop consults; built once
+/// per turn by [`SessionProcessor::prepare_turn_loop`].
+struct TurnEnv<'a> {
+    /// The session the turn belongs to.
+    session_id: &'a str,
+    /// The same session id as a shared string, for events that take one.
+    session_id_arc: &'a Arc<str>,
+    /// The agent running the turn.
+    agent: &'a AgentInfo,
+    /// The turn's prepared client, config, working dir and team context.
+    turn: &'a crate::session::loop_steps::TurnClient,
+    /// The agent-loop profiler.
+    profiler: &'a Arc<crate::session::profiler::AgentLoopProfiler>,
+    /// The user's cancel flag for this turn.
+    cancel_flag: &'a AtomicBool,
+    /// T-011 (FR-016): the session loop's human-interrupt flag, when a loop
+    /// is active.
+    loop_interrupt_flag: Option<Arc<AtomicBool>>,
+    /// The activity-log run id linking every event of this turn.
+    run_id: codemason_types::id::RunId,
+    /// The id of the user message that opened the turn.
+    turn_user_msg_id: String,
+    /// Publishes the turn's `Event::RunCostSummary` for a run duration.
+    publish_run_cost_summary: &'a (dyn Fn(u64) + Sync),
+    /// The turn's system prompt.
+    system_prompt: Arc<str>,
+    /// The model's context window, resolved with the chat history.
+    context_window: usize,
+    /// The agent's step limit for this turn.
+    max_steps: usize,
+    /// The tool definitions offered to the model this turn.
+    tool_definitions: Arc<Vec<ToolDefinition>>,
+    /// The write-capable subset of `tool_definitions`.
+    write_capable_tools: Arc<std::collections::HashSet<String>>,
+    /// The cached tool names for the first step's `Event::ToolsSent`.
+    cached_tool_names: Option<Arc<[String]>>,
+    /// The id of the assistant placeholder message this turn fills in.
+    assistant_msg_id: String,
+    /// When the agent loop started.
+    total_start: Instant,
+}
+
+impl TurnEnv<'_> {
+    /// Whether the user has asked this turn to stop: the cancel flag, or the
+    /// loop's human-interrupt flag when a loop is active.
+    ///
+    /// # Returns
+    ///
+    /// `true` when either flag is raised.
+    fn interrupt_requested(&self) -> bool {
+        self.cancel_flag.load(Ordering::Relaxed)
+            || self
+                .loop_interrupt_flag
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+}
+
+/// The mutable state the agent loop threads through its steps.
+struct TurnState {
+    /// The per-turn chat history sent to the model.
+    chat_messages: Arc<Vec<ChatMessage>>,
+    /// The provider's most recent `input_tokens` report.
+    last_reported_input_tokens: u64,
+    /// Whether compaction ran this turn (compression hysteresis).
+    compressed_this_turn: bool,
+    /// The parts of the assistant message this turn builds.
+    assistant_parts: Arc<Vec<MessagePart>>,
+    /// Set when a tool result requested an agent switch or restore.
+    agent_switch_requested: bool,
+    /// Set when a tool result signalled the agent completed.
+    agent_complete_requested: bool,
+    /// Set when a tool call stalls past `TOOL_WATCHDOG_TIMEOUT`; the run is
+    /// terminated after the tool phase.
+    watchdog_timed_out: bool,
+    /// Set to true after injecting the sub-agent summary nudge so we only
+    /// nudge once per run. See [`SUBAGENT_SUMMARY_NUDGE`].
+    subagent_summary_nudged: bool,
+    /// Count of stall nudges fed to a primary agent this turn. See
+    /// [`crate::session::stall_guard`].
+    stall_nudges: u32,
+    /// M-008 (amended): count of assistant parts at the last interim save.
+    /// Parts are only ever pushed or popped (stream deltas, per-call
+    /// tool-call appends, the sub-agent narration nudge) - never mutated in
+    /// place - so the count alone is a sufficient save gate. Tool-call
+    /// parts are included so the child session's SQLite row stays in step
+    /// with the run and the TUI output-view overlay can render steps live.
+    last_interim_parts_count: Option<usize>,
+    /// `/undo`: the pre-turn workspace snapshot is taken once, before the
+    /// turn's first tool call.
+    turn_snapshot_taken: bool,
+    /// Total time spent waiting on the model this turn.
+    cumulative_model_wait_ms: u64,
+    /// Whether auto-compaction already ran (and is disarmed) this turn.
+    compaction_attempted_this_turn: bool,
+    /// Finish reason observed by the inner loop for the most recent
+    /// assistant message this turn. Used at finalise time to publish
+    /// a visible notice for interactive sessions when the provider
+    /// silently truncated the reply.
+    last_finish_reason: Option<FinishReason>,
+    /// The assistant turn's content parts for the current step.
+    assistant_content_parts: Vec<ContentPart>,
+    /// The tool-result parts for the current step.
+    tool_result_parts: Vec<ContentPart>,
+    /// Scratch buffer for injected background results.
+    bg_parts: Vec<ContentPart>,
+    /// T-008: the working copy of the goal-driven loop's tracker, when one is
+    /// active.
+    loop_tracker: Option<crate::session::loop_state::LoopTracker>,
+    /// T-011 (FR-016): set when a safe-point interrupt check fired - the
+    /// post-loop handler persists the partial turn and ends it normally.
+    loop_interrupted: bool,
+    /// FR-033: Stop-hook continuations fed back to the model this turn.
+    stop_continuations: u32,
+    /// PERF-036: the memoised per-step request-token estimator.
+    token_tracker: crate::compaction::estimator::RequestTokenTracker,
+    /// Local estimate of the request whose `input_tokens` the provider last
+    /// reported. The pre-send check adds the growth since then to the
+    /// (otherwise one-request-stale) provider count. `None` at turn start
+    /// and after compaction replaces the history.
+    reported_anchor_estimate: Option<usize>,
+    /// Threshold a successful, history-reducing pre-send compaction must be
+    /// confirmed under (by the next provider report) before auto-compaction
+    /// re-arms within this turn.
+    rearm_below_threshold: Option<usize>,
+}
+
+/// The tool dispatch phase of one agent-loop step, and the types that
+/// describe a step's per-call outcomes.
+///
+/// Kept in its own module so the step's outcome aliases stay private to the
+/// phase that uses them.
+mod tool_phase {
+    use std::ops::ControlFlow;
+    use std::sync::Arc;
+
+    use serde_json::Value;
+    use tracing::warn;
+
+    use super::{
+        ChatContent, ChatMessage, ContentPart, Event, MessagePart, PendingToolCall,
+        SessionProcessor, StepExit, TOOL_WATCHDOG_TIMEOUT, ToolCallState, ToolCallStatus,
+        ToolContext, ToolDispatchContext, ToolDispatchPipeline, ToolTaskError, TurnEnv, TurnState,
+        WatchdogIdentity, canonical_dispatch_name, resolve_tool_call, result_is_appendable,
+        tool_result_content_for_llm, truncate_preview, watchdog_timeout_msg,
+    };
+
+    // FR-012: one dispatched call's outcome in the concurrent arm,
+    // carrying the position the call had in the provider's step so
+    // the batch is applied in that order whichever arm produced it.
+    type ToolStepResult = (
+        ToolExecutionResult,
+        Option<WatchdogIdentity>,
+        Option<String>,
+        usize,
+    );
+    // A step's outcome as the concurrent arm holds it: either the
+    // outcome a *run* will produce (a future) or an outcome the
+    // prepare loop already decided and that is emitted in its own
+    // position by the drain below (a refused call). Both are kept in
+    // one list, so a refused call's record lands exactly where the
+    // provider put the call instead of ahead of every sibling.
+    type StepOutcomeSlot =
+        std::pin::Pin<Box<dyn std::future::Future<Output = ToolStepResult> + Send>>;
+    type PendingStepCall = Result<StepOutcomeSlot, Box<ToolStepResult>>;
+    type ToolExecutionResult = Result<
+        (
+            PendingToolCall,
+            Value,
+            ToolCallStatus,
+            Option<Value>,
+            Option<String>,
+            u64,
+            String,
+            Option<Value>,
+            Vec<String>,
+        ),
+        ToolTaskError,
+    >;
+
+    impl SessionProcessor {
+        /// Run the tool dispatch phase of one step: canonicalise the step's tool
+        /// calls, apply the parallel gate, prepare and dispatch every call through
+        /// the one pipeline (sequentially or concurrently), apply the outcomes in
+        /// the provider's order, then publish the step's batch, classify its
+        /// failures, update spec tasks and append the step to the chat history.
+        ///
+        /// # Arguments
+        ///
+        /// * `env` - the turn's read-only context.
+        /// * `state` - the turn's mutable loop state.
+        /// * `step` - the 1-based number of the current step.
+        /// * `llm_result` - the step's LLM result; its buffers are moved into the
+        ///   assistant message and its tool calls are canonicalised in place.
+        ///
+        /// # Returns
+        ///
+        /// `ControlFlow::Continue(())` when the loop proceeds to the background
+        /// injection; `ControlFlow::Break(StepExit::Break)` when an agent switch,
+        /// an agent completion, a watchdog abort or a step-failure classification
+        /// ends the loop; `ControlFlow::Break(StepExit::Return(Err(..)))` when the
+        /// loop's pre-write workspace capture failed.
+        pub(super) async fn run_tool_phase(
+            &self,
+            env: &TurnEnv<'_>,
+            state: &mut TurnState,
+            step: usize,
+            llm_result: &mut crate::session::loop_steps::LlmStepResult,
+        ) -> ControlFlow<StepExit> {
+            let session_id = env.session_id;
+            let agent = env.agent;
+            let turn = env.turn;
+            let profiler = env.profiler;
+            let _scope = profiler.scope("loop.tool_phase.total");
+            // P-17: clear the reused per-step buffers (cheap - the
+            // allocations from the previous step are retained).
+            state.assistant_content_parts.clear();
+            state.tool_result_parts.clear();
+            // FR-011 (T-018): the signed reasoning block is pushed FIRST, so
+            // it precedes both the text and the tool-use blocks of the
+            // assistant turn that answers it. Anthropic requires the
+            // thinking that decided a call to arrive before the call, which
+            // is why this push is above the text push rather than beside the
+            // tool-use push below.
+            //
+            // This is the *within-turn* half of the replay, and it is the
+            // half a history converter cannot provide: the next request of
+            // this turn is built from `chat_messages`, and this message is
+            // what gets appended to it at the end of the phase. A block
+            // recorded only in `assistant_parts` would reach the provider on
+            // next turn's rebuilt history, i.e. after the echoing turn - too
+            // late for the provider that requires it.
+            //
+            // The part is pushed unconditionally, with no profile check: the
+            // omission for a profile declaring `echo_reasoning == false` is
+            // the encoder's decision (FR-011, and
+            // `tests/test_tool_input_error.rs` refuses a converter that
+            // re-implements it here).
+            if !llm_result.reasoning_buffer.is_empty() {
+                let text = std::mem::take(&mut llm_result.reasoning_buffer);
+                let signature = llm_result.reasoning_signature.take();
+                state
+                    .assistant_content_parts
+                    .push(ContentPart::Reasoning { text, signature });
+            }
+            // P-18: move `text_buffer` into the `ContentPart::Text` rather
+            // than cloning it. The buffer is not referenced after this
+            // point (the response-preview and no-tool-nudge paths ran
+            // earlier and already consumed whatever they needed).
+            if !llm_result.text_buffer.is_empty() {
+                let text = std::mem::take(&mut llm_result.text_buffer);
+                state
+                    .assistant_content_parts
+                    .push(ContentPart::Text { text });
+            }
+            let parallel_tool_calls = turn.session_config.experimental.parallel_tool_calls;
+            // FR-010 (T-015): a provider whose wire contract declares
+            // `supports_parallel == false` cannot carry a parallel step, so
+            // the user's `experimental.parallel_tool_calls` opt-in is
+            // demoted here - once per step, before any call is prepared -
+            // and every call below runs through the sequential arm. That
+            // arm is the same ordered pipeline with the same recorded
+            // order (FR-012), so forcing it changes the concurrency of a
+            // step and never the history it produces.
+            //
+            // The gate is a demotion only: it never turns concurrency on,
+            // and a provider that does support parallel calls is not
+            // touched. It is read per step rather than cached per turn
+            // because the lookup is a scan of fifteen rows, and a step
+            // never spans two providers.
+            //
+            // The router is the one id whose contract is not settled here:
+            // `RouterClient` forwards the canonical request to whichever
+            // downstream provider its classification picked, so the row
+            // `profile_for("router")` returns describes the canonical
+            // encoding and not the effective contract. A downstream
+            // provider that declares `supports_parallel == false` cannot be
+            // honoured through this gate (the selection is made inside
+            // `chat`, after this decision), which is a recorded gap in the
+            // task doc rather than a silently wrong answer.
+            let mut parallel_tool_calls = parallel_tool_calls;
+            if parallel_tool_calls
+                && crate::provider::wire::profile_table::profile_for(&turn.model_ref.provider_id)
+                    .is_none_or(|profile| !profile.supports_parallel)
+            {
+                parallel_tool_calls = false;
+                tracing::info!(
+                    provider = %turn.model_ref.provider_id,
+                    reason = "the provider's wire profile declares \
+                              supports_parallel == false, so the step's tool \
+                              calls run sequentially (FR-010)",
+                    "parallel tool dispatch demoted to sequential"
+                );
+            }
+            // One entry per call of this step, in the provider's order.
+            let mut futures: Vec<PendingStepCall> = Vec::new();
+            // P-8/P-9: build a single `ToolContext` for this step and clone
+            // it per tool call. `active_spec` is read once here (P-9) so
+            // the async lock is acquired at most once per step instead of
+            // once per tool call. The cloned value is also reused by the
+            // auto-spec-task-update block below (P-10).
+            let active_spec_id = self.active_spec.read().await.clone();
+            let allowed_roots = turn
+                .session_config
+                .dirs
+                .allowed_roots
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect();
+            // FR-015: resolve a provider spelling onto the codemason tool BEFORE
+            // the unknown-tool check, and rewrite the pending call so every
+            // later stage - the loop restriction, `LOOP_WRITE_TOOLS`, the
+            // destructive-action classifier, the hooks, the permission
+            // layer, the repeat guard, the telemetry key and the history
+            // record - sees one canonical name, and the provider spelling
+            // never reaches the persisted form (FR-001).
+            //
+            // This sits at the top of the tool phase rather than above it so
+            // the per-call decision below reads the name it dispatches: a
+            // step with no tool calls never builds a table, and a call is
+            // canonicalised exactly when it is about to be resolved (FR-012's
+            // "before any guard").
+            //
+            // A registered name always wins (the resolver checks the
+            // registry first), and a spelling the table cannot resolve - or
+            // whose target this build does not register - is left untouched,
+            // so it reaches the unknown-tool refusal naming the spelling the
+            // client actually sent. With `tools.aliases` absent this loop is
+            // a no-op over an empty table (FR-015's "behaviour shall be
+            // unchanged").
+            for tc in &mut llm_result.tool_calls {
+                // Two spellings resolve onto a registered tool, in this
+                // order: the declarative alias table (FR-015), then the
+                // registry's own unique ASCII-case-insensitive match - so
+                // `CALCULATOR` for `calculator`, or `bash` for `Bash`,
+                // reaches the tool instead of being refused as unknown. The
+                // exact spelling still wins both lookups, and a name neither
+                // resolves is left untouched so it reaches the unknown-tool
+                // refusal naming the spelling the client actually sent.
+                let canonical = crate::tool::alias_table::resolve_inbound_tool_name(
+                    &turn.tool_registry,
+                    &turn.alias_table,
+                    &tc.name,
+                )
+                .or_else(|| canonical_dispatch_name(&turn.tool_registry, &tc.name));
+                let Some(canonical) = canonical else {
+                    continue;
+                };
+                tracing::info!(
+                    spelling = %tc.name,
+                    tool = %canonical,
+                    "alias spelling resolved to a codemason tool name (FR-015)"
+                );
+                tc.name = canonical;
+            }
+            // Teams outside the TUI (`run`, `serve`, ACP): bind the team
+            // runtime for the team this session leads before any team
+            // tool runs, so `team_spawn` has a manager to spawn with.
+            self.ensure_team_manager(
+                turn.team_context.as_deref(),
+                &turn.working_dir,
+                &turn.model_ref,
+            );
+            let base_tool_ctx = ToolContext {
+                session_id: session_id.to_string(),
+                working_dir: turn.working_dir.clone(),
+                event_bus: self.event_bus.clone(),
+                storage: Some(self.session_manager.storage().clone()),
+                agent_manager: self.agent_manager.get().cloned(),
+                active_model: Some(turn.model_ref.clone()),
+                provider_registry: Some(Arc::clone(&self.provider_registry)),
+                team_context: turn.team_context.clone(),
+                team_manager: self
+                    .team_manager
+                    .get()
+                    .map(|tm| tm as Arc<dyn crate::tool::TeamManagerInterface>),
+                code_index: self.code_index_for(&turn.working_dir),
+                bg_service: self.bg_service.get().cloned(),
+                spec_manager: self.spec_manager.get().cloned(),
+                active_spec_id: active_spec_id.clone(),
+                config: Some(std::sync::Arc::clone(&turn.session_config)),
+                allowed_roots,
+                cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+                // SEC-codemason-team-001: blueprint seed files must run through
+                // the same permission decision as ordinary tool calls.
+                permission_checker: Some(self.permission_checker.clone()),
+                read_timestamps: self.read_timestamps.clone(),
+                canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
+                tool_registry: turn.tool_registry.clone(),
+            };
+            let result_profiler = profiler.clone();
+            // P-15: collect one `ToolCallBatchEntry` per tool call so a
+            // single `Event::ToolCallBatch` can be published at the end of
+            // the step, giving consumers an atomic view of all tool calls.
+            // The per-call events are still published inside the spawned
+            // task as a fallback (PERFPLAN Milestone D risk note).
+            let mut batch_entries: Vec<codemason_types::event::ToolCallBatchEntry> = Vec::new();
+            // T-007 (FR-011): set when a tool task panicked or failed to
+            // join - an unrecoverable failure that terminates an active
+            // loop after the tool phase. Panics discovered OUTSIDE the
+            // result handler are staged here first: the closure captures
+            // `tool_panic` mutably, so direct writes elsewhere are
+            // rejected by the borrow checker.
+            let mut tool_panic: Option<String> = None;
+            let mut staged_tool_panic: Option<String> = None;
+            // FR-013: the step's view of the unresolved-approval tracker.
+            //
+            // Read through a free function rather than captured by the
+            // handler: the handler already borrows three step-local buffers
+            // mutably, so it must stay a borrowing closure, and a captured
+            // tracker would make it a `move` closure that takes those
+            // buffers with it. Passing the tracker per call keeps the one
+            // shared state - not a copy of it - on the FR-013 guard.
+            let step_pending_verdicts = self.pending_verdicts.clone();
+            // Scope the result handler: it holds mutable borrows of the step's
+            // buffers, which the post-dispatch bookkeeping below reads once the
+            // handler and the dispatch that feeds it are done.
+            {
+                let TurnState {
+                    assistant_parts,
+                    tool_result_parts,
+                    assistant_content_parts,
+                    agent_switch_requested,
+                    agent_complete_requested,
+                    watchdog_timed_out,
+                    turn_snapshot_taken,
+                    loop_tracker,
+                    ..
+                } = &mut *state;
+                let mut handle_tool_execution_result = |result: ToolExecutionResult| {
+                    let _scope = result_profiler.scope("loop.tool_phase.handle_result");
+                    match result {
+                        Ok((
+                            tc,
+                            input,
+                            status,
+                            output_value,
+                            error,
+                            duration_ms,
+                            result_content,
+                            tool_metadata,
+                            additional_contexts,
+                        )) => {
+                            let success = status == ToolCallStatus::Completed;
+                            // FR-013 (T-016): a result is appended only for a
+                            // call whose permission verdict has resolved - so no
+                            // history append can run while a permission verdict
+                            // is unresolved. The record is still written, so the
+                            // conversation carries the `tool_use` the provider
+                            // listed and no model call is left orphaned, but it
+                            // carries no output and no error: an unapproved
+                            // call's outcome must never reach the model as if it
+                            // had run. The guard reads a state the permission
+                            // stage settled on every exit path, so reaching it
+                            // means a verdict did not resolve - a wedged wait, an
+                            // aborted task - and it is logged rather than passed
+                            // over.
+                            let verdict_resolved =
+                                result_is_appendable(&step_pending_verdicts, session_id, &tc.id);
+                            if !verdict_resolved {
+                                tracing::warn!(
+                                    session_id = %session_id,
+                                    call_id = %tc.id,
+                                    tool = %tc.name,
+                                    "tool result withheld: the call's permission verdict \
+                                     has not resolved (FR-013)"
+                                );
+                            }
+                            std::sync::Arc::make_mut(assistant_parts).push(MessagePart::ToolCall {
+                                tool: tc.name.clone(),
+                                call_id: tc.id.clone(),
+                                state: Box::new(ToolCallState {
+                                    status: if verdict_resolved {
+                                        status
+                                    } else {
+                                        ToolCallStatus::Pending
+                                    },
+                                    input,
+                                    output: if verdict_resolved { output_value } else { None },
+                                    error: if verdict_resolved {
+                                        error.clone()
+                                    } else {
+                                        None
+                                    },
+                                    duration_ms: Some(duration_ms),
+                                }),
+                            });
+                            // The result content: nothing for an unresolved
+                            // verdict (FR-013), the rendered result otherwise.
+                            if verdict_resolved {
+                                tool_result_parts.push(ContentPart::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: tool_result_content_for_llm(
+                                        &tc.name,
+                                        &result_content,
+                                        tool_metadata.as_ref(),
+                                    ),
+                                    // FR-014/T-017: from the recorded status.
+                                    is_error: status.is_error(),
+                                });
+                            }
+                            // FR-033: a PostToolUse hook (for example a Claude
+                            // security-guidance pattern check) may return
+                            // `hookSpecificOutput.additionalContext`; fold it
+                            // into this tool's result so the model sees the
+                            // guidance on the next iteration.
+                            for guidance in additional_contexts {
+                                tool_result_parts.push(ContentPart::Text {
+                                    text: format!("[{} hook guidance]\n{guidance}", tc.name),
+                                });
+                            }
+                            // P-15: capture the per-call summary for the batch
+                            // event. Reuse the already-computed line count and
+                            // preview from the spawned task where available;
+                            // fall back to computing them here for the batch.
+                            let content_line_count = tool_metadata
+                                .as_ref()
+                                .and_then(|m| m.get("lines"))
+                                .and_then(serde_json::Value::as_u64)
+                                .map_or_else(|| result_content.lines().count(), |n| n as usize);
+                            // M-007: the batch event carries a truncated display
+                            // preview too (the full content is preserved in
+                            // `assistant_parts` and the activity log).
+                            const BATCH_PREVIEW_CHARS: usize = 2000;
+                            let batch_content =
+                                truncate_preview(&result_content, BATCH_PREVIEW_CHARS);
+                            batch_entries.push(codemason_types::event::ToolCallBatchEntry {
+                                call_id: tc.id.clone(),
+                                tool: tc.name.clone(),
+                                args: tc.args_json.clone(),
+                                error: error.clone(),
+                                duration_ms,
+                                content: batch_content,
+                                content_line_count,
+                                metadata: tool_metadata.clone(),
+                                success,
+                            });
+                            if let Some(meta) = tool_metadata.as_ref() {
+                                if meta.get("agent_switch").is_some()
+                                    || meta.get("agent_restore").is_some()
+                                {
+                                    *agent_switch_requested = true;
+                                    return true;
+                                }
+                                if meta.get("agent_complete").is_some() {
+                                    *agent_complete_requested = true;
+                                    return true;
+                                }
+                            }
+                            false
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Tool execution task panicked");
+                            tool_panic = Some(e.to_string());
+                            false
+                        }
+                    }
+                };
+
+                for (dispatch_order, tc) in llm_result.tool_calls.iter().enumerate() {
+                    let _scope = profiler.scope("loop.tool_phase.prepare_call");
+                    // C4: an interrupt raised mid-phase stops further
+                    // dispatch. Not-yet-started calls have no `ToolUse`
+                    // record in the assistant parts, so breaking here keeps
+                    // the conversation history consistent (no orphaned
+                    // tool_use); in-flight tasks complete under the
+                    // watchdog as before.
+                    if env.interrupt_requested() {
+                        tracing::info!(
+                            session_id = %session_id,
+                            "interrupt during tool phase; skipping remaining tool calls"
+                        );
+                        break;
+                    }
+                    // Stages 1-3 of the one ordered pipeline (FR-012): decode
+                    // the accumulated argument text once (FR-007), resolve the
+                    // tool, then validate against its declared schema (FR-008,
+                    // FR-009, FR-021). A malformed args JSON used to be silently
+                    // coerced to `{}` (six parse sites), so the tool executed
+                    // with empty arguments and the model only saw a misleading
+                    // "missing parameter X" error; and an unregistered name used
+                    // to be answered by a second, ad-hoc error. Both are now
+                    // `ToolInputError` values built by the pipeline, so the
+                    // sentence, the record status and the `is_error` flag are one
+                    // derivation and a call can be measured against the tool it
+                    // will not run.
+                    let resolved = resolve_tool_call(&turn.tool_registry, tc);
+                    // The decoded, schema-validated arguments. A refused call
+                    // keeps them in its record so the TUI can render what the
+                    // model sent; it is `Value::Null` only when the payload would
+                    // not decode at all.
+                    let input: Value = resolved.input.clone();
+                    if let Err(refusal) = &resolved.tool {
+                        // A refusal is answered here, before the tool task is
+                        // spawned, so no hook, permission check or backend call
+                        // sees it. The outcome is built by the pipeline's refusal
+                        // constructor: the loop states the content of a refusal
+                        // nowhere, so its sentence, record status and `is_error`
+                        // flag are one derivation (FR-008, FR-009, FR-021).
+                        let synthetic = ToolDispatchPipeline::refusal(
+                            &tc,
+                            refusal,
+                            input,
+                            &self.event_bus,
+                            session_id,
+                        );
+                        if parallel_tool_calls {
+                            // A refused call still occupies its position: the
+                            // record is emitted by the drain in the provider's
+                            // order, so this step and the sequential one produce
+                            // the same history (FR-012). Only the refusal's
+                            // `ToolCallEnd` is published now, by the constructor
+                            // above, so the UI closes the call out promptly.
+                            futures.push(Err(Box::new((
+                                Ok(synthetic),
+                                None,
+                                None,
+                                dispatch_order,
+                            ))));
+                            continue;
+                        }
+                        if handle_tool_execution_result(Ok(synthetic)) {
+                            break;
+                        }
+                        continue;
+                    }
+                    assistant_content_parts.push(ContentPart::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: input.clone(),
+                    });
+                    // Publish the fully-assembled tool arguments so the TUI can
+                    // render the call summary regardless of provider-specific
+                    // streaming quirks (some local providers omit ToolCallEnd
+                    // stream events for the argument payload).
+                    self.event_bus.publish(Event::ToolCallArgs {
+                        session_id: session_id.to_string(),
+                        call_id: tc.id.clone(),
+                        tool: tc.name.clone(),
+                        args: tc.args_json.clone(),
+                    });
+                    // Activity log: record the tool call.
+                    let tc_id = tc.id.clone();
+                    let tc_name = tc.name.clone();
+                    let tc_args = tc.args_json.clone();
+                    let run_id_for_tc = env.run_id.clone();
+                    self.record_activity_event(move |log| {
+                        log.record_tool_call(&run_id_for_tc, tc_id, tc_name, tc_args)
+                            .map(Some)
+                    })
+                    .await;
+                    // P-8/P-9: clone the per-step `ToolContext` rather than
+                    // rebuilding it (and re-acquiring the `active_spec` async
+                    // lock) for every tool call. `base_tool_ctx` is built once
+                    // before the loop; the clone is cheap (Arc refcount bumps
+                    // plus a `PathBuf`/`String` clone).
+                    let tool_ctx = base_tool_ctx.clone();
+                    let tc_clone = tc.clone();
+                    // The pipeline's context borrows these rather than cloning
+                    // them per stage: one `Arc` bump each, taken once per call.
+                    let storage_clone = self.session_manager.storage().clone();
+                    // T-015 (FR-006): resolve the analyzer client once per tool
+                    // call, outside the spawned task (the resolve performs async
+                    // config + provider I/O). `None` when the analyzer is
+                    // disabled, so the task skips it entirely.
+                    let security_analyzer = self.security_analyzer_client(&turn.model_ref).await;
+                    // T-009 (FR-008/FR-009/FR-021/FR-022): the loop
+                    // restriction guard runs inside the pipeline, before hooks
+                    // and the permission checker, so a restricted loop
+                    // cannot execute a call outside its tool set or scope.
+                    let loop_spec = self.active_loop_specs.read().await.get(session_id).cloned();
+                    // T-010 (FR-015): when the loop has destructive-action
+                    // checkpoints enabled, `auto_approve` becomes `None` so
+                    // `check_permission_with_prompt` forces the checkpoint
+                    // prompt for destructive calls even under allow rules and
+                    // in auto-approve mode (FR-024). Plain turns keep
+                    // `Some(self.auto_approve)`.
+                    let loop_checkpoint = loop_spec.as_ref().is_some_and(|spec| spec.checkpoints);
+                    let auto_approve = if loop_checkpoint {
+                        None
+                    } else {
+                        Some(self.auto_approve)
+                    };
+                    let checkpoint_timeout_secs = loop_spec
+                        .as_ref()
+                        .and_then(|spec| spec.checkpoint_timeout_secs)
+                        .map_or_else(
+                            || u64::from(self.load_config_cached().r#loop.checkpoint_timeout_secs),
+                            u64::from,
+                        );
+                    // `/undo`: record the workspace as this turn found it, before
+                    // its first tool call can change anything. Only a top-level
+                    // run on the local backend is recorded; a failure costs the
+                    // turn its file undo and nothing else.
+                    if !*turn_snapshot_taken {
+                        *turn_snapshot_taken = true;
+                        if agent.mode != crate::agent::AgentMode::Subagent
+                            && turn.session_config.effective_execution_backend()
+                                == codemason_config::ExecutionBackendKind::Local
+                            && let Some(repo) =
+                                crate::session::turn_snapshot::SnapshotRepo::for_working_dir(
+                                    &turn.working_dir,
+                                )
+                            && let Err(e) =
+                                repo.record_turn(session_id, &env.turn_user_msg_id).await
+                        {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                error = %e,
+                                "pre-turn workspace snapshot failed; /undo will not restore files"
+                            );
+                        }
+                    }
+                    // T-012 (FR-018): capture the workspace BEFORE the first
+                    // write action executes. The check is cheap when already
+                    // captured (a map read); when armed, the storage-backed
+                    // snapshot runs synchronously here so no write can slip
+                    // through before the capture. Failures surface as a tool
+                    // error observation instead of executing the call.
+                    if loop_tracker.is_some()
+                        && crate::session::loop_state::LOOP_WRITE_TOOLS.contains(&tc.name.as_str())
+                    {
+                        if let Err(e) = self
+                            .ensure_pre_loop_capture(session_id, &turn.working_dir, &tc.id)
+                            .await
+                        {
+                            let err_msg = format!("pre-loop workspace snapshot failed: {e:#}");
+                            tracing::error!(
+                                session_id = %session_id,
+                                reason = %err_msg,
+                                "loop terminated: workspace capture failed (FR-018)"
+                            );
+                            self.terminate_loop_inner(
+                                session_id,
+                                crate::session::loop_state::StopCondition::UnrecoverableError,
+                                Some(env.total_start),
+                                None,
+                                None,
+                                Some(format!("unrecoverable error: {err_msg}")),
+                                Some(&turn.working_dir),
+                            )
+                            .await;
+                            return ControlFlow::Break(StepExit::Return(Err(anyhow::anyhow!(
+                                err_msg
+                            ))));
+                        }
+                    }
+                    // Every stage after this point lives in
+                    // `ToolDispatchPipeline::run` and nowhere
+                    // else: the task below is a thin shell that awaits it, so the
+                    // sequential arm (which awaits that future) and the concurrent
+                    // arm (which collects it into `join_all`) cannot run a
+                    // different pipeline (FR-012). This block owns only what is
+                    // per-turn rather than per-call - the loop's first-write
+                    // capture above, and the turn's borrows, cloned once here.
+                    let dispatch_ctx = ToolDispatchContext {
+                        session_id: session_id.to_string(),
+                        permission_checker: self.permission_checker.clone(),
+                        event_bus: self.event_bus.clone(),
+                        tool_ctx: tool_ctx.clone(),
+                        loop_spec: loop_spec.clone(),
+                        hook_configs: turn.parsed_hook_configs.clone(),
+                        hook_working_dir: turn.working_dir.clone(),
+                        tool_repeat_guard: self.tool_repeat_guard.clone(),
+                        telemetry: Arc::clone(&self.telemetry),
+                        extraction_engine: self.extraction_engine.clone(),
+                        storage: storage_clone.clone(),
+                        team_context_cache: self.team_context_cache.clone(),
+                        security_analyzer: security_analyzer.clone(),
+                        agent_is_subagent: agent.mode == crate::agent::AgentMode::Subagent,
+                        // The automatic sub-agent YOLO scope's membership test,
+                        // resolved once from the surface this turn was offered. A
+                        // read-only run yields an empty set, so an `explore`
+                        // sub-agent keeps the ordinary prompt policy.
+                        write_capable_tools: env.write_capable_tools.clone(),
+                        auto_approve,
+                        loop_checkpoint,
+                        checkpoint_timeout_secs,
+                        pending_verdicts: self.pending_verdicts.clone(),
+                    };
+                    let profiler_clone = profiler.clone();
+                    let fut = tokio::spawn(async move {
+                        ToolDispatchPipeline::run(
+                            &dispatch_ctx,
+                            &tc_clone,
+                            resolved,
+                            &profiler_clone,
+                        )
+                        .await
+                    });
+                    if parallel_tool_calls {
+                        // Capture the real call identity for the watchdog and
+                        // panic paths BEFORE `tc` is borrowed/moved. C2 used
+                        // to publish a placeholder `watchdog-parallel` call id
+                        // and C1 dropped sibling results on the first failure.
+                        let parallel_call_id = tc.id.clone();
+                        let parallel_tool_name = tc.name.clone();
+                        let parallel_args_json = tc.args_json.clone();
+                        // The synthesised-outcome constructor publishes
+                        // `ToolCallEnd` itself, so it needs its own handles: the
+                        // ones above are moved into the spawned tool task.
+                        let parallel_event_bus = self.event_bus.clone();
+                        let parallel_session_id = session_id.to_string();
+                        let watchdog_identity: WatchdogIdentity = (tc.id.clone(), tc.name.clone());
+                        // The join-failure answer is built here, before the
+                        // future is moved into the `join_all`, by the one
+                        // synthesised-outcome constructor the sequential arm
+                        // also uses (FR-012). It is a plain function returning
+                        // the outcome, so neither arm assembles the tuple itself.
+                        let synthesise_failure =
+                            move |call_id: String,
+                                  name: String,
+                                  join_err: &dyn std::fmt::Display| {
+                                let msg = format!("Tool task failed: {join_err}");
+                                let synthetic_tc = crate::session::history::PendingToolCall {
+                                    id: call_id,
+                                    name,
+                                    args_json: parallel_args_json.clone(),
+                                };
+                                crate::session::dispatch::ToolDispatchPipeline::synthesised(
+                                    &synthetic_tc,
+                                    &msg,
+                                    0,
+                                    &parallel_event_bus,
+                                    &parallel_session_id,
+                                )
+                            };
+                        let abort_handle = fut.abort_handle();
+                        futures.push(Ok(Box::pin(async move {
+                            // A tuple rather than a bare `None`, so the arm's
+                            // shape is inferable from this line alone.
+                            let no_stall: Option<(String, String)> = None;
+                            let no_join_error: Option<String> = None;
+                            match tokio::time::timeout(TOOL_WATCHDOG_TIMEOUT, fut).await {
+                                Ok(Ok(ok)) => (Ok(ok), no_stall, no_join_error, dispatch_order),
+                                Ok(Err(join_err)) => {
+                                    // C1: the tool task panicked or failed to
+                                    // join. Synthesise an error result so the
+                                    // tool_use record is not orphaned in the
+                                    // conversation history, and surface the
+                                    // panic so loop sessions still terminate.
+                                    // The outcome comes from the pipeline's one
+                                    // synthesised-outcome constructor, so this
+                                    // shape and the sequential one cannot word
+                                    // the same failure differently (FR-012).
+                                    let outcome = synthesise_failure(
+                                        parallel_call_id,
+                                        parallel_tool_name,
+                                        &join_err,
+                                    );
+                                    (
+                                        Ok(outcome),
+                                        None,
+                                        Some(join_err.to_string()),
+                                        dispatch_order,
+                                    )
+                                }
+                                Err(_) => {
+                                    abort_handle.abort();
+                                    (
+                                        Err(ToolTaskError::WatchdogAbort),
+                                        Some(watchdog_identity),
+                                        None,
+                                        dispatch_order,
+                                    )
+                                }
+                            }
+                        }) as StepOutcomeSlot));
+                    } else {
+                        let watchdog_identity: WatchdogIdentity = (tc.id.clone(), tc.name.clone());
+                        let abort_handle = fut.abort_handle();
+                        let result = match tokio::time::timeout(TOOL_WATCHDOG_TIMEOUT, fut).await {
+                            Ok(result) => result.map_err(ToolTaskError::Join),
+                            Err(_) => {
+                                abort_handle.abort();
+                                *watchdog_timed_out = true;
+                                let msg = watchdog_timeout_msg(
+                                    &watchdog_identity.1,
+                                    &watchdog_identity.0,
+                                );
+                                // Structured fields so a structured consumer can
+                                // attribute the timeout without parsing the message
+                                // text (audit finding).
+                                warn!(
+                                    tool = %watchdog_identity.1,
+                                    call_id = %watchdog_identity.0,
+                                    timeout_ms = TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                                    msg = %msg,
+                                    "tool watchdog timed out; call aborted"
+                                );
+                                // Close out the tool call in the UI: no `ToolCallEnd`
+                                // was published because the spawned task was aborted.
+                                self.event_bus.publish(Event::ToolCallEnd {
+                                    session_id: session_id.to_string(),
+                                    call_id: watchdog_identity.0,
+                                    tool: watchdog_identity.1,
+                                    error: Some(msg.clone()),
+                                    duration_ms: TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                                });
+                                self.event_bus.publish(Event::AgentError {
+                                    session_id: session_id.to_string(),
+                                    error: msg.clone(),
+                                });
+                                self.event_bus.publish(Event::AgentNotice {
+                                    session_id: session_id.to_string(),
+                                    message: msg,
+                                });
+                                // Stop processing further tool calls for this turn.
+                                break;
+                            }
+                        };
+                        match result {
+                            Ok(ok) => {
+                                if handle_tool_execution_result(Ok(ok)) {
+                                    break;
+                                }
+                            }
+                            Err(join_err) => {
+                                // C1: a panicked/failed tool task must not
+                                // orphan its tool_use record. Synthesise an
+                                // error result (rendered through the normal
+                                // handler) and stage the panic so active
+                                // loops still terminate (T-007).
+                                let msg = format!("Tool task failed: {join_err}");
+                                warn!(error = %join_err, "Tool execution task panicked");
+                                staged_tool_panic = Some(join_err.to_string());
+                                let synthetic = Ok(ToolDispatchPipeline::synthesised(
+                                    &tc,
+                                    &msg,
+                                    0,
+                                    &self.event_bus,
+                                    session_id,
+                                ));
+                                if handle_tool_execution_result(synthetic) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if parallel_tool_calls {
+                    // FR-012: the outcomes are applied in the provider's
+                    // order, in this arm exactly as in the sequential one. The
+                    // step is a list of slots in that order - a future for a
+                    // call that runs, an already-decided outcome for a call the
+                    // prepare loop refused - so waiting and then draining the
+                    // list yields the calls in the order the provider listed
+                    // them. Applying each outcome as it finished (or appending
+                    // refusals where they were decided) would make the same step
+                    // produce two different histories depending on
+                    // `parallel_tool_calls`, which is what the one pipeline
+                    // exists to prevent.
+                    let results: Vec<ToolStepResult> = {
+                        let _scope = profiler.scope("loop.tool_phase.join_parallel");
+                        let settled =
+                            futures::future::join_all(futures.into_iter().map(|slot| async move {
+                                match slot {
+                                    Ok(future) => Some(future.await),
+                                    Err(outcome) => Some(*outcome),
+                                }
+                            }))
+                            .await;
+                        settled.into_iter().flatten().collect()
+                    };
+                    for (result, stalled_tool, panic_msg, _order) in results {
+                        if let Some((call_id, tool_name)) = stalled_tool {
+                            *watchdog_timed_out = true;
+                            let msg = watchdog_timeout_msg(&tool_name, &call_id);
+                            warn!(
+                                tool = %tool_name,
+                                call_id = %call_id,
+                                timeout_ms = TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                                msg = %msg,
+                                "tool watchdog timed out; call aborted"
+                            );
+                            // C2: close out the stalled call with its REAL
+                            // call id (a placeholder id left the TUI part
+                            // open) and keep draining sibling results so
+                            // completed calls are not dropped.
+                            self.event_bus.publish(Event::ToolCallEnd {
+                                session_id: session_id.to_string(),
+                                call_id,
+                                tool: tool_name,
+                                error: Some(msg.clone()),
+                                duration_ms: TOOL_WATCHDOG_TIMEOUT.as_millis() as u64,
+                            });
+                            self.event_bus.publish(Event::AgentError {
+                                session_id: session_id.to_string(),
+                                error: msg.clone(),
+                            });
+                            self.event_bus.publish(Event::AgentNotice {
+                                session_id: session_id.to_string(),
+                                message: msg,
+                            });
+                            continue;
+                        }
+                        if let Some(panic) = panic_msg {
+                            staged_tool_panic = Some(panic);
+                        }
+                        match result {
+                            Ok(ok) => {
+                                if handle_tool_execution_result(Ok(ok)) {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                // Defense-in-depth: the wrapper converts every
+                                // join `Err` into `Ok(synthetic)` + a panic
+                                // message, and the only remaining `Err` here is
+                                // `WatchdogAbort`, which is paired with
+                                // `stalled_tool` and handled above. If this arm
+                                // ever fires, log LOUDLY - it means the wrapper
+                                // contract was broken.
+                                warn!(error = %e, "unreachable: tool task returned Err without a stalled-tool identity; wrapper contract violated");
+                                staged_tool_panic = Some(e.to_string());
+                                // C2: keep draining sibling results.
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            // Merge any staged panic from the parallel drain paths.
+            if tool_panic.is_none() {
+                tool_panic = staged_tool_panic.take();
+            }
+            // P-15: publish a single `ToolCallBatch` for this step with
+            // all per-call summaries, so consumers can render atomically.
+            if !batch_entries.is_empty() {
+                // Activity log: record each tool result from the batch
+                // (PERF-040: queued onto the background writer task, which
+                // batches the whole step into one blocking hop).
+                self.record_step_tool_results(&env.run_id, &batch_entries)
+                    .await;
+                // T-017 (FR-025): tally this iteration's tool calls into
+                // the loop tracker so the run's tool-call total is
+                // published with the loop telemetry on termination. The
+                // tool-dispatch phase only runs when the response carried
+                // tool calls, so a no-tool-call step cannot double-count.
+                if let Some(tracker) = state.loop_tracker.as_mut() {
+                    tracker.record_tool_calls(llm_result.tool_calls.len() as u64);
+                    self.persist_loop_tracker(session_id, &tracker).await;
+                }
+                self.event_bus.publish(Event::ToolCallBatch {
+                    session_id: env.session_id_arc.to_string(),
+                    step: step as u64,
+                    calls: batch_entries.clone(),
+                });
+            }
+            if state.agent_switch_requested
+                || state.agent_complete_requested
+                || state.watchdog_timed_out
+            {
+                return ControlFlow::Break(StepExit::Break);
+            }
+            // T-007 (FR-011, FR-012): classify this step's tool results.
+            // A panic/join failure or a permission hard-deny terminates an
+            // active loop immediately (FR-011, no retry); recoverable
+            // failures were appended as observations above and only
+            // terminate the loop once the consecutive count exceeds the
+            // retry allowance (FR-012). Successful steps reset the
+            // consecutive-failure counter.
+            if let Some(tracker) = state.loop_tracker.as_mut() {
+                if self
+                    .classify_step_failures(
+                        session_id,
+                        &turn,
+                        env.total_start,
+                        tracker,
+                        &batch_entries,
+                        tool_panic.clone(),
+                    )
+                    .await
+                    .is_break()
+                {
+                    return ControlFlow::Break(StepExit::Break);
+                }
+            }
+            // Auto task status updates (P-10: reuse the `active_spec_id`
+            // already read above for the `ToolContext`, and short-circuit
+            // when no spec is active or no file-write tool was called).
+            self.auto_complete_spec_tasks(
+                active_spec_id.as_deref(),
+                &llm_result.tool_calls,
+                &turn.working_dir,
+            )
+            .await;
+            // Append to chat history (P-17: `std::mem::take` moves the
+            // contents into `ChatContent::Parts` while leaving the Vec
+            // buffer allocated for reuse on the next step). P-6: mutate the
+            // shared `Arc<Vec>` via `Arc::make_mut` so an unchanged
+            // history is not cloned.
+            //
+            // FR-013 (T-016): the turn's history is appended only here,
+            // after every call of the step has been awaited and its
+            // permission verdict settled, so this line can never run while
+            // a verdict is unresolved - the step could not have reached it.
+            Arc::make_mut(&mut state.chat_messages).push(ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::Parts(std::mem::take(&mut state.assistant_content_parts)),
+            });
+            Arc::make_mut(&mut state.chat_messages).push(ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Parts(std::mem::take(&mut state.tool_result_parts)),
+            });
+            ControlFlow::Continue(())
+        }
+    }
 }
