@@ -113,12 +113,21 @@ pub trait OpenAccessClient: Send + Sync {
 }
 
 /// Production HTTP client for OA lookups.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ReqwestOpenAccessClient {
     /// Optional contact email appended to the user-agent.
     pub contact_email: Option<String>,
     /// Per-request timeout.
     pub timeout: Duration,
+}
+
+/// Hand-written so the default carries the 30-second timeout from
+/// [`ReqwestOpenAccessClient::new`]; a derived `Default` would set
+/// `Duration::ZERO` and time out every request (RS-09).
+impl Default for ReqwestOpenAccessClient {
+    fn default() -> Self {
+        Self::new(None)
+    }
 }
 
 impl ReqwestOpenAccessClient {

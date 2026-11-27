@@ -2703,7 +2703,15 @@ impl App {
         models: &[serde_json::Value],
         error: &Option<String>,
     ) {
-        self.model_loading_state = None;
+        // UI-04: only this provider's result ends its spinner; another
+        // provider's discovery finishing must not hide one still loading.
+        if self
+            .model_loading_state
+            .as_ref()
+            .is_some_and(|state| state.provider_id == provider_id)
+        {
+            self.model_loading_state = None;
+        }
         let parsed_models: Vec<ModelInfo> = models
             .iter()
             .filter_map(|v| serde_json::from_value(v.clone()).ok())

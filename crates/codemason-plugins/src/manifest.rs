@@ -766,15 +766,17 @@ pub fn parse_command_markdown(content: &str) -> (String, String) {
     let after = after
         .strip_prefix('\n')
         .unwrap_or_else(|| after.strip_prefix("\r\n").unwrap_or(after));
-    // Find the closing --- at the start of a line.
+    // Find the closing --- at the start of a line. `split_inclusive` keeps
+    // each line's real terminator (`\n` or `\r\n`), so `offset` is a true
+    // byte offset into `after` on both LF and CRLF input (RS-01).
     let mut offset = 0usize;
     let mut closing = None;
-    for line in after.lines() {
+    for line in after.split_inclusive('\n') {
         if line.trim() == "---" {
             closing = Some(offset);
             break;
         }
-        offset += line.len() + 1;
+        offset += line.len();
     }
     let Some(closing) = closing else {
         return (String::new(), content.to_string());

@@ -81,3 +81,15 @@ async fn complete_gathering_preserves_sources_count_and_queries() {
         "status should be updated to complete; got:\n{content}"
     );
 }
+
+/// RS-02: a status update on a CRLF RESEARCH.md keeps the original
+/// frontmatter instead of prepending a placeholder block.
+#[test]
+fn replace_status_on_crlf_keeps_original_frontmatter() {
+    let content = "---\r\nname: crlf-item\r\nstatus: draft\r\n---\r\n\r\n# Body\r\n";
+    let out = replace_frontmatter_status_line(content, ResearchStatus::Archived);
+    assert!(out.contains("name: crlf-item"), "{out:?}");
+    assert!(!out.contains("name: unknown"), "{out:?}");
+    assert_eq!(out.matches("---").count(), 2, "{out:?}");
+    assert!(out.contains(&format!("status: {}", ResearchStatus::Archived.as_str())));
+}

@@ -5438,7 +5438,14 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                     return std::ops::ControlFlow::Break(());
                 }
 
-                if let Err(e) = std::fs::write(&config_path, &json) {
+                // UI-06: `create_new`, so a file another process created after
+                // the `exists()` check above is never overwritten.
+                let written = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&config_path)
+                    .and_then(|mut file| std::io::Write::write_all(&mut file, json.as_bytes()));
+                if let Err(e) = written {
                     self.append_assistant_text(&format!(
                         "From: /init config\n[err] **Failed to write config file `{}`: {}**",
                         config_path.display(),

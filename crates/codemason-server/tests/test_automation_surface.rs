@@ -356,3 +356,19 @@ async fn webhook_ingress_rate_limit_is_per_automation_id() {
         "another automation id must not share the exhausted bucket"
     );
 }
+
+/// RS-08: an automation runs in the project the server state was built for
+/// (the parent of its research root), not the process's launch directory,
+/// which stays put when a session in another project is resumed.
+#[test]
+fn automation_runs_in_the_state_project_root_not_the_process_cwd() {
+    let mut state = crate::support::test_state("tok");
+    let project =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp/rs08-project");
+    state.research_root = std::sync::Arc::new(project.join("research"));
+
+    let dir = codemason_server::routes::automation::working_dir(&state);
+
+    assert_eq!(dir, project);
+    assert_ne!(dir, std::env::current_dir().expect("cwd"));
+}

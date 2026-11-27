@@ -66,11 +66,15 @@ const REQUEST_TIMEOUT_SECS: u64 = 60;
 /// with `503 Service Unavailable`.
 const MAX_SSE_CONNECTIONS: usize = 64;
 
-/// Requests permitted per rolling minute per rate-limit key (F-L1).
+/// Requests permitted per fixed one-minute window per rate-limit key (F-L1).
 ///
 /// Referenced by the limiter condition and the error message so the advertised
 /// limit and the enforced limit cannot drift apart.
 const RATE_LIMIT_PER_MINUTE: u32 = 60;
+
+/// Length of one rate-limit window (RS-06). Kept separate from
+/// [`RATE_LIMIT_PER_MINUTE`]: that constant is a request count, not seconds.
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 /// Origins permitted to make cross-origin requests to the API (F-M8).
 ///
@@ -1145,7 +1149,9 @@ pub(crate) fn error_response(
 
 /// Apply the per-session rate limit to a mutating request.
 ///
-/// FUNC-066: enforce exactly 60 requests per rolling minute per session. The
+/// FUNC-066: enforce exactly 60 requests per fixed 60-second window per key:
+/// the window opens on the first request and resets wholesale once
+/// [`RATE_LIMIT_WINDOW`] has elapsed (not a sliding window). The
 /// previous code incremented *then* rejected on `> 60`, so the 61st request was
 /// the first rejection on a warmed window but the count had already been
 /// bumped - an off-by-one against the advertised 60. Check before incrementing
@@ -1171,7 +1177,7 @@ pub(crate) async fn check_rate_limit(
     }
 
     let entry = limiter.entry(key.to_string()).or_insert((0, now));
-    if now.duration_since(entry.1).as_secs() >= RATE_LIMIT_PER_MINUTE.into() {
+    if now.duration_since(entry.1) >= RATE_LIMIT_WINDOW {
         *entry = (1, now);
         None
     } else if entry.0 >= RATE_LIMIT_PER_MINUTE {

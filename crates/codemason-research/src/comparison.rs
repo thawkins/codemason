@@ -228,40 +228,31 @@ fn criterion_cell(prepared: &PreparedSummary, criterion: &str) -> String {
         .next()
         .unwrap_or(&lower_criterion);
 
-    let Some(idx) = prepared.lower.find(keyword) else {
+    let Some(lower_idx) = prepared.lower.find(keyword) else {
         return "-".to_string();
     };
 
-    // The end-of-sentence scan begins AFTER the keyword so a criterion
-    // containing a '.' (e.g. "Node.js support") does not terminate the
-    // snippet mid-keyword.
-    let from = (idx + keyword.len()).min(prepared.body.len());
-    // Byte offsets found in the lowercased text are only valid for slicing
-    // the original text when the lowercase mapping preserved every
-    // character's UTF-8 length; guard the boundaries before slicing.
-    if prepared.body.is_char_boundary(idx) && prepared.body.is_char_boundary(from) {
-        // Find the start of the sentence/line containing the keyword.
-        let start = prepared.body[..idx]
-            .rfind(['\n', '.', ';'])
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let end = prepared.body[from..]
-            .find(['\n', '.', ';'])
-            .map(|i| from + i + 1)
-            .unwrap_or(prepared.body.len());
-        truncate_cell(prepared.body[start..end].trim(), 120)
-    } else {
-        // A character changed byte length under `to_lowercase` (e.g. U+0130),
-        // so the lowercased offsets cannot be mapped back - degrade to the
-        // first content line containing the keyword instead of risking a
-        // mid-character slice panic.
-        let line = prepared
-            .body
-            .lines()
-            .find(|l| l.to_lowercase().contains(keyword))
-            .unwrap_or("-");
-        truncate_cell(line.trim(), 120)
-    }
+    // Offsets in the lowercased copy drift from the original wherever a
+    // character changes UTF-8 length under `to_lowercase` (e.g. U+0130), so
+    // map the match back onto `body` before slicing (RS-03). The mapped
+    // range always lies on char boundaries.
+    let (idx, from) = codemason_types::strutil::lowercase_range_to_original(
+        &prepared.body,
+        lower_idx,
+        lower_idx + keyword.len(),
+    );
+    // The end-of-sentence scan begins AFTER the keyword (`from`) so a
+    // criterion containing a '.' (e.g. "Node.js support") does not terminate
+    // the snippet mid-keyword.
+    let start = prepared.body[..idx]
+        .rfind(['\n', '.', ';'])
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let end = prepared.body[from..]
+        .find(['\n', '.', ';'])
+        .map(|i| from + i + 1)
+        .unwrap_or(prepared.body.len());
+    truncate_cell(prepared.body[start..end].trim(), 120)
 }
 
 /// Return a compact one-line profile summary for the table's Profile column.

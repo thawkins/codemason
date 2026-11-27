@@ -66,10 +66,22 @@ pub fn automation_admin_routes() -> Router<AppState> {
         .route("/automation/{id}/run", post(run_now))
 }
 
-/// A working directory for an automation run: the server's current directory
-/// (serve is launched from the project root).
-fn working_dir() -> std::path::PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+/// The working directory for an automation run: the project root the server
+/// state was built for, the parent of `AppState::research_root` (as SEC-002
+/// already treats it).
+///
+/// RS-08: this used the process's current directory, but `/webapi` builds the
+/// state from the session's directory, which changes when another project's
+/// session is resumed while the process directory does not; a webhook then ran
+/// in the launch directory instead of the project.
+#[doc(hidden)]
+#[must_use]
+pub fn working_dir(state: &AppState) -> std::path::PathBuf {
+    state
+        .research_root
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()))
 }
 
 /// Build an automation service from the shared state (FR-013).
@@ -82,7 +94,7 @@ async fn service(state: &AppState) -> AutomationService {
     AutomationService::new(
         Arc::clone(&state.session_processor),
         automation,
-        working_dir(),
+        working_dir(state),
     )
 }
 

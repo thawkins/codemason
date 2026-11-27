@@ -1121,3 +1121,42 @@ async fn text_delta_appends_to_assistant_message() {
             .any(|m| m.role == Role::Assistant && m.text_content().contains("streamed"))
     );
 }
+
+/// One provider's model-list result must not clear another provider's
+/// loading spinner (UI-04).
+#[tokio::test]
+async fn provider_loading_finished_for_another_provider_keeps_the_spinner() {
+    let mut app = app_with_session("s1");
+    app.handle_event(Event::ProviderLoadingStarted {
+        provider_id: "ollama".to_string(),
+        provider_name: "Ollama".to_string(),
+    })
+    .await;
+
+    app.handle_event(Event::ProviderLoadingFinished {
+        provider_id: "openrouter".to_string(),
+        provider_name: "OpenRouter".to_string(),
+        models: vec![],
+        error: None,
+    })
+    .await;
+    assert_eq!(
+        app.model_loading_state
+            .as_ref()
+            .map(|s| s.provider_id.as_str()),
+        Some("ollama"),
+        "a different provider's result leaves the spinner up"
+    );
+
+    app.handle_event(Event::ProviderLoadingFinished {
+        provider_id: "ollama".to_string(),
+        provider_name: "Ollama".to_string(),
+        models: vec![],
+        error: None,
+    })
+    .await;
+    assert!(
+        app.model_loading_state.is_none(),
+        "its own result clears it"
+    );
+}

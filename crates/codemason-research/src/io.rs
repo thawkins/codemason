@@ -493,14 +493,14 @@ impl ResearchIo {
         // closes it. We anchor on a newline so `---` inside a YAML scalar
         // (e.g. `sources: 0 # see sources/ --- subdirectory`) doesn't break
         // parsing.
-        if let Some(start_rel) = find_yaml_open(content) {
-            let after_open = start_rel + 4; // length of "---\n"
+        if let Some(after_open) = find_yaml_open(content) {
             if let Some(close_rel) = find_yaml_close(&content[after_open..]) {
                 let fm = content[after_open..after_open + close_rel]
                     .trim()
                     .to_string();
+                // `\r` too, so a CRLF closing fence leaves no stray `\r\n`.
                 let body = content[after_open + close_rel + 4..]
-                    .trim_start_matches('\n')
+                    .trim_start_matches(['\r', '\n'])
                     .to_string();
                 return (fm, body);
             }
@@ -746,19 +746,17 @@ fn sanitize_inline(s: &str) -> String {
     out
 }
 
-/// Find the byte offset of the opening `---` fence. The fence must occupy
-/// the start of `content` (with optional leading whitespace). Returns the
-/// offset of the leading `\n` that ends the fence line, or `None` if no
-/// valid opening fence is present.
+/// Find the opening `---` fence. The fence must occupy the start of
+/// `content` (with optional leading whitespace) and end with `\n` or `\r\n`.
+/// Returns the byte offset of the first byte AFTER the fence line's line
+/// terminator, or `None` if no valid opening fence is present.
 fn find_yaml_open(content: &str) -> Option<usize> {
     let trimmed = content.trim_start();
-    trimmed.strip_prefix("---").and_then(|rest| {
-        if rest.starts_with('\n') {
-            Some(content.len() - trimmed.len())
-        } else {
-            None
-        }
-    })
+    let rest = trimmed.strip_prefix("---")?;
+    let after_eol = rest
+        .strip_prefix('\n')
+        .or_else(|| rest.strip_prefix("\r\n"))?;
+    Some(content.len() - after_eol.len())
 }
 
 /// Find the byte offset of the closing `---` fence within `content`, where

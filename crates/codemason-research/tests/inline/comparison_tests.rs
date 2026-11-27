@@ -138,3 +138,18 @@ fn entity_profile_empty_summary_renders_placeholder() {
         "empty profile cell must render an em dash"
     );
 }
+
+/// RS-03: a length-changing lowercase char (U+0130) before the keyword must
+/// not shift the quoted sentence.
+#[test]
+fn criterion_cell_maps_offsets_after_dotted_capital_i() {
+    // Each U+0130 lowercases to 3 bytes from 2, so twelve of them shift
+    // lowered offsets 12 bytes past the short keyword sentence.
+    let summary = format!(
+        "{} hosts the team. Pricing ok. Other stuff here.",
+        "\u{0130}".repeat(12)
+    );
+    let prepared = prepare_summary(&summary);
+    let cell = criterion_cell(&prepared, "pricing");
+    assert_eq!(cell, "Pricing ok.");
+}

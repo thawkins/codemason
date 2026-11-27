@@ -5100,7 +5100,7 @@ impl App {
                 std::fs::create_dir_all(parent)?;
             }
             let content = history_entries_to_string(&self.input_history);
-            std::fs::write(path, content)?;
+            write_history_atomic(path, &content)?;
             tracing::debug!(
                 "Saved {} history entries to {:?}",
                 self.input_history.len(),
@@ -5144,7 +5144,7 @@ impl App {
                     return;
                 }
             }
-            if let Err(e) = std::fs::write(&path, content) {
+            if let Err(e) = write_history_atomic(&path, &content) {
                 tracing::warn!("Failed to save history (async): {e}");
             } else {
                 tracing::debug!("Saved {entry_count} history entries to {path:?}");
@@ -5707,4 +5707,15 @@ fn unescape_history_line(line: &str) -> String {
         }
     }
     result
+}
+
+/// Write the history file through a temp file in the same directory and a
+/// rename (UI-02), so a crash or a full disk mid-write leaves the previous
+/// history in place instead of a truncated file.
+fn write_history_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let temp = tempfile::NamedTempFile::new_in(parent)?;
+    std::fs::write(temp.path(), content)?;
+    temp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }

@@ -318,3 +318,13 @@ async fn create_item_dirs_makes_sources_subdir() {
         .unwrap();
     assert!(ResearchIo::sources_dir(tmp.path(), &name).is_dir());
 }
+
+/// RS-02: a CRLF `---\r\n` opener is recognised and the frontmatter returned.
+#[test]
+fn split_frontmatter_accepts_crlf_opener() {
+    let content = "---\r\nname: crlf-item\r\nstatus: draft\r\n---\r\n\r\n# Body\r\n";
+    let (fm, body) = ResearchIo::split_frontmatter(content);
+    assert!(fm.contains("name: crlf-item"), "{fm:?}");
+    assert!(fm.contains("status: draft"), "{fm:?}");
+    assert!(body.starts_with("# Body"), "{body:?}");
+}
