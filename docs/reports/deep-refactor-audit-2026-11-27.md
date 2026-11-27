@@ -229,7 +229,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 6. Network/SSRF + caps | TL-07 (trailing dot, CGNAT, NAT64), TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | The same messages for allowed URLs and archives | `test_mf_security*`, `test_add`, `test_connector_install`, `test_automation_surface` | **Done** (`8589d4a`) |
 | 7. Research / plugins / server / UI bugs | RS-01, RS-02, RS-03, RS-06, RS-08, RS-09, RS-14, UI-02, UI-03, UI-04, UI-06 | LF / ASCII behaviour unchanged; 429 text unchanged | CRLF fixtures per parser; rate-window test; spinner test | **Done** except UI-03 (blocked by pins) and the UI-02 cross-window merge |
 | 8. Perf | RS-16, RS-17, RS-18, TL-16 | Same results | connectors 379, plugins 502, research 716+788 (`cargo test -p <crate>` at `301f33b`) | **Done** (`301f33b`) for RS-16, RS-17, RS-18; TL-16 **Rejected**: a fix needs a field on `ScannedFile` (built as a literal in `test_store.rs`, `test_m6_data_layer.rs`, `test_types_display.rs`) or every scanned body held in memory; the second read hits the page cache |
-| 9. Infra | RS-22, RS-23, RS-24, RS-25, CO-17 | Same build | `cargo clippy --workspace --all-targets` clean; guard self-tests | Approved |
+| 9. Infra | RS-22, RS-23, RS-24, RS-25, CO-17 | Same build | `cargo clippy --workspace --all-targets -- -D warnings` (CI flags) clean; `Cargo.lock` unchanged; each edited crate `cargo check -p <crate> --all-targets`; llm 354; `check-vcs-duplication.sh --self-test` plus a seeded nested file (at `f2634ac`) | **Done** (`4822443`, `f2634ac`). The two Python guard edits (root `src/`, root `tests/`) are **unverified locally** (no Python on the Windows dev box, W-17); root files were checked by hand against the rules. Bench `@stable` kept: it matches `rust-toolchain.toml` |
 | 10..n. Refactors | Section 5, one car per row group; monster functions one car each | The suite passes unchanged; no test edits | `cargo test -p <crate> --test all` | Approved |
 | Last. Structural | Section 6 | Each sanctioned test edit enumerated in its ticket; non-vacuity proof per rewritten guard | per row | Blocked: needs test-edit sanction |
 | - | Section 7 | - | - | Blocked: owner decision |
@@ -241,6 +241,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 - **Car 1:** Guard added. Exhaustive destructuring in `merge_inner` (CO-24) turns a forgotten section into a compile error.
 - **Cars 2-7:** Guard added (a locking test per defect, with non-ASCII, CRLF or oversized input).
 - **Car 8:** No guard justified. The fixes remove work with no visible behaviour change; the crate suites prove results are unchanged.
+- **Car 9:** Guard added. The three guards now cover the root package and the whole plugins crate; the VCS guard has a non-vacuity run.
 - **Lying comments:** No guard justified.
 
 ---
