@@ -1,0 +1,3 @@
+# Embedded with `include_str!` and written out verbatim as skill files, so
+# they must stay LF in the working tree even under `core.autocrlf=true`.
+crates/codemason-app-core/src/app/graphify_skill_data/** text eol=lf
