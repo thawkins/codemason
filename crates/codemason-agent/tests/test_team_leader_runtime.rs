@@ -97,12 +97,7 @@ async fn test_team_leader_runtime_per_call_bound_applies() {
 fn make_ctx_with_inbox(
     dir: &std::path::Path,
 ) -> (ToolContext, Arc<codemason_agent::task::AgentManager>) {
-    let mgr = Arc::new(codemason_agent::task::AgentManager::new(
-        Arc::new(EventBus::new(16)),
-        task_support::test_processor(),
-        2,
-        300,
-    ));
+    let mgr = task_support::manager(2);
     mgr.open_inbox_for_test("lead-sess");
     let notify = mgr.inbox_notify("lead-sess").expect("inbox notify");
     let mut ctx = make_ctx(dir, Some(notify));
