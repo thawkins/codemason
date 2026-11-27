@@ -1793,6 +1793,17 @@ impl AgentManager {
         Ok(response_msg.text_content())
     }
 
+    /// Test-only helper: open an inbox for `child_session_id` as a running
+    /// sub-agent loop would, without spawning one.
+    #[doc(hidden)]
+    pub fn open_inbox_for_test(&self, child_session_id: &str) {
+        self.suspend_flags.insert(
+            child_session_id.to_string(),
+            Arc::new(AtomicBool::new(false)),
+        );
+        self.open_inbox(child_session_id);
+    }
+
     /// Test-only helper: insert an already-completed task entry directly into
     /// the task map without spawning a real sub-agent.
     #[doc(hidden)]

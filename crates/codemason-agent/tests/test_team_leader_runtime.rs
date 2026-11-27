@@ -17,6 +17,9 @@ use serde_json::json;
 mod team_support;
 use team_support::setup_workspace;
 
+#[path = "task_support/mod.rs"]
+mod task_support;
+
 /// A background inner future that finishes after `secs` seconds.
 fn sleeping_inner(secs: u64) -> tokio::task::JoinHandle<anyhow::Result<String>> {
     tokio::spawn(async move {
@@ -90,18 +93,33 @@ async fn test_team_leader_runtime_per_call_bound_applies() {
     assert!(hit, "per-call bound expiry must be reported");
 }
 
+/// A manager whose inbox for `lead-sess` is open, bound into a context.
+fn make_ctx_with_inbox(
+    dir: &std::path::Path,
+) -> (ToolContext, Arc<codemason_agent::task::AgentManager>) {
+    let mgr = Arc::new(codemason_agent::task::AgentManager::new(
+        Arc::new(EventBus::new(16)),
+        task_support::test_processor(),
+        2,
+        300,
+    ));
+    mgr.open_inbox_for_test("lead-sess");
+    let notify = mgr.inbox_notify("lead-sess").expect("inbox notify");
+    let mut ctx = make_ctx(dir, Some(notify));
+    ctx.agent_manager = Some(Arc::clone(&mgr));
+    (ctx, mgr)
+}
+
 /// `notify_one()` wakes a blocked `team_wait`, which reports `interrupted`.
 #[tokio::test]
 async fn test_team_leader_runtime_user_input_interrupts_wait() {
     let (_tmp, dir) = setup_workspace();
     seed_busy_team(&dir, "leader-team");
-    let notify = Arc::new(tokio::sync::Notify::new());
-    let ctx = make_ctx(&dir, Some(Arc::clone(&notify)));
+    let (ctx, mgr) = make_ctx_with_inbox(&dir);
 
-    let n = Arc::clone(&notify);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        n.notify_one();
+        mgr.send_to_session("lead-sess", "steer").expect("queue");
     });
 
     let start = Instant::now();
@@ -123,6 +141,28 @@ async fn test_team_leader_runtime_user_input_interrupts_wait() {
         "{}",
         out.content
     );
+}
+
+/// A stale permit (message already delivered, inbox empty) must not
+/// interrupt: the wait runs to its timeout.
+#[tokio::test]
+async fn test_team_leader_runtime_stale_notify_does_not_interrupt() {
+    let (_tmp, dir) = setup_workspace();
+    seed_busy_team(&dir, "stale-team");
+    let (ctx, mgr) = make_ctx_with_inbox(&dir);
+    mgr.send_to_session("lead-sess", "handled").expect("queue");
+    assert_eq!(mgr.take_inbox("lead-sess").len(), 1);
+
+    let out = codemason_agent::tool::team_wait::TeamWaitTool
+        .execute(
+            json!({ "team_name": "stale-team", "timeout_secs": 1 }),
+            &ctx,
+        )
+        .await
+        .expect("team_wait");
+    let meta = out.metadata.expect("metadata");
+    assert_eq!(meta["timed_out"], json!(true));
+    assert_ne!(meta.get("interrupted"), Some(&json!(true)));
 }
 
 /// Without input the wait runs to its timeout as before.

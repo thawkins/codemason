@@ -333,7 +333,17 @@ impl Tool for TeamWaitTool {
                         None => std::future::pending::<()>().await,
                     }
                 } => {
-                    return Ok(interrupted_output(&resolved_team_name, &waiting_for));
+                    // `notify_one` leaves a permit behind even when the loop
+                    // already delivered the message at a safe point, so only
+                    // a message still queued interrupts the wait.
+                    let queued = ctx
+                        .agent_manager
+                        .as_ref()
+                        .is_none_or(|m| m.has_inbox(&ctx.session_id));
+                    if queued {
+                        return Ok(interrupted_output(&resolved_team_name, &waiting_for));
+                    }
+                    continue;
                 }
                 received = tokio::time::timeout_at(deadline, rx.recv()) => received,
             };
