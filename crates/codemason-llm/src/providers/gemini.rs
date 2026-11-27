@@ -726,9 +726,6 @@ impl LlmClient for GeminiClient {
             if let Some(reason) = pending_finish.take() {
                 yield StreamEvent::Finish { reason };
             }
-
-            // Ensure we emit a finish event if not already done
-            // (Gemini might end without explicit finishReason in some cases)
         };
 
         Ok(Box::pin(event_stream))

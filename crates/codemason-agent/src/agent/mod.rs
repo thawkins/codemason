@@ -2238,7 +2238,9 @@ pub fn skills_prompt_section(registry: &crate::skill::SkillRegistry, agent: &Age
     section
 }
 
-/// Build a system prompt for the given agent using cached context.#[must_use]
+/// Build a system prompt for the given agent, reading its context (instruction
+/// files and project details) from disk.
+#[must_use]
 pub fn build_system_prompt(
     agent: &AgentInfo,
     working_dir: &Path,

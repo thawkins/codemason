@@ -802,8 +802,8 @@ impl App {
             }
             ResearchCliCommand::Delete { name, yes } => {
                 if !yes {
-                    // The TUI has no inline y/N prompt, so the flag is the
-                    // confirmation.
+                    // This command opens no confirm dialog, so the `--yes`
+                    // flag is the confirmation.
                     self.append_assistant_text(&format!(
                         "From: /research delete\n\nNot deleted. Deleting `research/{name}` \
                          cannot be undone; confirm with `/research delete {name} --yes`."

@@ -1290,7 +1290,10 @@ pub struct AgentConfig {
     /// Whether to hide this agent from user-facing listings.
     #[serde(default)]
     pub hidden: bool,
-    /// Permission rules specific to this agent.
+    /// Permission rules specific to this agent. They replace the agent's
+    /// ruleset, which shapes only the prompt's capability hints (whether it is
+    /// told it may write files or run commands); tool calls are gated by the
+    /// session permission checker, not by these rules (CO-19).
     #[serde(default)]
     pub permission: Vec<crate::permission::PermissionRule>,
     /// Maximum agentic loop iterations.
@@ -1959,7 +1962,8 @@ impl Config {
             .flatten()
             .collect();
 
-        // Fast path: cached, same cwd, and every file mtime and size unchanged.
+        // Fast path: cached, same cwd, same `XDG_CONFIG_HOME`, and every file
+        // mtime and size unchanged.
         // Size is included because filesystem mtimes can be coarse (1 second
         // granularity), so two writes within the same second would otherwise
         // be served a stale config.

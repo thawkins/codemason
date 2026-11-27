@@ -775,9 +775,9 @@ impl App {
                 self.set_status_working("processing");
             }
             // -- Structured-memory cache invalidation -----------------------
-            // Memory tools modify the SQLite store directly, so the TUI panel
+            // Memory tools modify the SQLite store directly, so the memory
             // cache must be marked stale when these events arrive.  The next
-            // `render_memory_panel` call will then refresh from disk.
+            // `refresh_memory_cache` call will then refresh from disk.
             Event::MemoryStored { ref session_id, .. }
             | Event::MemoryRecalled { ref session_id, .. }
             | Event::MemoryForgotten { ref session_id, .. }

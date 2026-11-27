@@ -1158,8 +1158,9 @@ pub(crate) fn error_response(
 /// so the boundary matches the message.
 ///
 /// F-L9: the limiter was previously inlined in `send_message` only. It is now a
-/// shared helper used by every mutating session route (`send_message`,
-/// `spawn_task`, `orch_start`), so they all share one budget. Returns `Some`
+/// shared helper used by every mutating route. Each caller passes its own
+/// `key` (a session id, a route name, `webhook:{id}`), so each key has its own
+/// budget. Returns `Some`
 /// response when the caller is over the limit, `None` when the request may
 /// proceed.
 pub(crate) async fn check_rate_limit(

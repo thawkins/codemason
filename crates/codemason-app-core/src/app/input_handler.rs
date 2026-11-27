@@ -2441,7 +2441,8 @@ impl App {
     }
 
     /// Scroll the Memory panel so the cursor's preview line is within the
-    /// visible window. Uses the line indices computed by `render_memory_panel`.
+    /// visible window, using `memory_row_line_indices` (currently never
+    /// filled, so this does nothing).
     fn scroll_memory_cursor_into_view(&mut self) {
         let line = self
             .memory_row_line_indices

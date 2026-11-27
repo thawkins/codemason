@@ -562,8 +562,9 @@ fn update_frontmatter(
 /// `text_lower` is only used directly when `text` is ASCII: lowercasing
 /// non-ASCII text can change byte lengths (U+0130 lowercases to the 3-byte
 /// `i\u{307}`), so its offsets would not be valid in `text` (RS-02). For
-/// non-ASCII text the match offsets are mapped back to `text` through a
-/// per-char lowering table.
+/// non-ASCII text the match offsets are mapped back to `text` by
+/// `strutil::lowercase_range_to_original`, which lowers `text` one char at a
+/// time.
 fn extract_snippets_lowered(
     text: &str,
     text_lower: &str,

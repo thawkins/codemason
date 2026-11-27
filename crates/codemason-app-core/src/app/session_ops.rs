@@ -870,7 +870,7 @@ impl App {
 
     /// Adopt a completed background context snapshot, if one has landed.
     ///
-    /// T-013/FR-015: called from the TUI main loop every frame. Drains
+    /// T-013/FR-015: called from `App::housekeeping` every frame. Drains
     /// [`crate::app::SessionView::context_snapshot_result`], stores the snapshot in the render
     /// cache and clears the in-flight latch.
     ///

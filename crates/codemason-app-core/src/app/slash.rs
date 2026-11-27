@@ -3601,7 +3601,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 // directory walk below.
                 let config = self.session_processor.load_config_for(&self.cwd_path);
                 // FUNC-015: the block_on runs inside block_in_place, which is
-                // what keeps the TUI runtime's other tasks live while this
+                // what keeps the runtime's other tasks live while this
                 // cached context read completes.
                 let (git_status, readme, agents_md, file_tree) = tokio::runtime::Handle::current()
                     .block_on(async { collect_prompt_context(&working_dir).await });
@@ -12383,9 +12383,11 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         .take(40)
                         .map(char::from)
                         .collect();
-                    // SEC-081: register the bearer token before it is
-                    // interpolated into the chat transcript (and thus the log
-                    // spool), so every render path masks it as `[REDACTED]`.
+                    // SEC-081: register the bearer token for redaction before
+                    // it is used, so text that goes through `redact_secrets`
+                    // (the log window, tracing output) masks it. The chat
+                    // transcript below shows it in full on purpose: the user
+                    // needs it to call the API (RS-28).
                     codemason_types::sanitize::register_secret(&token);
                     self.webapi_token = Some(token.clone());
                     let addr = self.webapi_addr.clone();
