@@ -349,7 +349,13 @@ async fn discovery_scans_npm_global_and_registry_dirs() {
 
     // -- npm global tree ----------------------------------------------------
     let prefix = scratch("npm-prefix");
-    let node_modules = prefix.join("lib").join("node_modules");
+    // npm's global layout: `<prefix>\node_modules` on Windows,
+    // `<prefix>/lib/node_modules` elsewhere.
+    let node_modules = if cfg!(windows) {
+        prefix.join("node_modules")
+    } else {
+        prefix.join("lib").join("node_modules")
+    };
     let scope_pkg = node_modules.join("@modelcontextprotocol").join("server-fs");
     let plain_pkg = node_modules.join("mcp-server-plain");
     std::fs::create_dir_all(&scope_pkg).expect("scope pkg dir");
@@ -369,7 +375,16 @@ async fn discovery_scans_npm_global_and_registry_dirs() {
 
     // A fake `npm` that prints the prefix; placed first on PATH.
     let fake_bin = scratch("fakebin");
+    // Windows runs npm as `npm.cmd`; Unix as an executable `npm` script.
+    #[cfg(windows)]
+    std::fs::write(
+        fake_bin.join("npm.cmd"),
+        format!("@echo {}\r\n", prefix.display()),
+    )
+    .expect("write fake npm");
+    #[cfg(not(windows))]
     let npm = fake_bin.join("npm");
+    #[cfg(not(windows))]
     std::fs::write(&npm, format!("#!/bin/sh\necho '{}'\n", prefix.display()))
         .expect("write fake npm");
     #[cfg(unix)]

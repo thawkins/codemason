@@ -5,7 +5,6 @@ use codemason_agent::hooks::{
     run_pre_tool_use_hooks,
 };
 use codemason_types::event::EventBus;
-use std::path::Path;
 use tempfile::TempDir;
 
 // -- PreToolUse inline-command tests (T-001) ---------------------------------
@@ -24,7 +23,7 @@ fn test_pre_tool_use_exit_code_2_blocks_and_ignores_stdout_allow() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Write",
         r#"{"path":"/etc/passwd"}"#,
         "sess-001",
@@ -58,7 +57,7 @@ fn test_pre_tool_use_exit_code_2_uses_stderr_as_reason() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Bash",
         r#"{"command":"rm -rf /"}"#,
         "sess-002",
@@ -88,7 +87,7 @@ fn test_pre_tool_use_exit_code_2_crops_long_stderr() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Bash",
         r#"{"command":"echo hi"}"#,
         "sess-003",
@@ -118,7 +117,7 @@ fn test_pre_tool_use_exit_code_1_warns_and_returns_no_decision() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Write",
         r#"{"path":"/tmp/test"}"#,
         "sess-004",
@@ -164,7 +163,7 @@ fn test_pre_tool_use_exit_code_3_falls_through_to_no_decision() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "read",
         r#"{"path":"/tmp/foo"}"#,
         "sess-005",
@@ -195,7 +194,7 @@ fn test_pre_tool_use_exit_code_0_allow_still_parses_stdout() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "read",
         r#"{"path":"/tmp/foo"}"#,
         "sess-006",
@@ -221,7 +220,7 @@ fn test_pre_tool_use_no_hooks_returns_no_decision() {
 
     let result = run_pre_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "read",
         r#"{"path":"/tmp/foo"}"#,
         "sess-007",
@@ -250,7 +249,7 @@ async fn test_post_tool_use_exit_code_0_parses_modified_output() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Write",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"original"}"#,
@@ -288,7 +287,7 @@ async fn test_post_tool_use_exit_code_1_warns_and_publishes_hook_warning() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Write",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"original"}"#,
@@ -338,7 +337,7 @@ async fn test_post_tool_use_exit_code_2_flags_and_publishes_tool_result_flagged(
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Bash",
         r#"{"command":"rm -rf /"}"#,
         r#"{"content":"done"}"#,
@@ -388,7 +387,7 @@ async fn test_post_tool_use_exit_code_3_falls_through_to_ok() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "read",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"done"}"#,
@@ -420,7 +419,7 @@ async fn test_post_tool_use_no_hooks_returns_ok() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "read",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"done"}"#,
@@ -463,7 +462,7 @@ async fn test_post_tool_use_flagged_takes_priority_over_warn() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Write",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"done"}"#,
@@ -510,7 +509,7 @@ async fn test_post_tool_use_timeout_falls_through_to_ok() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "read",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"done"}"#,
@@ -560,7 +559,7 @@ async fn test_post_tool_use_timeout_does_not_override_warn() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Write",
         r#"{"path":"/tmp/foo"}"#,
         r#"{"content":"done"}"#,
@@ -602,7 +601,7 @@ async fn test_post_tool_use_timeout_does_not_override_flagged() {
 
     let result = run_post_tool_use_hooks(
         &hooks,
-        Path::new("/tmp"),
+        &std::env::temp_dir(),
         "Bash",
         r#"{"command":"echo hi"}"#,
         r#"{"content":"done"}"#,
@@ -640,7 +639,8 @@ fn write_hook_script(dir: &TempDir, name: &str, body: &str) -> String {
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).expect("set_permissions");
     }
-    path.to_string_lossy().to_string()
+    // Forward slashes so the POSIX shell does not treat `\` as an escape.
+    path.to_string_lossy().replace('\\', "/")
 }
 
 #[test]
@@ -655,7 +655,7 @@ fn test_fixture_pre_tool_use_exit_0_allow() {
     let bus = EventBus::default();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -694,7 +694,7 @@ fn test_fixture_pre_tool_use_exit_0_deny() {
     let bus = EventBus::default();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -729,7 +729,7 @@ fn test_fixture_pre_tool_use_exit_0_modified_input() {
     let bus = EventBus::default();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -768,7 +768,7 @@ fn test_fixture_pre_tool_use_exit_1_warns_and_allows() {
     let mut rx = bus.subscribe();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -821,7 +821,7 @@ fn test_fixture_pre_tool_use_exit_2_blocks() {
     let mut rx = bus.subscribe();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -860,7 +860,7 @@ fn test_fixture_pre_tool_use_exit_3_falls_through() {
     let mut rx = bus.subscribe();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -899,7 +899,7 @@ fn test_fixture_pre_tool_use_exit_2_takes_precedence_over_allow_in_same_stdout()
     let bus = EventBus::default();
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {script}"),
+        command: format!("sh '{script}'"),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -938,14 +938,14 @@ fn test_fixture_pre_tool_use_multiple_hooks_first_blocks() {
     let hooks = vec![
         HookConfig {
             trigger: HookTrigger::PreToolUse,
-            command: format!("sh {block_script}"),
+            command: format!("sh '{block_script}'"),
             timeout_secs: 30,
             plugin_root: None,
             matcher: None,
         },
         HookConfig {
             trigger: HookTrigger::PreToolUse,
-            command: format!("sh {allow_script}"),
+            command: format!("sh '{allow_script}'"),
             timeout_secs: 30,
             plugin_root: None,
             matcher: None,

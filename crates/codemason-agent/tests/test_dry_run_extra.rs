@@ -692,11 +692,16 @@ async fn test_mcp_disabled_server_ready() {
 async fn test_mcp_stdio_spawn_success_ready() {
     let (_xdg, _g1, _g2, _g3) = isolate();
     let dir = TempDir::new().expect("dir");
+    // A command that exists and exits 0 on the host platform.
+    #[cfg(unix)]
+    let server = json!({"type": "stdio", "command": "/bin/true"});
+    #[cfg(windows)]
+    let server = json!({"type": "stdio", "command": "cmd", "args": ["/C", "exit", "0"]});
     let path = write_json(
         &dir,
         &json!({
             "provider": {"anthropic": {"env": []}},
-            "mcp": {"ok": {"type": "stdio", "command": "/bin/true"}}
+            "mcp": {"ok": server}
         }),
     );
 

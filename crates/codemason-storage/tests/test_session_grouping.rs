@@ -70,7 +70,10 @@ fn test_session_grouping_project_root_finds_the_work_tree() {
         .expect("workspace root");
     assert_eq!(project_root(&text(&l.plain)), text(&workspace));
     // Outside any work tree a directory is its own project.
-    assert_eq!(project_root("/"), "/");
+    // The filesystem root canonicalizes to `/` on Unix and `\\?\C:\` on
+    // Windows.
+    let fs_root = Path::new("/").canonicalize().expect("filesystem root");
+    assert_eq!(project_root("/"), text(&fs_root));
     let missing = text(&l.plain.join("deleted"));
     assert_eq!(
         project_root(&missing),

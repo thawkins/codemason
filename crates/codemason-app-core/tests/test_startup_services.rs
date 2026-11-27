@@ -60,7 +60,12 @@ fn scratch_env(tag: &str) -> ScratchEnv {
         .join(format!("startup-services-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir); // INTENTIONAL: start from an empty dir
     std::fs::create_dir_all(dir.join("project")).expect("scratch project");
-    let names = ["HOME", "XDG_CONFIG_HOME"];
+    let names = [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "CODEMASON_CONFIG",
+        "CODEMASON_CONFIG_CONTENT",
+    ];
     let guard = ScratchEnv {
         cwd: std::env::current_dir().expect("cwd"),
         vars: names.iter().map(|n| (*n, std::env::var_os(n))).collect(),
@@ -72,6 +77,9 @@ fn scratch_env(tag: &str) -> ScratchEnv {
     unsafe {
         std::env::set_var("HOME", dir.join("home"));
         std::env::set_var("XDG_CONFIG_HOME", dir.join("config"));
+        // An inherited override would bypass the scratch config below.
+        std::env::remove_var("CODEMASON_CONFIG");
+        std::env::remove_var("CODEMASON_CONFIG_CONTENT");
     }
     // The startup prefetch must not reach the live connector catalogue.
     std::fs::create_dir_all(dir.join("config/codemason")).expect("scratch config dir");

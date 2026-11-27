@@ -299,7 +299,7 @@ async fn decoded_hook_payload_carries_the_callers_argument_object() {
     .expect("write script");
     let hooks = vec![HookConfig {
         trigger: HookTrigger::PreToolUse,
-        command: format!("sh {}", script.display()),
+        command: format!("sh '{}'", script.display().to_string().replace('\\', "/")),
         timeout_secs: 30,
         plugin_root: Some(PathBuf::from("/plugins/guard")),
         matcher: None,

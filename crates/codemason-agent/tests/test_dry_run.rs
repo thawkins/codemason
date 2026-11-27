@@ -144,11 +144,9 @@ async fn test_dry_run_missing_skill_warning_exit_0() {
         .find(|s| s.name == "skills")
         .expect("skills section should be present");
     assert_eq!(skills_section.status, ReadinessStatus::Warning);
-    let missing_name = missing_dir.display().to_string();
-    assert!(
-        skills_section
-            .items
-            .iter()
-            .any(|item| item.name == missing_name && item.status == ReadinessStatus::Warning)
-    );
+    // The item names the configured directory; compare as paths, since the
+    // config spells it with `/` and Windows displays it with `\`.
+    assert!(skills_section.items.iter().any(|item| {
+        std::path::Path::new(&item.name) == missing_dir && item.status == ReadinessStatus::Warning
+    }));
 }

@@ -164,7 +164,7 @@ async fn post_tool_use_hook_additional_context_is_collected() {
     .expect("write");
     let configs = vec![HookConfig {
         trigger: HookTrigger::PostToolUse,
-        command: format!("sh {}", script.display()),
+        command: format!("sh '{}'", script.display().to_string().replace('\\', "/")),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -201,7 +201,7 @@ async fn stop_hook_blocking_collects_stdout_and_stderr_findings() {
     .expect("write");
     let configs = vec![HookConfig {
         trigger: HookTrigger::OnSessionEnd,
-        command: format!("sh {}", script.display()),
+        command: format!("sh '{}'", script.display().to_string().replace('\\', "/")),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -217,7 +217,7 @@ async fn stop_hook_without_findings_does_not_continue() {
     std::fs::write(&script, "#!/bin/sh\ncat >/dev/null\nexit 0\n").expect("write");
     let configs = vec![HookConfig {
         trigger: HookTrigger::OnSessionEnd,
-        command: format!("sh {}", script.display()),
+        command: format!("sh '{}'", script.display().to_string().replace('\\', "/")),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,
@@ -237,7 +237,7 @@ async fn stop_hook_additional_context_is_collected() {
     .expect("write");
     let configs = vec![HookConfig {
         trigger: HookTrigger::OnSessionEnd,
-        command: format!("sh {}", script.display()),
+        command: format!("sh '{}'", script.display().to_string().replace('\\', "/")),
         timeout_secs: 30,
         plugin_root: None,
         matcher: None,

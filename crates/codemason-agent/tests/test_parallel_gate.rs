@@ -551,30 +551,10 @@ async fn run_probe_inner(
     let responder = spawn_permission_responder(&event_bus, false);
 
     // Subscribing before the turn is what makes the log complete: a broadcast
-    // receiver only sees events published after it subscribed.
-    let collector = {
-        let bus = Arc::clone(&event_bus);
-        tokio::spawn(async move {
-            let mut rx = bus.subscribe();
-            let mut log = Vec::new();
-            loop {
-                match tokio::time::timeout(std::time::Duration::from_millis(300), rx.recv()).await {
-                    Ok(Ok(Event::PermissionRequested { .. })) => log.push(StepEvent::Prompt),
-                    Ok(Ok(Event::ToolCallEnd { call_id, error, .. })) => {
-                        if error.is_some() {
-                            log.push(StepEvent::EndError(call_id));
-                        } else {
-                            log.push(StepEvent::EndOk(call_id));
-                        }
-                    }
-                    Ok(Ok(_)) => continue,
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                    Ok(Err(_)) | Err(_) => break,
-                }
-            }
-            log
-        })
-    };
+    // receiver only sees events published after it subscribed. It subscribes
+    // here, synchronously, and is drained once the turn has completed, so no
+    // event depends on a collector task being scheduled in time.
+    let mut rx = event_bus.subscribe();
 
     let tools = two_prompted_calls(harness_dir.path());
     let harness = make_processor(Arc::clone(&event_bus), provider_id, tools, parallel)?;
@@ -600,7 +580,22 @@ async fn run_probe_inner(
     .await;
     let reply = result.expect("the turn runs to completion");
     responder.abort();
-    let events = collector.await.unwrap_or_default();
+    let mut events = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(Event::PermissionRequested { .. }) => events.push(StepEvent::Prompt),
+            Ok(Event::ToolCallEnd { call_id, error, .. }) => {
+                if error.is_some() {
+                    events.push(StepEvent::EndError(call_id));
+                } else {
+                    events.push(StepEvent::EndOk(call_id));
+                }
+            }
+            Ok(_) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
     Ok((reply, logs, events))
 }
 

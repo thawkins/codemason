@@ -121,7 +121,11 @@ async fn mcp_remove_deletes_the_configured_entry_and_keeps_everything_else() {
             }
         }"#,
     ));
-    let global = temp.path().join(".config/codemason/codemason.json");
+    let global = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json");
     let mut app = app();
 
     app.execute_slash_command("/mcp remove echo").await;
@@ -149,7 +153,11 @@ async fn mcp_remove_drops_an_emptied_mcp_section() {
     let (_guard, _env, temp) = enter_project(Some(
         r#"{ "mcp": { "echo": { "type": "stdio", "command": "echo" } } }"#,
     ));
-    let global = temp.path().join(".config/codemason/codemason.json");
+    let global = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json");
     let mut app = app();
 
     app.execute_slash_command("/mcp remove echo").await;
@@ -180,11 +188,19 @@ async fn mcp_remove_clears_the_enable_ledger_entry() {
     assert!(
         !temp
             .path()
-            .join(".config/codemason/codemason.json")
+            .join(".config")
+            .join("codemason")
+            .join("codemason.json")
             .exists()
-            || read_json(&temp.path().join(".config/codemason/codemason.json"))
-                .get("mcp")
-                .is_none(),
+            || read_json(
+                &temp
+                    .path()
+                    .join(".config")
+                    .join("codemason")
+                    .join("codemason.json")
+            )
+            .get("mcp")
+            .is_none(),
         "the config no longer declares the server"
     );
 }
@@ -248,7 +264,9 @@ async fn mcp_list_reports_the_defining_file_for_each_server() {
         report.contains(
             &temp
                 .path()
-                .join(".config/codemason/codemason.json")
+                .join(".config")
+                .join("codemason")
+                .join("codemason.json")
                 .display()
                 .to_string()
         ),
@@ -285,7 +303,9 @@ async fn mcp_list_keeps_the_six_column_table_and_a_separate_defined_in_block() {
     );
     let global = temp
         .path()
-        .join(".config/codemason/codemason.json")
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json")
         .display()
         .to_string();
     assert!(
@@ -301,11 +321,15 @@ async fn mcp_list_keeps_the_six_column_table_and_a_separate_defined_in_block() {
 #[tokio::test]
 async fn mcp_remove_refuses_a_plugin_bridged_server() {
     let (_guard, _env, temp) = enter_project(None);
-    let store = temp.path().join(".config/codemason/plugins");
+    let store = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("plugins");
     let plugin = store.join("mongodb");
     std::fs::create_dir_all(plugin.join(".claude-plugin")).expect("manifest dir");
     std::fs::write(
-        plugin.join(".claude-plugin/plugin.json"),
+        plugin.join(".claude-plugin").join("plugin.json"),
         br#"{"name":"mongodb","version":"1.0.0","mcpServers":"./mcp.json"}"#,
     )
     .expect("write manifest");
@@ -353,10 +377,14 @@ async fn mcp_remove_refuses_a_plugin_bridged_server() {
 #[tokio::test]
 async fn mcp_remove_refuses_an_inline_codex_plugin_server() {
     let (_guard, _env, temp) = enter_project(None);
-    let store = temp.path().join(".config/codemason/plugins");
+    let store = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("plugins");
     let plugin = store.join("inlineplugin");
     std::fs::create_dir_all(plugin.join(".claude-plugin")).expect("manifest dir");
-    let manifest = plugin.join(".claude-plugin/plugin.json");
+    let manifest = plugin.join(".claude-plugin").join("plugin.json");
     std::fs::write(
         &manifest,
         br#"{"name":"inlineplugin","version":"1.0.0","mcp_servers":{"db":{"command":"npx"},"keep":{"command":"keep-mcp"}}}"#,
@@ -397,11 +425,15 @@ async fn mcp_remove_refuses_an_inline_codex_plugin_server() {
 #[tokio::test]
 async fn mcp_list_reports_the_plugin_external_file() {
     let (_guard, _env, temp) = enter_project(None);
-    let store = temp.path().join(".config/codemason/plugins");
+    let store = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("plugins");
     let plugin = store.join("mongodb");
     std::fs::create_dir_all(plugin.join(".claude-plugin")).expect("manifest dir");
     std::fs::write(
-        plugin.join(".claude-plugin/plugin.json"),
+        plugin.join(".claude-plugin").join("plugin.json"),
         br#"{"name":"mongodb","version":"1.0.0","mcpServers":"./mcp.json"}"#,
     )
     .expect("write manifest");

@@ -146,3 +146,34 @@ pub fn team_manager_for(team_dir: &std::path::Path) -> (Arc<TeamManager>, TempDi
     ));
     (manager, tmp, bus)
 }
+
+/// Write an executable quality-gate hook into `dir` that prints `needs work`
+/// and exits 2 (the block/feedback protocol), returning the command string a
+/// hook entry should carry.
+///
+/// `run_hook` execs the command directly with no shell, so the fixture is a
+/// `#!/bin/sh` script on unix and an equivalent `gate.cmd` batch file on
+/// Windows. The returned path uses `/` separators and is resolved past 8.3
+/// short names, because `validate_hook_command` rejects `\` and `~`.
+///
+/// `#[allow(dead_code)]`: see [`team_manager`].
+#[allow(dead_code)]
+pub fn write_exit2_gate(dir: &std::path::Path) -> String {
+    #[cfg(unix)]
+    let script = {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("gate.sh");
+        std::fs::write(&script, "#!/bin/sh\necho needs work\nexit 2\n").expect("write script");
+        let mut perms = std::fs::metadata(&script).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("chmod");
+        script
+    };
+    #[cfg(windows)]
+    let script = {
+        let script = dir.join("gate.cmd");
+        std::fs::write(&script, "@echo needs work\r\n@exit /b 2\r\n").expect("write script");
+        dunce::canonicalize(&script).expect("canonicalize script")
+    };
+    script.to_str().expect("utf8").replace('\\', "/")
+}

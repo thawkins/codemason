@@ -445,7 +445,10 @@ async fn test_slash_exit_stops_app() {
 // -- /system ---------------------------------------------------------
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_slash_system_sets_prompt() {
+    // `make_app` reads the cwd and config environment: hold them stable.
+    let _env = crate::global_env_lock();
     let mut app = make_app();
     app.execute_slash_command("/system You are a pirate. Respond in pirate speak.")
         .await;
@@ -1904,7 +1907,10 @@ fn test_paste_text_replaces_mouse_selection() {
 // -- unknown command -------------------------------------------------
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_slash_unknown_command_shows_error() {
+    // `make_app` reads the cwd and config environment: hold them stable.
+    let _env = crate::global_env_lock();
     let mut app = make_app();
     app.execute_slash_command("/foobar").await;
 

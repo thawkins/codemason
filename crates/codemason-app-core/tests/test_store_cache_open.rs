@@ -478,6 +478,8 @@ fn refetch_does_not_repost_unchanged_warnings() {
 
 #[test]
 fn connector_refetch_keeps_cursor_and_description() {
+    // `make_app` reads the cwd and config environment: hold them stable.
+    let _env = crate::global_env_lock();
     let mut app = support::make_app();
     let key = StoreCacheKey::Connectors;
     let mut linear = connector("linear");

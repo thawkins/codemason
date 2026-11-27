@@ -289,24 +289,9 @@ async fn run_hook_feedback_path_returns_stdout() {
     let (manager, _tmp, _bus) = team_manager("hook-feedback", "lead-1", true);
     let ledger_dir = manager.team_dir.clone();
     let script_dir = tempfile::tempdir().expect("tempdir");
-    let script = script_dir.path().join("gate.sh");
-    std::fs::write(&script, "#!/bin/sh\necho needs work\nexit 2\n").expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script).expect("meta").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script, perms).expect("chmod");
-    }
+    let script = manager_support::write_exit2_gate(script_dir.path());
 
-    let outcome = run_hook(
-        &ledger_dir,
-        HookEvent::TaskCompleted,
-        script.to_str().expect("utf8"),
-        &[],
-        None,
-    )
-    .await;
+    let outcome = run_hook(&ledger_dir, HookEvent::TaskCompleted, &script, &[], None).await;
     match outcome {
         HookOutcome::Feedback(msg) => assert!(msg.contains("needs work"), "feedback: {msg}"),
         HookOutcome::Allow => panic!("expected feedback from an exit-2 hook"),

@@ -238,7 +238,8 @@ fn test_no_config_field_name_is_a_rename_spelling() {
             .strip_prefix(workspace_root())
             .expect("path under root")
             .to_string_lossy()
-            .into_owned();
+            // EXEMPTIONS spell paths with `/` on every platform.
+            .replace('\\', "/");
         let source = fs::read_to_string(&path).expect("read config source");
         let candidates = declared_field_names(&source)
             .into_iter()
@@ -286,7 +287,8 @@ fn test_no_environment_variable_is_named_a_rename_spelling() {
             .strip_prefix(workspace_root())
             .expect("path under root")
             .to_string_lossy()
-            .into_owned();
+            // EXEMPTIONS spell paths with `/` on every platform.
+            .replace('\\', "/");
         let source = fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!("cannot read {}: {e}", path.display());
         });
@@ -483,7 +485,8 @@ fn test_no_dynamic_source_setting_is_a_rename_spelling() {
             path.strip_prefix(workspace_root())
                 .expect("path under root")
                 .to_string_lossy()
-                .into_owned()
+                // EXEMPTIONS spell paths with `/` on every platform.
+                .replace('\\', "/")
         })
         .collect();
     checked.extend(connector_relatives.iter().map(String::as_str));
