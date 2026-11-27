@@ -208,10 +208,14 @@ async fn test_team_create_leader_gate_concurrent_generated_names_distinct() {
         }
         let distinct: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(distinct.len(), names.len(), "names collided: {names:?}");
-        if names
-            .iter()
-            .any(|n| n.rsplit('-').next().is_some_and(|l| l.len() < 3))
-        {
+        // A real suffixed name is `<other>-<k>` (k >= 2) where `<other>` is
+        // itself one of the created names.
+        let set: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+        if names.iter().any(|n| {
+            n.rsplit_once('-').is_some_and(|(base, k)| {
+                k.parse::<u32>().is_ok_and(|k| k >= 2) && set.contains(base)
+            })
+        }) {
             saw_suffix = true;
             break;
         }
