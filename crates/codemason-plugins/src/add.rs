@@ -783,7 +783,6 @@ fn download_and_extract(url: &str, staging: &Path) -> Result<PathBuf, AddError> 
     };
 
     std::fs::create_dir_all(staging).map_err(io_err)?;
-    let archive_path = staging.join("download.archive");
 
     let client = reqwest::blocking::Client::builder()
         // SEC-codemason-plugins-005 (SECTASKS T-062): `Policy::limited` follows an
@@ -832,9 +831,9 @@ fn download_and_extract(url: &str, staging: &Path) -> Result<PathBuf, AddError> 
         }
         bytes.extend_from_slice(&chunk[..read]);
     }
-    std::fs::write(&archive_path, &bytes).map_err(io_err)?;
-
-    extract_archive(&bytes, kind, staging, Some(&archive_path)).map_err(classify_extract_failure)
+    // RS-17: extract straight from memory; the archive used to be written to
+    // `staging/download.archive` and deleted unread.
+    extract_archive(&bytes, kind, staging).map_err(classify_extract_failure)
 }
 
 /// Which archive format a package uses.
@@ -890,7 +889,7 @@ fn extract_archive_into(file: &Path, staging: &Path) -> Result<PathBuf, ExtractE
         )));
     }
     let bytes = std::fs::read(file).map_err(ExtractError::Io)?;
-    extract_archive(&bytes, kind, staging, None)
+    extract_archive(&bytes, kind, staging)
 }
 
 /// Extract `bytes` (a zip or tar.gz archive) into `staging`, enforcing the
@@ -899,7 +898,6 @@ fn extract_archive(
     bytes: &[u8],
     kind: ArchiveKind,
     staging: &Path,
-    remove_after: Option<&Path>,
 ) -> Result<PathBuf, ExtractError> {
     if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
         return Err(ExtractError::Message(format!(
@@ -908,14 +906,11 @@ fn extract_archive(
         )));
     }
     std::fs::create_dir_all(staging).map_err(ExtractError::Io)?;
-    let result = match kind {
+    match kind {
         ArchiveKind::Zip => extract_zip(bytes, staging),
         ArchiveKind::TarGz => extract_tar_gz(bytes, staging),
-    };
-    if let Some(path) = remove_after {
-        let _ = std::fs::remove_file(path); // INTENTIONAL: best-effort temp cleanup
     }
-    result.map(|_| staging.to_path_buf())
+    .map(|()| staging.to_path_buf())
 }
 
 fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {

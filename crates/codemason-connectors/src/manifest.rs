@@ -620,7 +620,7 @@ fn extract_archive(bytes: &[u8], kind: ArchiveKind, staging: &Path) -> Result<Pa
 fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
     use std::io::{Cursor, Read as _};
 
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec()))
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| StageError::Io(format!("zip open: {e}")))?;
     // RS-05: bound the entry count; zero-byte entries cost nothing against the
     // byte caps below.
@@ -678,7 +678,7 @@ fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
 fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
     use std::io::{Cursor, Read as _};
 
-    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes.to_vec()));
+    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
     let entries = archive
         .entries()
