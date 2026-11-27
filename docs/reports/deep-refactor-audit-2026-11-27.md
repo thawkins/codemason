@@ -236,6 +236,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 13. Surface dedupe | RS-10, RS-11 | Each crate keeps its messages | plugins 502, connectors 379, surface 70 (4 new), vcs-duplication and shared-guards clean, at `9b1f042` | **Done** (`9b1f042`). Two drifts fixed: plugins accepted a `C:/x` entry on Unix; connectors kept a source with an unsafe subpath. The claim that only plugins rejects symlinks was stale (connectors refuses them in `copy_dir_recursive`). The download loops still differ in error type and stay per crate |
 | 14. GUI Material gaps | UI-13, UI-14 | Same labels, actions, click-only focus and Wrap toggle state; the look changes on purpose (Material First) | gui 742 (2 new material tests), at `d271eaf` | **Done** (`d271eaf`). `material::button::small_button` replaces 4 plain-egui click-only buttons (diff, code block, empty-state starters, status bar Details); the waiting count is a `material::badge` in the error tone |
 | 15. Lying comments | CO-19, CO-20, AG-26, RS-27, RS-28, UI-18, config XDG cache comment | Comment-only, except AG-26: its `#[must_use]` now applies | clippy `-D warnings` on 8 crates; doc tests agent 81 and config 8; `test_block_in_place_guard`; no test or script greps the old text, at `7df829a` | **Done** (`7df829a`). UI-18 had 2 more "TUI main loop" sites than listed. Finding: `memory_row_line_indices` is never filled, so the memory panel cursor never scrolls; this is dead code, left as it is |
+| 16. Monster: `merge_inner` | CO-24 plus the decomposition | Same merge order and rules | config 490 unchanged; a missing field in the destructure gives E0027 (checked, then restored), at `88ba8d2` | **Done** (`88ba8d2`). Down from 403 lines (`awk` count at `798eb76`; the audit measured 379) to 241, of which 62 are the guard's field list. Eight section helpers plus `override_some` |
 | 10..n. Refactors | Section 5, one car per row group; monster functions one car each | The suite passes unchanged; no test edits | `cargo test -p <crate> --test all` | Approved |
 | Last. Structural | Section 6 | Each sanctioned test edit enumerated in its ticket; non-vacuity proof per rewritten guard | per row | Blocked: needs test-edit sanction |
 | - | Section 7 | - | - | Blocked: owner decision |
@@ -244,7 +245,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 ### Prevention decisions
 
 - **Car 0:** Guard added. `test_global_config_dir_xdg` fails if the resolver stops honouring the variable. A Windows CI job (O-07) is the real guard for the class.
-- **Car 1:** Guard added. Exhaustive destructuring in `merge_inner` (CO-24) turns a forgotten section into a compile error.
+- **Car 1:** Guard added: `test_merge_inner_sections`. **Correction (batch 16):** this line used to claim car 1 also added exhaustive destructuring (CO-24), but that was never written. Batch 16 added it (`88ba8d2`).
 - **Cars 2-7:** Guard added (a locking test per defect, with non-ASCII, CRLF or oversized input).
 - **Car 8:** No guard justified. The fixes remove work with no visible behaviour change; the crate suites prove results are unchanged.
 - **Car 9:** Guard added. The three guards now cover the root package and the whole plugins crate; the VCS guard has a non-vacuity run.
@@ -253,6 +254,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 - **Car 12:** Guard added. `test_first_byte_timeout` locks the helper's timeout and send-failure messages.
 - **Car 13:** Guard added. `test_surface_archive` locks both drift fixes and the oversized-entry data each crate words for itself.
 - **Car 14:** Guard added. `test_material_small_button_*` locks the size, the click-only focus rule and the toggle state.
+- **Car 16:** Guard added. Exhaustive destructuring of the overlay in `merge_inner` (CO-24): a new `Config` field is a compile error until it is merged.
 - **Lying comments:** No guard justified.
 
 ---
