@@ -200,6 +200,7 @@ fn test_domain_agents_exist() {
         "build",
         "plan",
         "explore",
+        "team-leader",
         "title",
         "summary",
         "rust-coder",
