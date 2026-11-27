@@ -416,6 +416,14 @@ pub struct Config {
 /// `Config::default()` - including the processor's load-failure fallback -
 /// observes the same defaults as a config file with the keys omitted, so the
 /// load-time workaround is no longer needed.
+/// Replace `slot` with `value` when the overlay set it: the "overlay wins
+/// when present" rule `Config::merge_inner` applies to most optional fields.
+fn override_some<T>(slot: &mut Option<T>, value: Option<T>) {
+    if value.is_some() {
+        *slot = value;
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -3468,210 +3476,149 @@ impl Config {
         }
     }
 
+    /// Merge `overlay` onto `base`, field by field, and return the result.
+    ///
+    /// Each section follows one rule, noted where it is applied: an overlay
+    /// value wins when it is set, a list or map is extended or merged per
+    /// key, an opt-in flag ORs, or a section replaces the lower layer
+    /// wholesale when it differs from its default.
     fn merge_inner(mut base: Self, overlay: Self) -> Self {
-        if overlay.username.is_some() {
-            base.username = overlay.username;
+        // CO-24: name every field, with no `..`, so a field added to `Config`
+        // is a compile error here until it is merged (CO-01 was six sections
+        // that were never copied).
+        let Self {
+            username,
+            theme,
+            verbosity,
+            thinking_display,
+            leader,
+            leader_timeout_ms,
+            default_agent,
+            specified_default_agent,
+            provider,
+            permission,
+            agent,
+            r#loop,
+            command,
+            mcp,
+            instructions,
+            response_language,
+            skill_dirs,
+            experimental,
+            hooks,
+            bash,
+            dirs,
+            tavily_api_key,
+            langsearch_api_key,
+            perplexity_api_key,
+            openalex_email,
+            exa_api_key,
+            serper_api_key,
+            code_index,
+            stream,
+            agents,
+            memory,
+            compaction,
+            gcf,
+            formatter,
+            storage,
+            gitlab,
+            vcs,
+            agent_perf,
+            telemetry,
+            yolo,
+            edit_log,
+            activity_log,
+            prices,
+            sdd,
+            trigger,
+            piegap,
+            research,
+            plugins,
+            connectors,
+            automation,
+            input_queue_capacity,
+            execution_backend,
+            backends,
+            acp,
+            i18n,
+            openai,
+            security_analyzer,
+            tools,
+            config_paths,
+        } = overlay;
+
+        override_some(&mut base.username, username);
+        override_some(&mut base.theme, theme);
+        override_some(&mut base.verbosity, verbosity);
+        override_some(&mut base.thinking_display, thinking_display);
+        override_some(&mut base.leader, leader);
+        override_some(&mut base.leader_timeout_ms, leader_timeout_ms);
+        if specified_default_agent {
+            base.default_agent = default_agent;
         }
-        if overlay.theme.is_some() {
-            base.theme = overlay.theme;
-        }
-        if overlay.verbosity.is_some() {
-            base.verbosity = overlay.verbosity;
-        }
-        if overlay.thinking_display.is_some() {
-            base.thinking_display = overlay.thinking_display;
-        }
-        if overlay.leader.is_some() {
-            base.leader = overlay.leader;
-        }
-        if overlay.leader_timeout_ms.is_some() {
-            base.leader_timeout_ms = overlay.leader_timeout_ms;
-        }
-        if overlay.specified_default_agent {
-            base.default_agent = overlay.default_agent;
-        }
-        // Merge provider config deeply so partial overlays do not discard model,
-        // API, or thinking defaults from lower-precedence config files.
-        for (k, v) in overlay.provider {
-            let merged = if let Some(existing) = base.provider.remove(&k) {
-                Self::merge_provider_config(existing, v)
-            } else {
-                v
-            };
-            base.provider.insert(k, merged);
-        }
-        for (k, v) in overlay.agent {
-            base.agent.insert(k, v);
-        }
-        for (k, v) in overlay.command {
-            base.command.insert(k, v);
-        }
-        for (k, v) in overlay.mcp {
-            base.mcp.insert(k, v);
-        }
-        // Price overrides: append entries from the overlay, replacing any
-        // existing entries with the same model id (last-wins per model).
-        for entry in overlay.prices {
-            if let Some(existing) = base.prices.iter_mut().find(|e| e.model == entry.model) {
-                *existing = entry;
-            } else {
-                base.prices.push(entry);
-            }
-        }
+        Self::merge_keyed(&mut base, provider, agent, command, mcp, prices);
         // Permissions, instructions, and skill dirs append
-        base.permission.extend(overlay.permission);
-        base.instructions.extend(overlay.instructions);
-        base.skill_dirs.extend(overlay.skill_dirs);
+        base.permission.extend(permission);
+        base.instructions.extend(instructions);
+        base.skill_dirs.extend(skill_dirs);
         // A project-level language preference is a value, not an additive list,
         // so an overlay that sets it wins outright.
-        if overlay.response_language.is_some() {
-            base.response_language = overlay.response_language;
-        }
+        override_some(&mut base.response_language, response_language);
 
-        if overlay.experimental.open_telemetry {
-            base.experimental.open_telemetry = true;
-        }
-        if overlay.experimental.parallel_tool_calls {
-            base.experimental.parallel_tool_calls = true;
-        }
-        // max_background_agents and background_agent_timeout are value fields
-        // (not opt-in OR-flag booleans), so the overlay must take precedence
-        // over the compiled defaults and any lower-precedence config file.
-        if overlay.experimental.max_background_agents != default_max_background_agents() {
-            base.experimental.max_background_agents = overlay.experimental.max_background_agents;
-        }
-        if overlay.experimental.background_agent_timeout != default_background_agent_timeout() {
-            base.experimental.background_agent_timeout =
-                overlay.experimental.background_agent_timeout;
-        }
-
-        // Telemetry: merge the overlay telemetry config into the base. The
-        // overlay takes precedence when it explicitly enables telemetry.
-        base.telemetry =
-            crate::telemetry::TelemetryConfig::merge(&base.telemetry, &overlay.telemetry);
-        // Legacy experimental.open_telemetry flag support: if the overlay has
-        // the legacy flag set, apply it after merging the new telemetry block.
-        if overlay.experimental.open_telemetry {
-            base.telemetry.apply_legacy_flag(true);
-        }
+        Self::merge_experimental_and_telemetry(&mut base, &experimental, &telemetry);
 
         // Hooks append (overlay hooks are added on top of base hooks)
-        base.hooks.extend(overlay.hooks);
+        base.hooks.extend(hooks);
 
         // Bash lists are unioned across global + project configs
-        Self::union_into(&mut base.bash.allowlist, overlay.bash.allowlist);
-        Self::union_into(&mut base.bash.denylist, overlay.bash.denylist);
+        Self::union_into(&mut base.bash.allowlist, bash.allowlist);
+        Self::union_into(&mut base.bash.denylist, bash.denylist);
 
-        // GitLab: overlay fields override base
-        if overlay.gitlab.instance_url.is_some() {
-            base.gitlab.instance_url = overlay.gitlab.instance_url;
-        }
-        if overlay.gitlab.token.is_some() {
-            base.gitlab.token = overlay.gitlab.token;
-        }
-        if overlay.gitlab.username.is_some() {
-            base.gitlab.username = overlay.gitlab.username;
-        }
+        Self::merge_vcs(&mut base, gitlab, vcs);
 
-        // VCS hosts: an overlay that names hosts replaces the base list.
-        if !overlay.vcs.github.hosts.is_empty() {
-            base.vcs.github.hosts = overlay.vcs.github.hosts;
-        }
-        let autofix = overlay.vcs.autofix;
-        if autofix.poll_secs.is_some() {
-            base.vcs.autofix.poll_secs = autofix.poll_secs;
-        }
-        if autofix.max_attempts.is_some() {
-            base.vcs.autofix.max_attempts = autofix.max_attempts;
-        }
-        if autofix.default_on.is_some() {
-            base.vcs.autofix.default_on = autofix.default_on;
-        }
+        // Search and lookup credentials: an overlay value overrides the base.
+        override_some(&mut base.tavily_api_key, tavily_api_key);
+        override_some(&mut base.langsearch_api_key, langsearch_api_key);
+        override_some(&mut base.perplexity_api_key, perplexity_api_key);
+        override_some(&mut base.openalex_email, openalex_email);
+        override_some(&mut base.exa_api_key, exa_api_key);
+        override_some(&mut base.serper_api_key, serper_api_key);
 
-        // tavily_api_key: overlay overrides base
-        if overlay.tavily_api_key.is_some() {
-            base.tavily_api_key = overlay.tavily_api_key;
-        }
-
-        // langsearch_api_key: overlay overrides base
-        if overlay.langsearch_api_key.is_some() {
-            base.langsearch_api_key = overlay.langsearch_api_key;
-        }
-
-        // perplexity_api_key: overlay overrides base
-        if overlay.perplexity_api_key.is_some() {
-            base.perplexity_api_key = overlay.perplexity_api_key;
-        }
-
-        // openalex_email: overlay overrides base
-        if overlay.openalex_email.is_some() {
-            base.openalex_email = overlay.openalex_email;
-        }
-
-        // exa_api_key: overlay overrides base
-        if overlay.exa_api_key.is_some() {
-            base.exa_api_key = overlay.exa_api_key;
-        }
-
-        // serper_api_key: overlay overrides base
-        if overlay.serper_api_key.is_some() {
-            base.serper_api_key = overlay.serper_api_key;
-        }
-
-        // code_index: overlay takes precedence only for explicitly set fields.
-        // The `specified` flags from the overlay are propagated onto the base so
-        // that a subsequent serialise (e.g. save_to_source) writes the field
-        // explicitly and the value survives a reload even when a global config
-        // disagrees.
-        if overlay.code_index.specified.enabled {
-            base.code_index.enabled = overlay.code_index.enabled;
-            base.code_index.specified.enabled = true;
-        }
-        if overlay.code_index.specified.max_file_size {
-            base.code_index.max_file_size = overlay.code_index.max_file_size;
-            base.code_index.specified.max_file_size = true;
-        }
-        if overlay.code_index.specified.extra_exclude_dirs {
-            base.code_index.extra_exclude_dirs = overlay.code_index.extra_exclude_dirs;
-            base.code_index.specified.extra_exclude_dirs = true;
-        }
-        if overlay.code_index.specified.extra_exclude_patterns {
-            base.code_index.extra_exclude_patterns = overlay.code_index.extra_exclude_patterns;
-            base.code_index.specified.extra_exclude_patterns = true;
-        }
+        Self::merge_code_index(&mut base, code_index);
 
         // Tool-name aliases (spec `uniformtools` FR-015): the section merges
         // field-wise - the two opt-in booleans OR, the alias entries union per
         // spelling with the overlay winning a collision - so a project file can
         // add one spelling without discarding the user-global table, and only an
         // explicit `aliases: false` turns resolution off.
-        base.tools.merge(&overlay.tools);
+        base.tools.merge(&tools);
 
         // Compaction: overlay takes precedence.
-        base.compaction = overlay.compaction;
+        base.compaction = compaction;
 
         // GCF: overlay takes precedence (last-wins, same semantics as
         // `compaction` above) so `/gcf off` in a higher-precedence config is
         // respected rather than OR-merged back to on.
-        base.gcf = overlay.gcf;
+        base.gcf = gcf;
 
         // Formatter: a section that sets anything replaces the base section.
-        if !overlay.formatter.is_default() {
-            base.formatter = overlay.formatter;
+        if !formatter.is_default() {
+            base.formatter = formatter;
         }
 
         // Agents panel (spec `agentssetup` FR-036): overlay takes precedence,
         // so a project file can tighten the completed-history cap for its own
         // panel without OR-merging back to the user-global value (a smaller
         // cap is a legitimate choice, not a "switch off").
-        base.agents = overlay.agents;
+        base.agents = agents;
 
-        if overlay.yolo {
-            base.yolo = overlay.yolo;
+        if yolo {
+            base.yolo = yolo;
         }
 
-        if overlay.edit_log {
-            base.edit_log = overlay.edit_log;
+        if edit_log {
+            base.edit_log = edit_log;
         }
 
         // Activity-log: the overlay wins only when it actually says so.
@@ -3686,73 +3633,38 @@ impl Config {
         // toggle appeared not to persist. The overlay therefore takes precedence
         // only when it explicitly set the key (`false` always wins, which is what
         // makes `/alog off` stick); an omitted key leaves the lower layer alone.
-        if !overlay.activity_log {
+        if !activity_log {
             base.activity_log = false;
         }
 
         // SDD flags: OR semantics - a flag enabled in either base or overlay
         // stays enabled. All flags default to false (opt-in, FR-019).
-        base.sdd.merge(&overlay.sdd);
+        base.sdd.merge(&sdd);
 
         // Pie gap flags: OR semantics - a flag enabled in either base or overlay
         // stays enabled. All flags default to false (opt-in, FR-016/FR-018).
-        base.piegap.merge(&overlay.piegap);
+        base.piegap.merge(&piegap);
 
         // Loop defaults: overlay takes precedence for explicitly set fields
         // (values configured away from the compiled defaults).
-        base.r#loop.merge(&overlay.r#loop);
+        base.r#loop.merge(&r#loop);
 
-        // Research settings: overlay takes precedence for explicitly set fields.
-        // Contact email and OA threshold override base when present; the recovery
-        // and academic-exclusion flags use OR semantics because they are opt-in.
-        base.research.open_access_recovery |= overlay.research.open_access_recovery;
-        base.research.exclude_academic_engines |= overlay.research.exclude_academic_engines;
-        if overlay.research.contact_email.is_some() {
-            base.research.contact_email = overlay.research.contact_email;
-        }
-        if overlay.research.oa_min_full_text_chars != default_oa_min_full_text_chars() {
-            base.research.oa_min_full_text_chars = overlay.research.oa_min_full_text_chars;
-        }
-        if overlay.research.max_concepts != default_max_concepts() {
-            base.research.max_concepts = overlay.research.max_concepts;
-        }
-        if overlay.research.max_findings != default_max_findings() {
-            base.research.max_findings = overlay.research.max_findings;
-        }
-        if overlay.research.max_queries != default_max_queries() {
-            base.research.max_queries = overlay.research.max_queries;
-        }
-        base.research.evaluate.merge(&overlay.research.evaluate);
+        Self::merge_research(&mut base, research);
 
-        // Plugins config: the overlay section wins wholesale when present, so
-        // project-level `plugins` settings are not silently discarded by an
-        // absent user-global block (spec `plugins` T-001).
-        if overlay.plugins.is_some() {
-            base.plugins = overlay.plugins;
-        }
-
-        // Connectors config: the overlay section wins wholesale when present, so
-        // project-level `connectors` settings are not silently discarded by an
-        // absent user-global block (spec `connectors` FR-007, FR-024).
-        if overlay.connectors.is_some() {
-            base.connectors = overlay.connectors;
-        }
-
-        // Automation service config (spec `openhands` T-016; FR-013, FR-014,
-        // FR-033): the overlay section wins wholesale when present, so
-        // project-level `automation` settings are not discarded by an absent
-        // user-global block. Dispatch targets name credentials, they do not
-        // carry them (FR-035), so no field-wise merge or redaction is needed.
-        if overlay.automation.is_some() {
-            base.automation = overlay.automation;
-        }
+        // Plugins, connectors and automation config (spec `plugins` T-001,
+        // `connectors` FR-007/FR-024, `openhands` T-016): each overlay section
+        // wins wholesale when present, so project-level settings are not
+        // silently discarded by an absent user-global block. Automation
+        // dispatch targets name credentials, they do not carry them (FR-035),
+        // so no field-wise merge or redaction is needed.
+        override_some(&mut base.plugins, plugins);
+        override_some(&mut base.connectors, connectors);
+        override_some(&mut base.automation, automation);
 
         // Input-queue capacity: overlay wins when explicitly set (spec
         // `inputqueue` FR-015), so a project-level override is not discarded by
         // an absent user-global value.
-        if overlay.input_queue_capacity.is_some() {
-            base.input_queue_capacity = overlay.input_queue_capacity;
-        }
+        override_some(&mut base.input_queue_capacity, input_queue_capacity);
 
         // Execution backend (spec `openhands` FR-001, FR-019): overlay wins
         // whenever it explicitly sets the key, so a project-level override is
@@ -3761,38 +3673,22 @@ impl Config {
         // to the base, so a typo cannot quietly downgrade a session to a
         // different backend - `effective_execution_backend` then keeps the safe
         // `local` default and the caller can report the unknown value.
-        if overlay.execution_backend.is_some() {
-            base.execution_backend = overlay.execution_backend;
-        }
+        override_some(&mut base.execution_backend, execution_backend);
 
-        // Stream, memory, storage, agent-perf and trigger settings: a section
-        // that differs from its defaults replaces the lower layer wholesale
-        // (the `formatter` rule above). These were once never copied, so every
-        // load - which starts from defaults - discarded them from every file.
-        if overlay.stream != StreamConfig::default() {
-            base.stream = overlay.stream;
-        }
-        if overlay.memory != MemoryConfig::default() {
-            base.memory = overlay.memory;
-        }
-        if !overlay.storage.is_default() {
-            base.storage = overlay.storage;
-        }
-        if overlay.agent_perf != AgentPerfConfig::default() {
-            base.agent_perf = overlay.agent_perf;
-        }
-        if !overlay.trigger.is_empty() {
-            base.trigger = overlay.trigger;
-        }
-        // Security analyzer: opt-in and absent by default, so a layer that
-        // writes the section wins outright.
-        if overlay.security_analyzer.is_some() {
-            base.security_analyzer = overlay.security_analyzer;
-        }
+        Self::merge_runtime_sections(
+            &mut base,
+            stream,
+            memory,
+            storage,
+            agent_perf,
+            trigger,
+            security_analyzer,
+        );
+
         // Backend registry (FR-004): overlay entries replace base entries with
         // the same id, otherwise append. Unknown/duplicate-free entries are
         // preserved so a later config file can add or override one backend.
-        for entry in overlay.backends {
+        for entry in backends {
             if let Some(existing) = base.backends.iter_mut().find(|b| b.id == entry.id) {
                 *existing = entry;
             } else {
@@ -3800,76 +3696,250 @@ impl Config {
             }
         }
 
-        // ACP client config (spec `openhands` FR-015): the registry is merged by
-        // agent id so a project-level `acp` block extends the user-global agents
-        // instead of discarding them, and an overlay entry with the same id
-        // replaces the base one. `default_agent` and the whole section win
-        // wholesale when the overlay declares them.
-        if let Some(overlay_acp) = overlay.acp {
-            match base.acp.as_mut() {
-                Some(base_acp) => {
-                    if overlay_acp.default_agent.is_some() {
-                        base_acp.default_agent = overlay_acp.default_agent;
-                    }
-                    if overlay_acp.server_agent.is_some() {
-                        base_acp.server_agent = overlay_acp.server_agent;
-                    }
-                    // The ACP server endpoint is opt-in; an overlay that sets
-                    // the flag enables it and one that omits it leaves the base
-                    // decision untouched (FR-028).
-                    if overlay_acp.server_enabled {
-                        base_acp.server_enabled = true;
-                    }
-                    for (id, entry) in overlay_acp.agents {
-                        base_acp.agents.insert(id, entry);
-                    }
-                }
-                None => base.acp = Some(overlay_acp),
-            }
-        }
+        Self::merge_acp(&mut base, acp);
 
         // UI i18n (spec `openhands` FR-027): the overlay section wins wholesale
         // when present, so a project-level `i18n` setting is not discarded by an
         // absent user-global block.
-        if overlay.i18n.is_some() {
-            base.i18n = overlay.i18n;
-        }
+        override_some(&mut base.i18n, i18n);
 
-        // OpenAI-compatible surface (spec `openhands` FR-012, FR-024, FR-032): an
-        // overlay that enables the surface enables it, and an overlay token
-        // overrides the base token. An overlay that omits the section leaves the
-        // base decision untouched.
-        if let Some(overlay_openai) = overlay.openai {
-            match base.openai.as_mut() {
-                Some(base_openai) => {
-                    if overlay_openai.enabled {
-                        base_openai.enabled = true;
-                    }
-                    if overlay_openai.token.is_some() {
-                        base_openai.token = overlay_openai.token;
-                    }
-                }
-                None => base.openai = Some(overlay_openai),
-            }
-        }
+        Self::merge_openai(&mut base, openai);
 
         // dirs: union of allowlist, denylist, and allowed_roots from both configs
-        Self::union_into(&mut base.dirs.allowlist, overlay.dirs.allowlist);
-        Self::union_into(&mut base.dirs.denylist, overlay.dirs.denylist);
-        Self::union_into(&mut base.dirs.allowed_roots, overlay.dirs.allowed_roots);
+        Self::union_into(&mut base.dirs.allowlist, dirs.allowlist);
+        Self::union_into(&mut base.dirs.denylist, dirs.denylist);
+        Self::union_into(&mut base.dirs.allowed_roots, dirs.allowed_roots);
 
         // Config provenance: the paths that contributed to the resolved config
         // are accumulated here (the loader pushes each leg separately), so a
         // consumer that needs to locate the active project config - for
         // example the plugin store bridge - can read them off the value
         // returned by `load`, not just the intermediate `config` binding.
-        for path in overlay.config_paths {
+        for path in config_paths {
             if !base.config_paths.contains(&path) {
                 base.config_paths.push(path);
             }
         }
 
         base
+    }
+
+    /// The keyed collections of [`Self::merge_inner`]: providers merge deeply,
+    /// agents, commands and MCP servers replace per key, and prices replace
+    /// per model id.
+    fn merge_keyed(
+        base: &mut Self,
+        provider: HashMap<String, ProviderConfig>,
+        agent: HashMap<String, AgentConfig>,
+        command: HashMap<String, CommandDef>,
+        mcp: HashMap<String, McpServerConfig>,
+        prices: Vec<PriceEntry>,
+    ) {
+        // Merge provider config deeply so partial overlays do not discard model,
+        // API, or thinking defaults from lower-precedence config files.
+        for (k, v) in provider {
+            let merged = if let Some(existing) = base.provider.remove(&k) {
+                Self::merge_provider_config(existing, v)
+            } else {
+                v
+            };
+            base.provider.insert(k, merged);
+        }
+        base.agent.extend(agent);
+        base.command.extend(command);
+        base.mcp.extend(mcp);
+        // Price overrides: append entries from the overlay, replacing any
+        // existing entries with the same model id (last-wins per model).
+        for entry in prices {
+            if let Some(existing) = base.prices.iter_mut().find(|e| e.model == entry.model) {
+                *existing = entry;
+            } else {
+                base.prices.push(entry);
+            }
+        }
+    }
+
+    /// The `experimental` and `telemetry` sections of [`Self::merge_inner`].
+    fn merge_experimental_and_telemetry(
+        base: &mut Self,
+        experimental: &ExperimentalFlags,
+        telemetry: &crate::telemetry::TelemetryConfig,
+    ) {
+        if experimental.open_telemetry {
+            base.experimental.open_telemetry = true;
+        }
+        if experimental.parallel_tool_calls {
+            base.experimental.parallel_tool_calls = true;
+        }
+        // max_background_agents and background_agent_timeout are value fields
+        // (not opt-in OR-flag booleans), so the overlay must take precedence
+        // over the compiled defaults and any lower-precedence config file.
+        if experimental.max_background_agents != default_max_background_agents() {
+            base.experimental.max_background_agents = experimental.max_background_agents;
+        }
+        if experimental.background_agent_timeout != default_background_agent_timeout() {
+            base.experimental.background_agent_timeout = experimental.background_agent_timeout;
+        }
+
+        // Telemetry: merge the overlay telemetry config into the base. The
+        // overlay takes precedence when it explicitly enables telemetry.
+        base.telemetry = crate::telemetry::TelemetryConfig::merge(&base.telemetry, telemetry);
+        // Legacy experimental.open_telemetry flag support: if the overlay has
+        // the legacy flag set, apply it after merging the new telemetry block.
+        if experimental.open_telemetry {
+            base.telemetry.apply_legacy_flag(true);
+        }
+    }
+
+    /// The `gitlab` and `vcs` sections of [`Self::merge_inner`].
+    fn merge_vcs(base: &mut Self, gitlab: GitLabIntegrationConfig, vcs: VcsConfig) {
+        // GitLab: overlay fields override base
+        override_some(&mut base.gitlab.instance_url, gitlab.instance_url);
+        override_some(&mut base.gitlab.token, gitlab.token);
+        override_some(&mut base.gitlab.username, gitlab.username);
+
+        // VCS hosts: an overlay that names hosts replaces the base list.
+        if !vcs.github.hosts.is_empty() {
+            base.vcs.github.hosts = vcs.github.hosts;
+        }
+        let autofix = vcs.autofix;
+        override_some(&mut base.vcs.autofix.poll_secs, autofix.poll_secs);
+        override_some(&mut base.vcs.autofix.max_attempts, autofix.max_attempts);
+        override_some(&mut base.vcs.autofix.default_on, autofix.default_on);
+    }
+
+    /// The `code_index` section of [`Self::merge_inner`].
+    ///
+    /// The overlay takes precedence only for explicitly set fields. The
+    /// `specified` flags from the overlay are propagated onto the base so that
+    /// a subsequent serialise (e.g. save_to_source) writes the field
+    /// explicitly and the value survives a reload even when a global config
+    /// disagrees.
+    fn merge_code_index(base: &mut Self, code_index: CodeIndexConfig) {
+        if code_index.specified.enabled {
+            base.code_index.enabled = code_index.enabled;
+            base.code_index.specified.enabled = true;
+        }
+        if code_index.specified.max_file_size {
+            base.code_index.max_file_size = code_index.max_file_size;
+            base.code_index.specified.max_file_size = true;
+        }
+        if code_index.specified.extra_exclude_dirs {
+            base.code_index.extra_exclude_dirs = code_index.extra_exclude_dirs;
+            base.code_index.specified.extra_exclude_dirs = true;
+        }
+        if code_index.specified.extra_exclude_patterns {
+            base.code_index.extra_exclude_patterns = code_index.extra_exclude_patterns;
+            base.code_index.specified.extra_exclude_patterns = true;
+        }
+    }
+
+    /// The `research` section of [`Self::merge_inner`].
+    ///
+    /// The overlay takes precedence for explicitly set fields: contact email
+    /// and the numeric limits override the base when present or changed from
+    /// their defaults; the recovery and academic-exclusion flags use OR
+    /// semantics because they are opt-in.
+    fn merge_research(base: &mut Self, research: ResearchConfig) {
+        base.research.open_access_recovery |= research.open_access_recovery;
+        base.research.exclude_academic_engines |= research.exclude_academic_engines;
+        override_some(&mut base.research.contact_email, research.contact_email);
+        if research.oa_min_full_text_chars != default_oa_min_full_text_chars() {
+            base.research.oa_min_full_text_chars = research.oa_min_full_text_chars;
+        }
+        if research.max_concepts != default_max_concepts() {
+            base.research.max_concepts = research.max_concepts;
+        }
+        if research.max_findings != default_max_findings() {
+            base.research.max_findings = research.max_findings;
+        }
+        if research.max_queries != default_max_queries() {
+            base.research.max_queries = research.max_queries;
+        }
+        base.research.evaluate.merge(&research.evaluate);
+    }
+
+    /// The stream, memory, storage, agent-perf, trigger and security-analyzer
+    /// sections of [`Self::merge_inner`].
+    ///
+    /// A section that differs from its defaults replaces the lower layer
+    /// wholesale (the `formatter` rule). These were once never copied, so
+    /// every load - which starts from defaults - discarded them from every
+    /// file (CO-01).
+    fn merge_runtime_sections(
+        base: &mut Self,
+        stream: StreamConfig,
+        memory: MemoryConfig,
+        storage: StorageConfig,
+        agent_perf: AgentPerfConfig,
+        trigger: crate::trigger::TriggerConfig,
+        security_analyzer: Option<SecurityAnalyzerConfig>,
+    ) {
+        if stream != StreamConfig::default() {
+            base.stream = stream;
+        }
+        if memory != MemoryConfig::default() {
+            base.memory = memory;
+        }
+        if !storage.is_default() {
+            base.storage = storage;
+        }
+        if agent_perf != AgentPerfConfig::default() {
+            base.agent_perf = agent_perf;
+        }
+        if !trigger.is_empty() {
+            base.trigger = trigger;
+        }
+        // Security analyzer: opt-in and absent by default, so a layer that
+        // writes the section wins outright.
+        override_some(&mut base.security_analyzer, security_analyzer);
+    }
+
+    /// The `acp` section of [`Self::merge_inner`] (spec `openhands` FR-015).
+    ///
+    /// The registry is merged by agent id so a project-level `acp` block
+    /// extends the user-global agents instead of discarding them, and an
+    /// overlay entry with the same id replaces the base one. `default_agent`
+    /// and the whole section win wholesale when the overlay declares them.
+    fn merge_acp(base: &mut Self, acp: Option<AcpConfig>) {
+        let Some(overlay_acp) = acp else {
+            return;
+        };
+        match base.acp.as_mut() {
+            Some(base_acp) => {
+                override_some(&mut base_acp.default_agent, overlay_acp.default_agent);
+                override_some(&mut base_acp.server_agent, overlay_acp.server_agent);
+                // The ACP server endpoint is opt-in; an overlay that sets
+                // the flag enables it and one that omits it leaves the base
+                // decision untouched (FR-028).
+                if overlay_acp.server_enabled {
+                    base_acp.server_enabled = true;
+                }
+                base_acp.agents.extend(overlay_acp.agents);
+            }
+            None => base.acp = Some(overlay_acp),
+        }
+    }
+
+    /// The `openai` section of [`Self::merge_inner`] (spec `openhands`
+    /// FR-012, FR-024, FR-032).
+    ///
+    /// An overlay that enables the surface enables it, and an overlay token
+    /// overrides the base token. An overlay that omits the section leaves the
+    /// base decision untouched.
+    fn merge_openai(base: &mut Self, openai: Option<OpenAiConfig>) {
+        let Some(overlay_openai) = openai else {
+            return;
+        };
+        match base.openai.as_mut() {
+            Some(base_openai) => {
+                if overlay_openai.enabled {
+                    base_openai.enabled = true;
+                }
+                override_some(&mut base_openai.token, overlay_openai.token);
+            }
+            None => base.openai = Some(overlay_openai),
+        }
     }
 
     fn merge_provider_config(mut base: ProviderConfig, overlay: ProviderConfig) -> ProviderConfig {
