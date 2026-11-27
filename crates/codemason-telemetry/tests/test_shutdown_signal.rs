@@ -1,8 +1,10 @@
 //! External tests for `shutdown.rs`: the `ShutdownGuard` empty-slot paths and
 //! the real signal-driven flush in `flush_on_signal_arc` (FR-019).
 
-use codemason_telemetry::shutdown::{ShutdownGuard, flush_on_signal_arc};
-use codemason_telemetry::{OtelConfig, TelemetrySubsystem};
+use codemason_telemetry::TelemetrySubsystem;
+use codemason_telemetry::shutdown::ShutdownGuard;
+#[cfg(all(feature = "telemetry", unix))]
+use codemason_telemetry::{OtelConfig, shutdown::flush_on_signal_arc};
 use std::sync::Arc;
 
 /// `into_inner` returns a usable subsystem that can still be flushed.

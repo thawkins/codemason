@@ -2,13 +2,24 @@
 //! extraction, and the post-write step on a tool result.
 
 use std::path::{Path, PathBuf};
+
+use codemason_agent::formatter::{resolve_formatter, written_paths};
+use codemason_config::{FormatterConfig, FormatterEntry};
+use serde_json::json;
+
+// Used only by the post-write tests, which run shell formatters and are
+// Unix-only.
+#[cfg(unix)]
 use std::sync::Arc;
 
+#[cfg(unix)]
 use codemason_agent::event::EventBus;
-use codemason_agent::formatter::{format_after_write, resolve_formatter, written_paths};
+#[cfg(unix)]
+use codemason_agent::formatter::format_after_write;
+#[cfg(unix)]
 use codemason_agent::tool::{ToolContext, ToolOutput};
-use codemason_config::{Config, FormatterConfig, FormatterEntry};
-use serde_json::json;
+#[cfg(unix)]
+use codemason_config::Config;
 
 fn enabled(entries: &[(&str, FormatterEntry)]) -> FormatterConfig {
     FormatterConfig {
@@ -29,6 +40,7 @@ fn custom(command: &[&str], extensions: &[&str]) -> FormatterEntry {
 }
 
 /// A fresh scratch directory under the git-ignored `target/temp/` tree.
+#[cfg(unix)]
 fn scratch(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/temp/formatter")
@@ -38,6 +50,7 @@ fn scratch(name: &str) -> PathBuf {
     dir.canonicalize().expect("canonical scratch dir")
 }
 
+#[cfg(unix)]
 fn ctx(working_dir: &Path, formatter: FormatterConfig) -> ToolContext {
     let mut config = Config::default();
     config.formatter = formatter;
@@ -65,6 +78,7 @@ fn ctx(working_dir: &Path, formatter: FormatterConfig) -> ToolContext {
     }
 }
 
+#[cfg(unix)]
 fn mtime_ms(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
@@ -74,6 +88,7 @@ fn mtime_ms(path: &Path) -> u64 {
         .as_millis() as u64
 }
 
+#[cfg(unix)]
 fn output(path: &Path) -> ToolOutput {
     ToolOutput {
         content: "Wrote file".to_string(),

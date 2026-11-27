@@ -7,6 +7,7 @@
 //! before any filesystem mutation.
 
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
 
 use codemason_tools_extended::project_scaffold::{

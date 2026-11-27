@@ -205,6 +205,7 @@ fn version_probe_args_override_covers_dotnet() {
 /// Multi-line probe output keeps every non-empty line (joined with
 /// `, `), so all installed SDK/runtime versions are reported - not just
 /// the first (e.g. `dotnet --list-sdks` lists 8.x and 9.x).
+#[cfg(unix)]
 #[test]
 fn probe_version_args_all_lines_keeps_every_line() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -222,6 +223,7 @@ fn probe_version_args_all_lines_keeps_every_line() {
 
 /// Write an executable shell script into a temp directory and return its
 /// path (test helper for probe-version fixtures).
+#[cfg(unix)]
 fn write_script(dir: &tempfile::TempDir, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.path().join(name);
     std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
@@ -234,6 +236,7 @@ fn write_script(dir: &tempfile::TempDir, name: &str, body: &str) -> std::path::P
 }
 
 /// A version probe captures the first non-empty stdout line (FR-008).
+#[cfg(unix)]
 #[test]
 fn probe_version_captures_first_stdout_line() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -251,6 +254,7 @@ fn probe_version_captures_first_stdout_line() {
 
 /// A probe falls back to stderr when stdout carries no usable text
 /// (e.g. `erl -version` prints to stderr).
+#[cfg(unix)]
 #[test]
 fn probe_version_falls_back_to_stderr() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -264,6 +268,7 @@ fn probe_version_falls_back_to_stderr() {
 
 /// Spawn failure and a non-zero exit without usable text yield
 /// `Unknown`, never a panic (FR-012).
+#[cfg(unix)]
 #[test]
 fn probe_version_reports_unknown_on_failure() {
     assert_eq!(
@@ -283,6 +288,7 @@ fn probe_version_reports_unknown_on_failure() {
 
 /// A probe exceeding the per-probe timeout is killed and reported as
 /// `Timeout` (FR-012), within a bounded wall-clock window.
+#[cfg(unix)]
 #[test]
 fn probe_version_times_out_and_kills_child() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -589,6 +595,7 @@ fn render_json_report_summary_parity_with_markdown() {
 
 /// `resolve_in_dirs` finds an executable file in a supplied directory
 /// and skips non-executable files (FR-007, command -v semantics).
+#[cfg(unix)]
 #[test]
 fn resolve_in_dirs_finds_executable_skips_plain_file() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -617,6 +624,7 @@ fn resolve_in_dirs_finds_executable_skips_plain_file() {
 
 /// `resolve_in_dirs` searches directories in order and stops at the
 /// first match.
+#[cfg(unix)]
 #[test]
 fn resolve_in_dirs_searches_dirs_in_order() {
     let first = tempfile::tempdir().expect("tempdir first");

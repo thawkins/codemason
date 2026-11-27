@@ -19,16 +19,26 @@ mod manager_support;
 
 mod team_support;
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
+use codemason_agent::team::{Task, fire_task_created_hook};
+// Used only by the hook tests, which run `sh` and are Unix-only.
+#[cfg(unix)]
 use codemason_agent::team::{
-    HookEntry, HookEvent, HookOutcome, Task, TaskStatus, TaskStore, TeamStore,
-    fire_task_created_hook, fire_task_hook,
+    HookEntry, HookEvent, HookOutcome, TaskStatus, TaskStore, TeamStore, fire_task_hook,
 };
+#[cfg(unix)]
 use codemason_agent::tool::team_task_complete::TeamTaskCompleteTool;
+#[cfg(unix)]
 use codemason_agent::tool::{TeamContext, Tool, ToolContext};
+#[cfg(unix)]
 use codemason_types::event::EventBus;
+#[cfg(unix)]
 use serde_json::json;
+#[cfg(unix)]
 use tempfile::TempDir;
 
 /// Install a hook for `event` that appends `label` to `log`.
@@ -62,6 +72,7 @@ fn install_marker_hook(team_dir: &Path, event: HookEvent, label: &str, log: &Pat
 }
 
 /// Read the marker log as a list of fired event labels, in order.
+#[cfg(unix)]
 fn fired(log: &Path) -> Vec<String> {
     match std::fs::read_to_string(log) {
         Ok(raw) => raw.lines().map(str::to_string).collect(),
