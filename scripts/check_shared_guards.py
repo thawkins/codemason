@@ -150,7 +150,7 @@ def scan() -> list[str]:
         parts = path.parts
         if "tests" in parts or "benches" in parts:
             continue
-        rel = str(path)
+        rel = path.as_posix()  # `/` on Windows too, to match the homes above
         src = path.read_text(encoding="utf-8", errors="replace")
         clean = blank_cfg_test_blocks(src)
         for lineno, line in enumerate(clean.splitlines(), 1):
