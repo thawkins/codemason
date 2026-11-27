@@ -79,6 +79,7 @@ Evidence:
 | W-13 | The project-teams walk took `~/.codemason` (the legacy global dir) as a project, so projects under home put their teams in the home folder. | The walk stops at the home folder, compared canonically (8.3 short names). | `cf638a8` |
 | W-14 | Embedded skill data was checked out CRLF under `core.autocrlf`, so Windows builds shipped CRLF skill files. | `.gitattributes` pins that directory to LF (narrow form of O-07). | `65a4c2e` |
 | AG-01..04, 06, 07 | Hook and child-process limits: pre-tool hooks ignored `timeout_secs` and blocked a runtime worker; timed-out hooks leaked the process; a >128 KiB (32 K chars on Windows) tool input made the spawn fail so guard hooks were skipped; stdin-vs-stdout deadlock; verification killed bash only and lost output on one non-UTF-8 byte; a verbose probe was killed as hung. Found on the way: Git for Windows' `binbash.exe` is a launcher, so killing it left scripts running. | One `child_process::run_with_deadline` (AG-18): concurrent stdin, drained pipes, process-tree kill (process group / `taskkill /T`); pre-hooks on the blocking pool; env values over 64 KiB (16 KiB Windows) become empty + `_TRUNCATED=1`. | batch 2 |
+| AG-05, AG-08, AG-13, CO-14 | A trigger with a length-changing lowercase char (U+212A) panicked; `timeout_secs = u64::MAX` overflowed the wait deadline and panicked; a typo'd teammate `memory` scope silently meant none; Bedrock `region`/`profile`/`endpoint_url` were never forwarded and Bedrock compaction ran on the default model. | ASCII case folding; `tool::deadline_after` saturates; unknown scope is an error; `Config::provider_client_options` forwards every provider option plus the model at all three client sites. | batch 3 |
 
 ### 2b. Open: high
 
@@ -90,10 +91,7 @@ Evidence:
 
 | ID | Defect | Where | V |
 |----|--------|-------|---|
-| AG-05 | `" then "` is found in `to_lowercase()` and that offset slices the original string. `"\u{212A} then x"` panics. | `agent/src/trigger/dynamic.rs` | R (traced: U+212A is 3 bytes, `k` is 1) |
-| AG-08 | `Instant::now() + Duration::from_secs(model_u64)` overflows and panics; the schema sets no maximum. | `tool/wait_agents.rs`, `tool/team_wait.rs` | R (traced) |
 | CO-05 | Anthropic `event: error` mid-stream falls into `_ => {}`, so the provider's error text is lost (the Azure copy too). | `llm/providers/anthropic.rs`, `azure_resource.rs` | C |
-| CO-14 | Only 3 provider options are forwarded, so Bedrock `region` / `profile` / `endpoint_url` never reach the provider. Compaction falls back to a hard-coded model. | `agent/.../loop_steps.rs` options forward | C |
 | TL-02 | The `git_clone` destination check is text-only. On Windows `\x` and `C:x` pass, and a symlinked directory escapes everywhere. | `tools-vcs/src/git/mod.rs` | C |
 | TL-03 | The glob recursion resets the root at every level, so `src/**/*.rs` misses nested files and nested hits come back as bare names. | `tools-core/src/glob.rs` (`collect_matches(sub, sub, ..)`) | R (traced) |
 | TL-04 | Porcelain v2 path = `line[4..]` (the whole record), and v2 `u` lines are never parsed, so the conflicted list is always empty. `short:true` uses v1 and is parsed as v2. | `tools-vcs/src/git/git_status.rs` | R (traced) |
@@ -112,12 +110,11 @@ Evidence:
 
 | ID | Defect (narrowed by the verifier where noted) |
 |----|------|
-| W-15 | Six app-core tests fail only in a single-process `cargo test` run (cwd / config races: `test_multisession_new_session_in_a_permitted_path`, `test_project_command_add_registers_permitted_directories_only`, `test_directory_menu_has_back_to_fuzzy_entry`, `test_file_menu_ctrl_backslash_toggles_hidden_filter`, `test_slash_system_sets_prompt`, `test_slash_unknown_command_shows_error`). Each passes alone; every cwd-changing helper holds `global_env_lock`, so the writer is not yet found. Nextest (one process per test) cannot hit it. |
+| W-15 | Six app-core tests fail only in a single-process `cargo test` run (cwd / config races: `test_multisession_new_session_in_a_permitted_path`, `test_project_command_add_registers_permitted_directories_only`, `test_directory_menu_has_back_to_fuzzy_entry`, `test_file_menu_ctrl_backslash_toggles_hidden_filter`, `test_slash_system_sets_prompt`, `test_slash_unknown_command_shows_error`). Each passes alone; every cwd-changing helper holds `global_env_lock`, so the writer is not yet found. Nextest (one process per test) cannot hit it. Same class in agent: `test_loop_telemetry` reads a process-global counter that loop tests in other files also write (its file-local lock cannot exclude them); one failure poisons the lock and cascades. |
 | W-16 | `image_load::file_uri` on a *relative* path yields `file://shots/x.png`, which `uri_path` and the loader read as the UNC host `\shots\x.png` on Windows (a network read). Production callers checked pass absolute paths; no guard enforces it. |
 | W-17 | 28 agent tests and `scripts/check-test-env-isolation.sh` need `python3`; a Windows box without Python cannot run them, and the guard script cannot run at all. |
 | AG-10 | `TaskStore` async fns take a blocking flock and do `std::fs` I/O on the runtime. |
 | AG-11 | `backend/remote.rs` reads `.text()` / `.json()` without a bound. |
-| AG-13 | An unknown `MemoryScope` is an error in `custom.rs` but silently `None` in the team tools. |
 | CO-06 | `index.unwrap_or(0)` merges parallel tool calls in copilot and huggingface (refuted for anthropic/azure). |
 | CO-07 | The redaction prefix lists in types `sanitize.rs` and telemetry `sensitive.rs` have drifted. |
 | CO-12 | ollama_cloud logs the done frame at INFO without `redact_frame`. |
@@ -246,7 +243,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 0b. Windows portability | W-04, W-07..W-14 | Unix behaviour unchanged; no assertion weakened (test edits enumerated in `feebc7a`, `9f8446d`) | Windows: agent 401 to 29 failed (28 need python3), app-core 82 to 6 (single-process races, invisible under nextest), gui 2 to 0, storage 427/427; real profile untouched across full runs | **Done** (`5ff13fb`..`cf638a8`) |
 | 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | **Done** (`3984496`, `86dfcb2`, `3fba902`) |
 | 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | **Done** (see commit "fix(agent): one deadline-bounded child runner") |
-| 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | Approved |
+| 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | **Done** (commit "fix(agent): batch 3 panics and Bedrock options") |
 | 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | Approved |
 | 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | Approved |
 | 6. Network/SSRF + caps | TL-07 (trailing dot, CGNAT, NAT64), TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | The same messages for allowed URLs and archives | `test_mf_security*`, `test_add`, `test_connector_install`, `test_automation_surface` | Approved (the resolver-pinning half of TL-07 is M; included) |

@@ -219,8 +219,10 @@ pub fn parse_trigger_request(input: &str) -> Result<ParsedTriggerRequest, Dynami
         return Ok(ParsedTriggerRequest { condition, action });
     }
 
-    // Try " then " delimiter: "condition then action"
-    if let Some(idx) = body.to_lowercase().find(" then ") {
+    // Try " then " delimiter: "condition then action". ASCII case folding
+    // keeps byte offsets, so `idx` is valid in `body` (full Unicode
+    // lowercasing can change a character's length; AG-05).
+    if let Some(idx) = body.to_ascii_lowercase().find(" then ") {
         let condition = body[..idx].trim().to_string();
         let action = body[idx + 5..].trim().to_string();
         if condition.is_empty() || action.is_empty() {

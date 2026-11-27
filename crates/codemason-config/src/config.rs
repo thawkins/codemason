@@ -2361,6 +2361,29 @@ impl Config {
         guard.clear();
     }
 
+    /// The options handed to a provider's `create_client` for `model_id`.
+    ///
+    /// Every option configured under `provider.<provider_id>.options` is
+    /// forwarded, then `model_id`. The turn loop used to forward only
+    /// `auto_start`, `device` and `models_path`, and compaction and one-shot
+    /// calls forwarded nothing, so Bedrock's documented `region`, `profile`
+    /// and `endpoint_url` were ignored and Bedrock compaction ran on the
+    /// default model (CO-14).
+    #[must_use]
+    pub fn provider_client_options(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> HashMap<String, Value> {
+        let mut options = self
+            .provider
+            .get(provider_id)
+            .map(|p| p.options.clone())
+            .unwrap_or_default();
+        options.insert("model_id".to_string(), Value::String(model_id.to_string()));
+        options
+    }
+
     /// Resolve the global config directory (`<config_dir>/codemason`) using the
     /// same platform-aware logic as [`Config::load`] and [`Config::save`].
     ///

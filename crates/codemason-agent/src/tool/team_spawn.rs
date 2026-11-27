@@ -222,7 +222,11 @@ impl Tool for TeamSpawnTool {
         let memory_scope = match input.get("memory").and_then(|v| v.as_str()) {
             Some("user") => crate::team::MemoryScope::User,
             Some("project") => crate::team::MemoryScope::Project,
-            _ => crate::team::MemoryScope::None,
+            Some("none") | None => crate::team::MemoryScope::None,
+            // A typo must not silently drop the teammate's memory (AG-13).
+            Some(other) => {
+                anyhow::bail!("unknown memory scope '{other}'; expected user, project, or none")
+            }
         };
 
         // The session processor binds the team runtime before tool dispatch

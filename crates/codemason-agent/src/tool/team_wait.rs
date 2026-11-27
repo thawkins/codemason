@@ -18,7 +18,6 @@
 //! spawning teammates so the lead does not race ahead and duplicate their work.
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -311,7 +310,7 @@ impl Tool for TeamWaitTool {
             });
         }
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+        let deadline = super::deadline_after(timeout_secs);
 
         tracing::info!(
             team = %resolved_team_name,

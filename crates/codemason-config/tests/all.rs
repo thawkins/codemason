@@ -102,6 +102,8 @@ mod test_merge_project_privileged;
 
 #[path = "test_merge_six_sections.rs"]
 mod test_merge_six_sections;
+#[path = "test_provider_client_options.rs"]
+mod test_provider_client_options;
 
 #[path = "test_mcp_type_default.rs"]
 mod test_mcp_type_default;

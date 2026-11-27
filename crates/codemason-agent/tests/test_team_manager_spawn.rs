@@ -551,3 +551,36 @@ async fn team_spawn_tool_spawns_and_persists_memory_scope() {
     assert_eq!(member.memory_scope, MemoryScope::Project);
     assert_eq!(member.status, MemberStatus::Working);
 }
+
+/// An unknown memory scope is an error naming the value, as it is for a
+/// custom agent definition, not a silent "no memory" (AG-13).
+#[tokio::test]
+async fn team_spawn_tool_rejects_an_unknown_memory_scope() {
+    let (manager, _tmp, _proc) = live_team_manager("typo-team", "lead-1");
+    let ws = workspace_of(&manager.team_dir);
+    let mut ctx = tool_ctx(
+        Arc::new(EventBus::new(64)),
+        ws,
+        Arc::clone(&manager) as Arc<dyn TeamManagerInterface>,
+    );
+    ctx.team_context = Some(Arc::new(codemason_agent::tool::TeamContext {
+        team_name: "typo-team".to_string(),
+        agent_id: "lead".to_string(),
+        is_lead: true,
+    }));
+
+    let err = spawn_tool()
+        .execute(
+            json!({
+                "team_name": "typo-team",
+                "teammate_name": "dave",
+                "agent_type": "general",
+                "prompt": "do exactly one thing",
+                "memory": "projcet"
+            }),
+            &ctx,
+        )
+        .await
+        .expect_err("an unknown scope is refused");
+    assert!(err.to_string().contains("projcet"), "err: {err}");
+}

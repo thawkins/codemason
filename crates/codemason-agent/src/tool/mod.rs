@@ -133,6 +133,19 @@ pub use crate::background::BackgroundTaskService;
 use crate::event::{Event, EventBus};
 use crate::llm::ToolDefinition;
 
+/// The instant `secs` seconds from now, saturating far in the future.
+///
+/// A wait tool's `timeout_secs` comes from the model and has no schema
+/// maximum; `Instant::now() + Duration::from_secs(u64::MAX)` overflows and
+/// panics (AG-08). A value too large to add waits for a century instead.
+#[doc(hidden)]
+#[must_use]
+pub fn deadline_after(secs: u64) -> tokio::time::Instant {
+    const CENTURY: std::time::Duration = std::time::Duration::from_hours(876_000);
+    let now = tokio::time::Instant::now();
+    now.checked_add(std::time::Duration::from_secs(secs))
+        .unwrap_or(now + CENTURY)
+}
 /// The result of a tool execution, containing textual output and optional structured metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutput {
