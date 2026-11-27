@@ -133,7 +133,14 @@ pub fn validate_git_remote_url(url: &str) -> Result<()> {
 pub fn validate_clone_directory(directory: &str) -> Result<()> {
     reject_option_like(directory, "directory")?;
     let path = std::path::Path::new(directory);
-    if path.is_absolute() {
+    // TL-02: `is_absolute()` misses Windows `\x` (current-drive root) and
+    // `C:x` (drive-relative), both of which leave the workspace. Any root or
+    // prefix component is rejected instead.
+    if path.has_root()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::Prefix(_)))
+    {
         bail!("`directory` '{directory}' must be a relative path inside the working directory");
     }
     if path

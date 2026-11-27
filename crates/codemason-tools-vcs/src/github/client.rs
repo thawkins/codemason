@@ -343,17 +343,7 @@ impl GitHubClient {
             let body = resp.text().await.unwrap_or_default();
             bail!("GitHub API error {status} for {path}: {body}");
         }
-        let mut stream = resp.bytes_stream();
-        use futures::StreamExt as _;
-        let mut out: Vec<u8> = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.with_context(|| format!("Failed to read GitHub bytes for {path}"))?;
-            if out.len() + chunk.len() > limit {
-                bail!("GitHub response for {path} exceeded the {limit}-byte cap");
-            }
-            out.extend_from_slice(&chunk);
-        }
-        Ok(out)
+        read_body_limited(resp, limit, path).await
     }
 
     /// GET request returning only the last `limit` bytes of the body
@@ -724,9 +714,12 @@ impl GitHubClient {
 
     /// Fetch the README content for a repository (FR-007).
     ///
-    /// Calls `GET /repos/{owner}/{repo}/readme` to obtain the README metadata
-    /// (which includes a `download_url`), then fetches the raw README text via
-    /// [`get_bytes`]. If the repository has no README (HTTP 404), returns
+    /// Calls `GET /repos/{owner}/{repo}/readme` on the API origin with
+    /// `Accept: application/vnd.github.raw`, which returns the README text
+    /// directly (capped at 1 MiB). If the server ignores the raw media type and
+    /// returns the JSON metadata instead, the raw text is fetched from its
+    /// `download_url` via [`Self::get_bytes`], which only follows a URL on the
+    /// API origin. If the repository has no README (HTTP 404), returns
     /// `Ok(None)` so the caller can proceed with an empty README string rather
     /// than failing. Any other API error (auth, rate limit, network) is
     /// propagated.
@@ -745,9 +738,22 @@ impl GitHubClient {
         // public origin. Route it through `resolve_url` like every other verb.
         let url = self.resolve_url(&path);
 
-        let resp = self
+        // TL-09: ask the API origin for the raw README (`Accept:
+        // application/vnd.github.raw`) instead of following `download_url`,
+        // which on github.com is raw.githubusercontent.com - a cross-origin
+        // URL that `get_bytes` refuses (SEC-033), so the fetch always failed.
+        // `insert` replaces the default `Accept` set by `request`.
+        let mut req = self
             .request(reqwest::Method::GET, &url)
-            .send()
+            .build()
+            .with_context(|| format!("GitHub GET {path}: failed to build request"))?;
+        req.headers_mut().insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/vnd.github.raw"),
+        );
+        let resp = self
+            .client
+            .execute(req)
             .await
             .with_context(|| format!("GitHub GET {path} failed"))?;
 
@@ -762,9 +768,20 @@ impl GitHubClient {
             bail!("GitHub API error {status} for {path}: {body}");
         }
 
-        let value: Value = resp
-            .json()
-            .await
+        let is_json = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ct| ct.starts_with("application/json"));
+        let bytes = read_body_limited(resp, README_MAX_BYTES, &path).await?;
+        if !is_json {
+            return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+        }
+
+        // A server that ignores the raw media type returns the JSON metadata;
+        // follow its `download_url`, which `get_bytes` only fetches when it is
+        // on the API origin.
+        let value: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("Failed to parse README metadata JSON for {path}"))?;
 
         let download_url = extract_download_url(&value).ok_or_else(|| {
@@ -861,6 +878,27 @@ fn parse_contents_entries(value: &Value) -> Vec<ContentsEntry> {
             })
         })
         .collect()
+}
+
+/// Download cap for a raw README fetched by [`GitHubClient::fetch_readme`].
+const README_MAX_BYTES: usize = 1024 * 1024;
+
+/// Stream `resp`'s body, failing once more than `limit` bytes arrive.
+///
+/// SEC-032: the read stops at the cap, so a hostile endpoint cannot force an
+/// unbounded buffer.
+async fn read_body_limited(resp: reqwest::Response, limit: usize, path: &str) -> Result<Vec<u8>> {
+    use futures::StreamExt as _;
+    let mut stream = resp.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.with_context(|| format!("Failed to read GitHub bytes for {path}"))?;
+        if out.len() + chunk.len() > limit {
+            bail!("GitHub response for {path} exceeded the {limit}-byte cap");
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 /// Extract the `download_url` from a `GET /repos/{owner}/{repo}/readme` JSON

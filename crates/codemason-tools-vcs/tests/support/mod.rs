@@ -15,20 +15,26 @@ use std::process::Command;
 
 /// Run a shell command in `cwd`, panicking on a non-zero exit.
 ///
-/// Uses `cmd /C` on Windows and `sh -c` elsewhere.
+/// Uses `cmd /C` on Windows and `sh -c` elsewhere. Callers write POSIX
+/// single quotes (`-m 'Initial commit'`); `cmd` does not treat `'` as a
+/// quote, so on Windows they are rewritten to double quotes and passed raw
+/// (std's argument escaping would turn them into `\"`, which `cmd` keeps).
 pub fn run_shell(cmd: &str, cwd: &Path) {
-    let output = if cfg!(target_os = "windows") {
+    #[cfg(windows)]
+    let output = {
+        use std::os::windows::process::CommandExt;
         Command::new("cmd")
-            .args(["/C", cmd])
+            .arg("/C")
+            .raw_arg(cmd.replace('\'', "\""))
             .current_dir(cwd)
             .output()
-    } else {
-        Command::new("sh")
-            .args(["-c", cmd])
-            .current_dir(cwd)
-            .output()
-    }
-    .unwrap_or_else(|e| panic!("failed to run '{cmd}': {e}"));
+    };
+    #[cfg(not(windows))]
+    let output = Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(cwd)
+        .output();
+    let output = output.unwrap_or_else(|e| panic!("failed to run '{cmd}': {e}"));
     assert!(
         output.status.success(),
         "command '{cmd}' failed: {}",

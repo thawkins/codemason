@@ -71,40 +71,22 @@ impl Tool for GitStatusTool {
             });
         }
 
-        // Parse structured status data
-        let mut modified = Vec::new();
-        let mut staged = Vec::new();
-        let mut untracked = Vec::new();
-        let mut conflicted = Vec::new();
-
+        // Parse structured status data (TL-04: v2 and short/v1 records have
+        // different layouts, so each mode has its own parser).
+        let mut lists = StatusLists::default();
         for line in stdout.lines() {
-            if line.starts_with("1 ") && line.len() >= 4 {
-                let xy = &line[2..4];
-                let path = line[4..].trim_start();
-                if let Some('M' | 'A' | 'D' | 'R' | 'C') = xy.chars().next() {
-                    staged.push(path.to_string());
-                }
-                match xy.chars().nth(1) {
-                    Some('M' | 'D') => modified.push(path.to_string()),
-                    Some('U' | 'A') if xy == "UU" || xy == "AA" || xy == "DD" => {
-                        conflicted.push(path.to_string());
-                    }
-                    _ => {}
-                }
-            } else if let Some(stripped) = line.strip_prefix("? ") {
-                untracked.push(stripped.to_string());
-            } else if line.starts_with("2 ") && line.len() >= 4 {
-                // renamed entry
-                let xy = &line[2..4];
-                let rest = &line[4..];
-                if let Some(path) = rest.split('\t').next() {
-                    staged.push(path.to_string());
-                    if xy.chars().nth(1) == Some('M') {
-                        modified.push(path.to_string());
-                    }
-                }
+            if short {
+                lists.push_short(line);
+            } else {
+                lists.push_v2(line);
             }
         }
+        let StatusLists {
+            modified,
+            staged,
+            untracked,
+            conflicted,
+        } = lists;
 
         let branch_name = if short {
             stdout
@@ -144,5 +126,89 @@ impl Tool for GitStatusTool {
                 "conflicted_count": conflicted.len(),
             })),
         })
+    }
+}
+
+/// Path lists extracted from `git status` output.
+#[derive(Debug, Default)]
+struct StatusLists {
+    modified: Vec<String>,
+    staged: Vec<String>,
+    untracked: Vec<String>,
+    conflicted: Vec<String>,
+}
+
+impl StatusLists {
+    /// Classify one entry from its index (`x`) and worktree (`y`) status.
+    ///
+    /// `unchanged` is the "no change" marker for the format: `.` in porcelain
+    /// v2, a space in short (v1) output.
+    fn classify(&mut self, x: char, y: char, unchanged: char, path: &str) {
+        if x != unchanged {
+            self.staged.push(path.to_string());
+        }
+        if matches!(y, 'M' | 'D') {
+            self.modified.push(path.to_string());
+        }
+    }
+
+    /// Parse one `--porcelain=v2` line.
+    ///
+    /// Formats (git-status(1)): `1 XY sub mH mI mW hH hI path`,
+    /// `2 XY sub mH mI mW hH hI Xscore path<TAB>origPath`,
+    /// `u XY sub m1 m2 m3 mW h1 h2 h3 path`, `? path`, `! path`, and
+    /// `# branch.*` headers (handled by the caller).
+    fn push_v2(&mut self, line: &str) {
+        if let Some(path) = line.strip_prefix("? ") {
+            self.untracked.push(path.to_string());
+            return;
+        }
+        // Field count before the path for each record kind.
+        let (fields, conflict) = match line.get(..2) {
+            Some("1 ") => (8, false),
+            Some("2 ") => (9, false),
+            Some("u ") => (10, true),
+            _ => return,
+        };
+        let mut parts = line.splitn(fields + 1, ' ');
+        let xy = parts.nth(1).unwrap_or_default();
+        let Some(rest) = parts.nth(fields - 2) else {
+            return;
+        };
+        // A rename record carries `path<TAB>origPath`; report the new path.
+        let path = rest.split('\t').next().unwrap_or(rest);
+        if conflict {
+            self.conflicted.push(path.to_string());
+            return;
+        }
+        let mut xy = xy.chars();
+        if let (Some(x), Some(y)) = (xy.next(), xy.next()) {
+            self.classify(x, y, '.', path);
+        }
+    }
+
+    /// Parse one `--short` (porcelain v1) line: `XY path`,
+    /// `XY orig -> path` for renames/copies, `?? path`, `## branch`.
+    fn push_short(&mut self, line: &str) {
+        let mut chars = line.chars();
+        let (Some(x), Some(y), Some(' ')) = (chars.next(), chars.next(), chars.next()) else {
+            return;
+        };
+        let rest = chars.as_str();
+        match (x, y) {
+            ('#', '#') | ('!', '!') => {}
+            ('?', '?') => self.untracked.push(rest.to_string()),
+            ('D', 'D')
+            | ('A', 'U')
+            | ('U', 'D')
+            | ('U', 'A')
+            | ('D', 'U')
+            | ('A', 'A')
+            | ('U', 'U') => self.conflicted.push(rest.to_string()),
+            _ => {
+                let path = rest.rsplit(" -> ").next().unwrap_or(rest);
+                self.classify(x, y, ' ', path);
+            }
+        }
     }
 }

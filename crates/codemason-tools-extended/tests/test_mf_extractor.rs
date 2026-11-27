@@ -649,3 +649,25 @@ fn test_wide_table_cell_does_not_panic() {
     assert!(result.content.contains("aaaa"));
     assert!(result.content.contains("after"));
 }
+
+/// TL-25: the kept prefix is exactly `max_content_chars` characters (it used
+/// to keep one fewer), for ASCII and multi-byte input alike.
+#[test]
+fn test_truncation_keeps_exactly_max_chars() {
+    const MARKER: &str = "\n\n[Content truncated]";
+    let opts = ExtractOptions {
+        max_content_chars: 500,
+        ..Default::default()
+    };
+    for unit in ["a", "\u{65e5}", "\u{1f600}"] {
+        let input = unit.repeat(600);
+        let result = extract(&input, "https://example.com", "text/plain", &opts).unwrap();
+        assert!(result.is_truncated);
+        let kept = result
+            .content
+            .strip_suffix(MARKER)
+            .expect("truncation marker");
+        assert_eq!(kept.chars().count(), 500, "unit {unit:?}");
+        assert_eq!(kept, unit.repeat(500));
+    }
+}

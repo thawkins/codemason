@@ -47,6 +47,9 @@ mod test_build_reverse_prompt;
 #[path = "test_git_single_spawn.rs"]
 mod test_git_single_spawn;
 
+#[path = "test_git_status_porcelain.rs"]
+mod test_git_status_porcelain;
+
 #[path = "test_git_tools.rs"]
 mod test_git_tools;
 

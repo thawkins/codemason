@@ -293,17 +293,22 @@ async fn test_fetch_readme_404_returns_none() {
 
 #[tokio::test]
 async fn test_fetch_readme_success_via_download_url() {
+    // TL-09: as on github.com, `download_url` names a foreign host
+    // (raw.githubusercontent.com) that the client must not follow; the raw
+    // README is served by the API origin for the raw media type.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repos/o/r/readme"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "download_url": format!("{}/raw/readme", server.uri())
-        })))
+        .and(header("accept", "application/vnd.github.raw"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("# Hello"))
+        .with_priority(1)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/raw/readme"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("# Hello"))
+        .and(path("/repos/o/r/readme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "download_url": "https://raw.githubusercontent.com/o/r/HEAD/README.md"
+        })))
         .mount(&server)
         .await;
 
