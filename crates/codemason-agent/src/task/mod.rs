@@ -194,6 +194,84 @@ fn effective_time_bound(requested: Option<u64>, configured: Option<u64>) -> Opti
     }
 }
 
+/// A running sub-agent's queued user messages plus the signal that wakes a
+/// blocked `team_wait` when one arrives.
+#[derive(Debug, Default)]
+struct Inbox {
+    /// Messages not yet delivered to the agent loop, oldest first.
+    messages: Vec<String>,
+    /// Notified by [`AgentManager::send_to_session`] after each push.
+    notify: Arc<tokio::sync::Notify>,
+}
+
+/// Await a background sub-agent's inner task under its wall-clock bound.
+///
+/// The configured `background_timeout_secs` cap applies to every role except
+/// [`crate::agent::AgentRole::TeamLeader`], whose run legitimately blocks in
+/// `team_wait` for as long as its team works. A per-call `time_bound_secs`
+/// applies to every role (and only tightens the cap where there is one).
+/// On expiry the inner task is aborted and `cancel_flag` is set.
+///
+/// Returns the run's result and whether a per-call bound (not the configured
+/// cap) ended it. Exposed `#[doc(hidden)]` so tests can drive the cap logic
+/// with an inner future they control.
+#[doc(hidden)]
+pub async fn await_background_inner(
+    inner: tokio::task::JoinHandle<anyhow::Result<String>>,
+    role: crate::agent::AgentRole,
+    time_bound_secs: Option<u64>,
+    background_timeout_secs: u64,
+    cancel_flag: &AtomicBool,
+) -> (anyhow::Result<String>, bool) {
+    let abort_handle = inner.abort_handle();
+    let configured = match role {
+        crate::agent::AgentRole::TeamLeader => None,
+        crate::agent::AgentRole::Standard => Some(background_timeout_secs),
+    };
+    let effective = effective_time_bound(time_bound_secs, configured);
+    // `bound_is_per_call` records *why* we are bounded, so a bound expiry
+    // reports `TimedOut` while the configured timeout keeps its historical
+    // `Failed` (FR-034).
+    let bound_is_per_call =
+        time_bound_secs.is_some_and(|req| configured.is_none() || req <= background_timeout_secs);
+    let joined = match effective {
+        Some(secs) => tokio::time::timeout(tokio::time::Duration::from_secs(secs), inner)
+            .await
+            .map_err(|_| secs),
+        None => Ok(inner.await),
+    };
+    match joined {
+        Ok(Ok(result)) => (result, false),
+        Ok(Err(join_err)) => {
+            let err = if join_err.is_panic() {
+                anyhow::anyhow!("sub-agent task panicked")
+            } else if join_err.is_cancelled() {
+                anyhow::anyhow!("sub-agent task cancelled")
+            } else {
+                anyhow::anyhow!("sub-agent task aborted: {join_err}")
+            };
+            (Err(err), false)
+        }
+        Err(secs) => {
+            abort_handle.abort();
+            cancel_flag.store(true, Ordering::Relaxed);
+            if bound_is_per_call {
+                (
+                    Err(anyhow::anyhow!(
+                        "sub-agent timed out after {secs}s (per-call bound)"
+                    )),
+                    true,
+                )
+            } else {
+                (
+                    Err(anyhow::anyhow!("background agent timed out after {secs}s")),
+                    false,
+                )
+            }
+        }
+    }
+}
+
 /// Maximum number of concurrent background tasks (default).
 pub const DEFAULT_MAX_BACKGROUND_TASKS: usize = 8;
 
@@ -488,7 +566,7 @@ pub struct AgentManager {
     /// session id like `suspend_flags`. The agent loop drains them at its next
     /// inter-step safe point ([`AgentManager::take_inbox`]), so the user can
     /// steer a sub-agent while it runs.
-    inboxes: Arc<DashMap<String, Vec<String>>>,
+    inboxes: Arc<DashMap<String, Inbox>>,
     /// Event bus for publishing sub-agent lifecycle events.
     event_bus: Arc<EventBus>,
     /// Session processor for running sub-agent loops.
@@ -949,6 +1027,20 @@ impl AgentManager {
             // the parent wait_agents call stalled forever.
             let csid_inner = csid.clone();
             let processor_inner = processor.clone();
+            // Peek at the agent's role up front: it decides whether the
+            // configured background cap applies. The inner task resolves
+            // again, so a resolution error or panic is still reported from
+            // there; a panic here just falls back to the capped role.
+            let role = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::agent::resolve_agent_with_customs_and_model(
+                    &agent,
+                    &processor.load_config_cached(),
+                    &working_dir_buf,
+                    &processor.provider_registry,
+                )
+                .map_or(crate::agent::AgentRole::Standard, |a| a.role)
+            }))
+            .unwrap_or(crate::agent::AgentRole::Standard);
             let inner = tokio::spawn(async move {
                 let config = processor_inner.load_config_cached();
                 let mut agent_info = match crate::agent::resolve_agent_with_customs_and_model(
@@ -976,54 +1068,17 @@ impl AgentManager {
                     .map(|msg| msg.text_content())
             });
 
-            let abort_handle = inner.abort_handle();
             // The per-call bound may only tighten the configured budget
-            // (FR-017): `effective` is the smaller of the two, so the
-            // configured stall timeout still applies when no bound was given
-            // and can never be extended by one. `bound_is_per_call` records
-            // *why* we are bounded, so a bound expiry reports `TimedOut` while
-            // the configured timeout keeps its historical `Failed` (FR-034:
-            // the configured behaviour is unchanged when no bound is given).
-            let effective = effective_time_bound(time_bound_secs, Some(background_timeout_secs))
-                .unwrap_or(background_timeout_secs);
-            let bound_is_per_call =
-                time_bound_secs.is_some_and(|req| req <= background_timeout_secs);
-            // `hit_bound` is set only by the `Err(_)` arm below, so an ordinary
-            // error that happens to occur after the bound elapsed is still
-            // reported as a failure, not as a timeout.
-            let mut hit_bound = false;
-            let result = match tokio::time::timeout(
-                tokio::time::Duration::from_secs(effective),
+            // (FR-017); a team leader has no configured cap (see
+            // `await_background_inner`).
+            let (result, hit_bound) = await_background_inner(
                 inner,
+                role,
+                time_bound_secs,
+                background_timeout_secs,
+                &cancel_flag_outer,
             )
-            .await
-            {
-                Ok(Ok(Ok(response))) => Ok(response),
-                Ok(Ok(Err(e))) => Err(e),
-                Ok(Err(join_err)) => {
-                    if join_err.is_panic() {
-                        Err(anyhow::anyhow!("sub-agent task panicked"))
-                    } else if join_err.is_cancelled() {
-                        Err(anyhow::anyhow!("sub-agent task cancelled"))
-                    } else {
-                        Err(anyhow::anyhow!("sub-agent task aborted: {join_err}"))
-                    }
-                }
-                Err(_) => {
-                    abort_handle.abort();
-                    cancel_flag_outer.store(true, Ordering::Relaxed);
-                    if bound_is_per_call {
-                        hit_bound = true;
-                        Err(anyhow::anyhow!(
-                            "sub-agent timed out after {effective}s (per-call bound)"
-                        ))
-                    } else {
-                        Err(anyhow::anyhow!(
-                            "background agent timed out after {effective}s"
-                        ))
-                    }
-                }
-            };
+            .await;
 
             let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -1325,7 +1380,8 @@ impl AgentManager {
         let Some(mut queued) = self.inboxes.get_mut(child_session_id) else {
             anyhow::bail!("no running sub-agent loop accepts messages in '{child_session_id}'");
         };
-        queued.push(text.to_string());
+        queued.messages.push(text.to_string());
+        queued.notify.notify_one();
         Ok(())
     }
 
@@ -1342,7 +1398,16 @@ impl AgentManager {
     pub fn has_inbox(&self, child_session_id: &str) -> bool {
         self.inboxes
             .get(child_session_id)
-            .is_some_and(|queued| !queued.is_empty())
+            .is_some_and(|queued| !queued.messages.is_empty())
+    }
+
+    /// The signal [`AgentManager::send_to_session`] fires when a message is
+    /// queued for `child_session_id`; `None` when that session has no open
+    /// inbox. Handed to the sub-agent's tools as `user_input_pending`.
+    pub fn inbox_notify(&self, child_session_id: &str) -> Option<Arc<tokio::sync::Notify>> {
+        self.inboxes
+            .get(child_session_id)
+            .map(|queued| Arc::clone(&queued.notify))
     }
 
     /// Remove and return the user messages waiting for the sub-agent in
@@ -1350,7 +1415,7 @@ impl AgentManager {
     pub fn take_inbox(&self, child_session_id: &str) -> Vec<String> {
         self.inboxes
             .get_mut(child_session_id)
-            .map(|mut queued| std::mem::take(&mut *queued))
+            .map(|mut queued| std::mem::take(&mut queued.messages))
             .unwrap_or_default()
     }
 

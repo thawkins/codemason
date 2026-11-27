@@ -578,6 +578,7 @@ fn registry_ctx(registry: Arc<ToolRegistry>) -> ToolContext {
         read_timestamps: Arc::new(std::sync::RwLock::new(HashMap::new())),
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
         agent_role: codemason_agent::agent::AgentRole::Standard,
+        user_input_pending: None,
         permission_checker: None,
         canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
         tool_registry: registry,

@@ -324,7 +324,20 @@ impl Tool for TeamWaitTool {
             if waiting_for.is_empty() {
                 break;
             }
-            match tokio::time::timeout_at(deadline, rx.recv()).await {
+            // A user message for this session wakes the wait so the leader
+            // can handle it now instead of after the team settles.
+            let received = tokio::select! {
+                () = async {
+                    match ctx.user_input_pending.as_ref() {
+                        Some(notify) => notify.notified().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    return Ok(interrupted_output(&resolved_team_name, &waiting_for));
+                }
+                received = tokio::time::timeout_at(deadline, rx.recv()) => received,
+            };
+            match received {
                 Ok(Ok(Event::TeammateIdle {
                     session_id,
                     team_name: ev_team,
@@ -451,6 +464,26 @@ impl Tool for TeamWaitTool {
                 "outcomes": outcomes,
             })),
         })
+    }
+}
+
+/// The result of a `team_wait` cut short by a pending user message.
+fn interrupted_output(team_name: &str, waiting_for: &HashSet<String>) -> ToolOutput {
+    ToolOutput {
+        content: format!(
+            "Wait interrupted: a user message is pending. Handle it, then call team_wait again.\n\n\
+             Still waiting on {} teammate(s) in team '{team_name}': {}",
+            waiting_for.len(),
+            sorted_ids(waiting_for).join(", ")
+        ),
+        metadata: Some(json!({
+            "team_name": team_name,
+            "timed_out": false,
+            "interrupted": true,
+            "success": false,
+            "still_working_count": waiting_for.len(),
+            "still_working": sorted_ids(waiting_for),
+        })),
     }
 }
 

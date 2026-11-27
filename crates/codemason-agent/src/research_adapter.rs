@@ -273,6 +273,7 @@ fn build_tool_context(
         tool_registry,
         cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
         agent_role: crate::agent::AgentRole::Standard,
+        user_input_pending: None,
         permission_checker: None,
         read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
             std::collections::HashMap::new(),

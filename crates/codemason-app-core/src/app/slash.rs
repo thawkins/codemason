@@ -7485,6 +7485,7 @@ than assumed.
                                     // call the session's checker so a blueprint seed
                                     // cannot execute tools without approval.
                                     agent_role: codemason_agent::agent::AgentRole::Standard,
+                                    user_input_pending: None,
                                     permission_checker: Some(
                                         session_processor.permission_checker.clone(),
                                     ),

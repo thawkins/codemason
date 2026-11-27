@@ -85,6 +85,7 @@ fn ctx(fixture: &Fixture, rules: Vec<PermissionRule>) -> ToolContext {
         config: None,
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
         agent_role: codemason_agent::agent::AgentRole::TeamLeader,
+        user_input_pending: None,
         permission_checker: Some(Arc::new(RwLock::new(PermissionChecker::new(rules)))),
         tool_registry: Arc::new(codemason_agent::tool::create_default_registry()),
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),

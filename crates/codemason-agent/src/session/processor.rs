@@ -3313,6 +3313,10 @@ impl SessionProcessor {
                     // SEC-codemason-team-001: blueprint seed files must run through
                     // the same permission decision as ordinary tool calls.
                     agent_role: agent.role,
+                    user_input_pending: self
+                        .agent_manager
+                        .get()
+                        .and_then(|m| m.inbox_notify(session_id)),
                     permission_checker: Some(self.permission_checker.clone()),
                     read_timestamps: self.read_timestamps.clone(),
                     canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),

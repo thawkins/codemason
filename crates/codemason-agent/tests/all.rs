@@ -682,6 +682,8 @@ mod test_team_task_result;
 #[path = "test_team_task_store.rs"]
 mod test_team_task_store;
 
+#[path = "test_team_leader_runtime.rs"]
+mod test_team_leader_runtime;
 #[path = "test_team_wait_outcomes.rs"]
 mod test_team_wait_outcomes;
 
