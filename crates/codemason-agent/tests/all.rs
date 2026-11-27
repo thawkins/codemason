@@ -469,6 +469,9 @@ mod test_remote_acp_dispatch;
 #[path = "test_remote_backend.rs"]
 mod test_remote_backend;
 
+#[path = "test_remote_backend_body_cap.rs"]
+mod test_remote_backend_body_cap;
+
 #[path = "test_research_adapter_extra2.rs"]
 mod test_research_adapter_extra2;
 

@@ -48,6 +48,11 @@ pub const MAX_SOURCE_BYTES: u64 = 50 * 1024 * 1024;
 /// store. The running total across all entries is bounded by this value.
 pub const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 
+/// Maximum entries (files, directories, links) read from one install archive
+/// (RS-05). The byte caps do not bound the entry count: zero-byte entries cost
+/// nothing against them, yet each one is a file created in the store.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
 /// Wall-clock budget for one install-archive download.
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(1);
 
@@ -617,6 +622,14 @@ fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
 
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec()))
         .map_err(|e| StageError::Io(format!("zip open: {e}")))?;
+    // RS-05: bound the entry count; zero-byte entries cost nothing against the
+    // byte caps below.
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(StageError::Io(format!(
+            "archive has {} entries, over the {MAX_ARCHIVE_ENTRIES} entry cap",
+            archive.len()
+        )));
+    }
     let mut total: u64 = 0;
     for i in 0..archive.len() {
         let entry = archive
@@ -671,7 +684,14 @@ fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
         .entries()
         .map_err(|e| StageError::Io(format!("tar entries: {e}")))?;
     let mut total: u64 = 0;
-    for entry in entries {
+    for (count, entry) in entries.enumerate() {
+        // RS-05: bound the entry count; zero-byte entries cost nothing
+        // against the byte caps below.
+        if count >= MAX_ARCHIVE_ENTRIES {
+            return Err(StageError::Io(format!(
+                "archive has more than {MAX_ARCHIVE_ENTRIES} entries"
+            )));
+        }
         let entry = entry.map_err(|e| StageError::Io(format!("tar entry: {e}")))?;
         if !entry.header().entry_type().is_file() {
             continue;

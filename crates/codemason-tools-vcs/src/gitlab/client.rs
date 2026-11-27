@@ -131,7 +131,7 @@ impl GitLabClient {
             .with_context(|| format!("GitLab GET {path} failed"))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             anyhow::bail!("GitLab API error {status} for {path}: {body}");
         }
         let tail = crate::http_client::read_tail(resp, limit)
@@ -190,7 +190,7 @@ impl GitLabClient {
         }
 
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitLab API error {status} for {path}: {body}");
         }
 
@@ -496,7 +496,7 @@ impl GitLabClient {
             );
         }
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitLab API error {status} for {path}: {body}");
         }
 
@@ -570,7 +570,7 @@ impl GitLabClient {
             );
         }
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitLab API error {status} for {url}: {body}");
         }
 

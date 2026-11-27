@@ -108,6 +108,10 @@ impl Tool for HttpRequestTool {
             .user_agent(crate::masterfetch::http::USER_AGENT)
             .timeout(Duration::from_secs(timeout_secs))
             .redirect(reqwest::redirect::Policy::none())
+            // TL-07: only connect to resolved addresses that pass the SSRF ranges.
+            .dns_resolver(std::sync::Arc::new(
+                crate::masterfetch::security::SsrfSafeResolver,
+            ))
             .build()
             .context("Failed to build HTTP client")?;
 

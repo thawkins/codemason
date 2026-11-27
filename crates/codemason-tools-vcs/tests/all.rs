@@ -137,6 +137,9 @@ mod test_request_binding;
 #[path = "test_git_large_output.rs"]
 mod test_git_large_output;
 
+#[path = "test_error_body_cap.rs"]
+mod test_error_body_cap;
+
 /// Redirects the user-profile variables before any test runs.
 #[path = "../../../tests/common/profile_isolation.rs"]
 mod profile_isolation;

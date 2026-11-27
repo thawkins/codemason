@@ -181,6 +181,8 @@ mod test_mf_security;
 
 #[path = "test_mf_security_notation.rs"]
 mod test_mf_security_notation;
+#[path = "test_mf_ssrf_gaps.rs"]
+mod test_mf_ssrf_gaps;
 
 #[path = "test_mf_serper.rs"]
 mod test_mf_serper;
@@ -277,6 +279,9 @@ mod test_tavily;
 
 #[path = "test_websearch.rs"]
 mod test_websearch;
+
+#[path = "test_webfetch_caps.rs"]
+mod test_webfetch_caps;
 
 /// Redirects the user-profile variables before any test runs.
 #[path = "../../../tests/common/profile_isolation.rs"]

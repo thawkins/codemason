@@ -87,6 +87,10 @@ pub fn build_client(timeout: std::time::Duration) -> Result<reqwest::Client, Htt
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(timeout)
+        // TL-07: only connect to resolved addresses that pass the SSRF ranges.
+        .dns_resolver(std::sync::Arc::new(
+            crate::masterfetch::security::SsrfSafeResolver,
+        ))
         // SEC-014: re-run the SSRF guard on every redirect hop, not just the
         // initial URL, so an attacker page cannot 302 the fetch to a loopback or
         // metadata address after the single entry check passed.

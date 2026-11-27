@@ -61,6 +61,12 @@ pub const MAX_ARCHIVE_BYTES: u64 = 50 * 1024 * 1024;
 /// total across all entries is bounded by this value.
 pub const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 
+/// Maximum entries (files, directories, links) read from one archive (RS-05).
+///
+/// The byte caps do not bound the entry count: zero-byte entries cost nothing
+/// against them, yet each one is a file created in the store.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
 /// Wall-clock budget for one plugin archive download (ANTIPAT M19).
 ///
 /// Was a bare `from_secs(60)` inside [`download_and_extract`]; naming it keeps
@@ -76,26 +82,30 @@ pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(5);
 /// Bytes of a `git` command's stderr kept for its error message.
 const GIT_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
-/// Test-only override of [`GIT_TIMEOUT`] and of the cloned-tree size cap
-/// ([`MAX_EXTRACTED_BYTES`]); set once per process by
-/// [`set_git_limits_override`].
-static GIT_LIMITS_OVERRIDE: std::sync::OnceLock<(std::time::Duration, u64)> =
-    std::sync::OnceLock::new();
+thread_local! {
+    /// Test-only override of [`GIT_TIMEOUT`] and of the cloned-tree size cap
+    /// ([`MAX_EXTRACTED_BYTES`]); set per thread by
+    /// [`set_git_limits_override`].
+    ///
+    /// Thread-local, so a limit test does not shrink the cap under an unrelated
+    /// install test running on another thread of the same test binary (an
+    /// `add` runs its `git` invocations on the calling thread).
+    static GIT_LIMITS_OVERRIDE: std::cell::Cell<Option<(std::time::Duration, u64)>> =
+        const { std::cell::Cell::new(None) };
+}
 
-/// Override the `git+` install limits for this process (tests only), so a
-/// timeout or an oversized clone can be exercised without waiting minutes or
-/// writing hundreds of MiB. The first call wins.
+/// Override the `git+` install limits for the calling thread (tests only), so
+/// a timeout or an oversized clone can be exercised without waiting minutes or
+/// writing hundreds of MiB.
 #[doc(hidden)]
 pub fn set_git_limits_override(timeout: std::time::Duration, max_tree_bytes: u64) {
-    // INTENTIONAL: a second call is a no-op by design (first call wins).
-    let _ = GIT_LIMITS_OVERRIDE.set((timeout, max_tree_bytes));
+    GIT_LIMITS_OVERRIDE.with(|cell| cell.set(Some((timeout, max_tree_bytes))));
 }
 
 /// The effective `(timeout, max cloned-tree bytes)` for a `git+` install.
 fn git_limits() -> (std::time::Duration, u64) {
     GIT_LIMITS_OVERRIDE
-        .get()
-        .copied()
+        .with(std::cell::Cell::get)
         .unwrap_or((GIT_TIMEOUT, MAX_EXTRACTED_BYTES))
 }
 
@@ -558,13 +568,21 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
     // manifest found` (e.g. a marketplace entry of `{"source":"./"}` for a repo
     // published at its root). Omitting `--sparse` there keeps the checkout
     // complete for the manifest probe.
-    let mut clone_args: Vec<&str> = vec!["clone", "--depth", "1"];
+    //
+    // `--template=` (empty) skips git's template directory: its sample hooks
+    // are dead weight in an installed plugin and would otherwise count
+    // against the in-flight size cap below before a single object arrives.
+    let mut clone_args: Vec<&str> = vec!["clone", "--template=", "--depth", "1"];
     if spec.subpath.is_some() {
         clone_args.push("--sparse");
     }
     clone_args.push(spec.url.as_str());
     clone_args.push(repo.as_str());
-    git_run(&clone_args, None)?;
+    // RS-04: the size cap is polled while git runs, so an oversized clone is
+    // killed as it grows instead of being measured only once it is on disk.
+    let max = git_limits().1;
+    let watch = Some((repo_dir.as_path(), max));
+    git_run(&clone_args, None, watch)?;
     if let Some(ref_name) = spec.ref_name.as_deref() {
         // `--` terminates option parsing for the fetch: `git_ref` already
         // rejects a leading `-`, and the separator keeps that invariant enforced
@@ -573,16 +591,21 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
         git_run(
             &["fetch", "--depth", "1", "--", "origin", ref_name],
             Some(&repo_dir),
+            watch,
         )?;
         // No `--` here: for `git checkout` the separator turns the argument
         // into a *pathspec* file filter, not a commit-ish, so it refuses with
         // `pathspec 'FETCH_HEAD' did not match any file(s)`. `FETCH_HEAD` is a
         // name we supply ourselves and the ref that filled it was already
         // validated to not start with `-`, so option injection is impossible.
-        git_run(&["checkout", "FETCH_HEAD"], Some(&repo_dir))?;
+        git_run(&["checkout", "FETCH_HEAD"], Some(&repo_dir), watch)?;
     }
     if let Some(subpath) = spec.subpath.as_deref() {
-        git_run(&["sparse-checkout", "set", "--", subpath], Some(&repo_dir))?;
+        git_run(
+            &["sparse-checkout", "set", "--", subpath],
+            Some(&repo_dir),
+            watch,
+        )?;
     }
 
     let root = match spec.subpath.as_deref() {
@@ -594,7 +617,6 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
     }
     // The archive path caps what it extracts; a clone gets the same total cap
     // on the tree it is about to install.
-    let max = git_limits().1;
     let size = tree_size(&root, max).map_err(io_err)?;
     if size > max {
         return Err(AddError::TooLarge { size, max });
@@ -657,7 +679,12 @@ fn confined_dest_dir(store: &Path, id: &str) -> Result<PathBuf, AddError> {
 /// child blocked on a full pipe would otherwise never exit. Stalled HTTP
 /// transfers are also aborted by git itself (`GIT_HTTP_LOW_SPEED_*`), so the
 /// remote helper does not outlive a killed `git`.
-fn git_run(args: &[&str], cwd: Option<&Path>) -> Result<(), AddError> {
+///
+/// `watch` is an optional `(directory, max bytes)` pair: while git runs, the
+/// directory's size ([`tree_size`]) is polled and git is killed with
+/// [`AddError::TooLarge`] once it passes the cap (RS-04), so an oversized
+/// repository is not fully written to disk before it is refused.
+fn git_run(args: &[&str], cwd: Option<&Path>, watch: Option<(&Path, u64)>) -> Result<(), AddError> {
     use std::io::Read as _;
 
     let verb = args.first().copied().unwrap_or("git");
@@ -705,10 +732,29 @@ fn git_run(args: &[&str], cwd: Option<&Path>) -> Result<(), AddError> {
 
     let timeout = git_limits().0;
     let deadline = std::time::Instant::now() + timeout;
+    let mut tick: u32 = 0;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| git_err(e.to_string()))? {
             break status;
         }
+        // Walk the tree every 5th tick (250 ms): often enough to stop a
+        // growing clone early, rare enough that the walk stays cheap.
+        if let Some((dir, max)) = watch
+            && tick.is_multiple_of(5)
+        {
+            // INTENTIONAL: an unreadable or not-yet-created directory (git
+            // creates it after spawning) counts as empty; the final check in
+            // the caller still measures the finished tree.
+            let size = tree_size(dir, max).unwrap_or(0);
+            if size > max {
+                // INTENTIONAL: the child may already have exited; either way it is gone.
+                let _ = child.kill();
+                // INTENTIONAL: reap the killed child; its status is irrelevant.
+                let _ = child.wait();
+                return Err(AddError::TooLarge { size, max });
+            }
+        }
+        tick = tick.wrapping_add(1);
         if std::time::Instant::now() >= deadline {
             // INTENTIONAL: the child may already have exited; either way it is gone.
             let _ = child.kill();
@@ -877,6 +923,14 @@ fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
 
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| ExtractError::Message(format!("zip open: {e}")))?;
+    // RS-05: bound the entry count; zero-byte entries cost nothing against the
+    // byte caps below.
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(ExtractError::Message(format!(
+            "archive has {} entries, over the {MAX_ARCHIVE_ENTRIES} entry cap",
+            archive.len()
+        )));
+    }
     // ANTIPAT M17: the per-entry cap does not bound the total, so track a
     // running total across every entry and abort past MAX_EXTRACTED_BYTES.
     let mut total: u64 = 0;
@@ -931,7 +985,14 @@ fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
         .map_err(|e| ExtractError::Message(format!("tar entries: {e}")))?;
     // ANTIPAT M17: bound the total decompressed size across all entries.
     let mut total: u64 = 0;
-    for entry in entries {
+    for (count, entry) in entries.enumerate() {
+        // RS-05: bound the entry count; zero-byte entries cost nothing
+        // against the byte caps below.
+        if count >= MAX_ARCHIVE_ENTRIES {
+            return Err(ExtractError::Message(format!(
+                "archive has more than {MAX_ARCHIVE_ENTRIES} entries"
+            )));
+        }
         let mut entry = entry.map_err(|e| ExtractError::Message(format!("tar entry: {e}")))?;
         let path = entry
             .path()

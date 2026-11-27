@@ -261,7 +261,7 @@ impl GitHubClient {
         self.check_status(status, resp.headers(), path)?;
 
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitHub API error {status} for {path}: {body}");
         }
 
@@ -302,7 +302,7 @@ impl GitHubClient {
         let status = resp.status();
         self.check_status(status, resp.headers(), path)?;
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitHub API error {status} for {path}: {body}");
         }
         let bytes = resp
@@ -340,7 +340,7 @@ impl GitHubClient {
         let status = resp.status();
         self.check_status(status, resp.headers(), path)?;
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitHub API error {status} for {path}: {body}");
         }
         read_body_limited(resp, limit, path).await
@@ -373,7 +373,7 @@ impl GitHubClient {
         let status = resp.status();
         self.check_status(status, resp.headers(), path)?;
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitHub API error {status} for {path}: {body}");
         }
         crate::http_client::read_tail(resp, limit)
@@ -764,7 +764,7 @@ impl GitHubClient {
         }
         self.check_status(status, resp.headers(), &path)?;
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = crate::http_client::read_error_body(resp).await;
             bail!("GitHub API error {status} for {path}: {body}");
         }
 

@@ -285,7 +285,7 @@ pub async fn validate_token(instance_url: &str, token: &str) -> Result<String> {
         anyhow::bail!("Authentication failed - invalid Personal Access Token");
     }
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::http_client::read_error_body(resp).await;
         anyhow::bail!("GitLab API error: {body}");
     }
 

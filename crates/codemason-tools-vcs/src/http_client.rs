@@ -125,3 +125,34 @@ pub async fn read_tail_counting_lines(
         starts_mid_line: byte_before_tail.is_some_and(|b| b != b'\n'),
     })
 }
+
+/// Maximum bytes of an error response body kept for an error message (TL-11).
+pub const ERROR_BODY_MAX_BYTES: usize = 4 * 1024;
+
+/// Reads at most [`ERROR_BODY_MAX_BYTES`] of an error response's body for an
+/// error message, stopping the read at the cap so a hostile or broken server
+/// cannot force an unbounded buffer (TL-11).
+///
+/// A read failure yields whatever arrived before it (possibly empty), since
+/// the body is only decoration on an error that is already being reported.
+/// A truncated body ends with `... [truncated]`.
+pub async fn read_error_body(resp: reqwest::Response) -> String {
+    use futures::StreamExt as _;
+    let mut stream = resp.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    while let Some(Ok(chunk)) = stream.next().await {
+        let room = ERROR_BODY_MAX_BYTES - out.len();
+        if chunk.len() > room {
+            out.extend_from_slice(&chunk[..room]);
+            truncated = true;
+            break;
+        }
+        out.extend_from_slice(&chunk);
+    }
+    let mut text = String::from_utf8_lossy(&out).into_owned();
+    if truncated {
+        text.push_str("... [truncated]");
+    }
+    text
+}

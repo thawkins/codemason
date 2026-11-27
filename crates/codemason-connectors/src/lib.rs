@@ -115,8 +115,8 @@ pub use management::{
     resolve_filter,
 };
 pub use manifest::{
-    MAX_EXTRACTED_BYTES, MAX_SOURCE_BYTES, StageError, StagedConnector, install_descriptor,
-    read_manifest, stage, write_manifest,
+    MAX_ARCHIVE_ENTRIES, MAX_EXTRACTED_BYTES, MAX_SOURCE_BYTES, StageError, StagedConnector,
+    install_descriptor, read_manifest, stage, write_manifest,
 };
 pub use marketplace_ops::{
     MARKETPLACE_DOC_PATH, MarketplaceSource, MarketplaceSourceError, add_marketplace,
