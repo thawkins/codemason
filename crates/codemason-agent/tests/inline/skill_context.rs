@@ -80,7 +80,7 @@ fn test_pattern_offsets() {
 
 #[tokio::test]
 async fn test_inject_no_patterns() {
-    let result = inject_dynamic_context("Just text", Path::new("/tmp"))
+    let result = inject_dynamic_context("Just text", &std::env::temp_dir())
         .await
         .expect("should succeed");
     assert_eq!(result, "Just text");
@@ -88,7 +88,7 @@ async fn test_inject_no_patterns() {
 
 #[tokio::test]
 async fn test_inject_echo_command() {
-    let result = inject_dynamic_context("Output: !`echo hello`", Path::new("/tmp"))
+    let result = inject_dynamic_context("Output: !`echo hello`", &std::env::temp_dir())
         .await
         .expect("should succeed");
     assert_eq!(result, "Output: hello");
@@ -96,7 +96,7 @@ async fn test_inject_echo_command() {
 
 #[tokio::test]
 async fn test_inject_multiple_commands() {
-    let result = inject_dynamic_context("A: !`echo alpha` B: !`echo beta`", Path::new("/tmp"))
+    let result = inject_dynamic_context("A: !`echo alpha` B: !`echo beta`", &std::env::temp_dir())
         .await
         .expect("should succeed");
     assert_eq!(result, "A: alpha B: beta");
@@ -105,7 +105,7 @@ async fn test_inject_multiple_commands() {
 #[tokio::test]
 async fn test_inject_failing_command() {
     // `false` is on the allowlist and always exits with status 1.
-    let result = inject_dynamic_context("Result: !`false`", Path::new("/tmp"))
+    let result = inject_dynamic_context("Result: !`false`", &std::env::temp_dir())
         .await
         .expect("should succeed even with failed command");
     assert!(
@@ -116,7 +116,7 @@ async fn test_inject_failing_command() {
 
 #[tokio::test]
 async fn test_inject_preserves_surrounding_text() {
-    let result = inject_dynamic_context("Before\n!`echo injected`\nAfter", Path::new("/tmp"))
+    let result = inject_dynamic_context("Before\n!`echo injected`\nAfter", &std::env::temp_dir())
         .await
         .expect("should succeed");
     assert_eq!(result, "Before\ninjected\nAfter");
@@ -141,9 +141,12 @@ async fn test_inject_working_dir() {
 async fn test_inject_command_with_pipes_is_rejected() {
     // SEC-017: shell metacharacters (here a pipe) are rejected outright rather
     // than falling through to `sh -c`.
-    let result = inject_dynamic_context("Count: !`echo -e 'a\\nb\\nc' | wc -l`", Path::new("/tmp"))
-        .await
-        .expect("should succeed");
+    let result = inject_dynamic_context(
+        "Count: !`echo -e 'a\\nb\\nc' | wc -l`",
+        &std::env::temp_dir(),
+    )
+    .await
+    .expect("should succeed");
     assert!(
         result.contains("[command rejected:"),
         "Expected rejection placeholder, got: {result}"
@@ -154,7 +157,7 @@ async fn test_inject_command_with_pipes_is_rejected() {
 async fn test_inject_pr_summary_pattern() {
     // Simulates the SPEC example with git-like commands
     let body = "## Context\n- Files: !`echo 'src/main.rs'`\n- Branch: !`echo 'feature/test'`\n\n## Task\nSummarize changes";
-    let result = inject_dynamic_context(body, Path::new("/tmp"))
+    let result = inject_dynamic_context(body, &std::env::temp_dir())
         .await
         .expect("should succeed");
     assert_eq!(
@@ -166,9 +169,10 @@ async fn test_inject_pr_summary_pattern() {
 #[tokio::test]
 async fn test_inject_nonexistent_command() {
     // Command not on the allowlist should be rejected.
-    let result = inject_dynamic_context("!`codemason_nonexistent_cmd_12345`", Path::new("/tmp"))
-        .await
-        .expect("should succeed with error placeholder");
+    let result =
+        inject_dynamic_context("!`codemason_nonexistent_cmd_12345`", &std::env::temp_dir())
+            .await
+            .expect("should succeed with error placeholder");
     assert!(
         result.contains("[command rejected:"),
         "Expected rejection placeholder, got: {result}"
