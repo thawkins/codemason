@@ -152,6 +152,8 @@ mod test_trigger_types;
 #[path = "test_write_atomic.rs"]
 mod test_write_atomic;
 
+#[path = "test_credential_prefixes.rs"]
+mod test_credential_prefixes;
 #[path = "test_unified_redaction.rs"]
 mod test_unified_redaction;
 

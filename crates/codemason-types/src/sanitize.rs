@@ -61,6 +61,61 @@ pub fn is_secret_json_key(key: &str) -> bool {
     })
 }
 
+/// A known credential prefix and the shortest tail after it that counts as a
+/// credential (CO-07).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CredentialPrefix {
+    /// The prefix in its canonical case (`Bearer `, `AKIA`, `ghp_`).
+    pub prefix: &'static str,
+    /// Characters that must follow `prefix` before a value starting with it
+    /// is treated as a credential. `0` means the prefix alone is enough.
+    pub min_tail: usize,
+}
+
+/// Tail floor for the prefixes added in CO-07: long enough to skip tool names
+/// such as `npm_install` (`npm_` + 7), short enough for every real token.
+const NEW_PREFIX_MIN_TAIL: usize = 16;
+
+/// One [`CredentialPrefix`] entry; keeps [`CREDENTIAL_PREFIXES`] to one line per entry.
+const fn entry(prefix: &'static str, min_tail: usize) -> CredentialPrefix {
+    CredentialPrefix { prefix, min_tail }
+}
+
+/// The one list of credential prefixes (CO-07).
+///
+/// Telemetry flags an attribute value that starts with one of these
+/// (case-insensitively, `min_tail` characters or more after it), and
+/// [`redact_secrets`] masks every one of them followed by a token: a test
+/// checks each entry against [`SECRET_PATTERN`], so the two cannot drift
+/// apart again. `min_tail` is `0` for the prefixes telemetry has always
+/// flagged on sight.
+pub const CREDENTIAL_PREFIXES: &[CredentialPrefix] = &[
+    entry("sk-", 0),
+    entry("sk_", 0),
+    entry("Bearer ", 0),
+    entry("ghp_", 0),
+    entry("gho_", 0),
+    entry("ghs_", 0),
+    entry("ghr_", 0),
+    entry("ghu_", NEW_PREFIX_MIN_TAIL),
+    entry("github_pat_", 0),
+    entry("glpat-", NEW_PREFIX_MIN_TAIL),
+    entry("gldt-", NEW_PREFIX_MIN_TAIL),
+    entry("glrt-", NEW_PREFIX_MIN_TAIL),
+    entry("glsoat-", NEW_PREFIX_MIN_TAIL),
+    entry("glcbt-", NEW_PREFIX_MIN_TAIL),
+    entry("glptt-", NEW_PREFIX_MIN_TAIL),
+    entry("xoxb-", 0),
+    entry("xoxp-", 0),
+    entry("xoxs-", 0),
+    entry("AKIA", 0),
+    entry("AIza", 0),
+    entry("ya29.", 0),
+    entry("jwt ", 0),
+    entry("hf_", NEW_PREFIX_MIN_TAIL),
+    entry("npm_", NEW_PREFIX_MIN_TAIL),
+];
+
 /// Matches common secret patterns:
 ///
 /// - `sk-` / `sk_live_` / `sk_test_` prefixed keys (`OpenAI`, Stripe, etc.)
@@ -70,8 +125,10 @@ pub fn is_secret_json_key(key: &str) -> bool {
 /// - `glpat-` GitLab personal access tokens, plus `gldt-` / `glrt-` /
 ///   `glsoat-` / `glcbt-` / `glptt-` deploy/runner/agent/CI job/trigger tokens
 ///   (SEC-codemason-types-004 / SECTASKS T-046)
-/// - `xoxb-` / `xoxp-` Slack tokens
+/// - `github_pat_` GitHub fine-grained tokens
+/// - `xoxb-` / `xoxp-` / `xoxs-` Slack tokens
 /// - `AKIA` AWS access key IDs
+/// - `AIza` Google API keys, `ya29.` Google OAuth2 tokens, `jwt <token>`
 /// - `hf_` Hugging Face and `npm_` npm tokens
 /// - `[?&]key=` query-string API keys (a bare `key=` is what Google's
 ///   `?key=AIza...` form used, which the assignment group below did not match)
@@ -98,11 +155,22 @@ static SECRET_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         // (SEC-codemason-types-004): glpat-, gldt-, glrt-, glsoat-, glcbt-, glptt-.
         r"gl(?:pat|dt|rt|soat|cbt|ptt)-[a-zA-Z0-9_\-]{20,}",
         r"|",
-        // Slack tokens
-        r"xox[bp]-[a-zA-Z0-9\-]{20,}",
+        // GitHub fine-grained PATs (CO-07)
+        r"github_pat_[a-zA-Z0-9_]{20,}",
+        r"|",
+        // Slack bot / user tokens and signing secrets (`xoxs-`, CO-07)
+        r"xox[bps]-[a-zA-Z0-9\-]{20,}",
         r"|",
         // AWS access key IDs (start with AKIA)
         r"AKIA[A-Z0-9]{16,}",
+        r"|",
+        // Google API keys and OAuth2 access tokens (CO-07)
+        r"AIza[a-zA-Z0-9_\-]{20,}",
+        r"|",
+        r"ya29\.[a-zA-Z0-9_\-\.]{20,}",
+        r"|",
+        // `jwt <token>` bearer form (CO-07)
+        r"jwt\s+[a-zA-Z0-9_\-\.]{20,}",
         r"|",
         // Hugging Face and npm tokens (SEC-codemason-types-004)
         r"hf_[a-zA-Z0-9]{20,}",

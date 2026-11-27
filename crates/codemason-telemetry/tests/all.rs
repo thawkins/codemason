@@ -33,6 +33,8 @@ mod test_cardinality_branches;
 mod test_counters;
 #[path = "test_counters_helpers.rs"]
 mod test_counters_helpers;
+#[path = "test_credential_prefix_drift.rs"]
+mod test_credential_prefix_drift;
 #[path = "test_custom_resource_attributes.rs"]
 mod test_custom_resource_attributes;
 #[path = "test_disabled_zero_traffic.rs"]
