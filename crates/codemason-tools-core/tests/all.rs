@@ -82,6 +82,8 @@ mod test_apply_patch;
 #[path = "test_bash_reset_tool.rs"]
 mod test_bash_reset_tool;
 
+#[path = "test_bash_shell_program.rs"]
+mod test_bash_shell_program;
 #[path = "test_bash_wrapper_quoting.rs"]
 mod test_bash_wrapper_quoting;
 

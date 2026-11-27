@@ -1774,7 +1774,7 @@ async fn run_headless(
             // tool applies the same principle via kill_on_drop).
             let owned_cmd = cmd.to_string();
             let output = tokio::task::spawn_blocking(move || {
-                std::process::Command::new("sh")
+                std::process::Command::new(codemason_tools_core::bash::posix_shell())
                     .arg("-c")
                     .arg(&owned_cmd)
                     .output()

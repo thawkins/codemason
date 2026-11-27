@@ -756,7 +756,7 @@ fn run_pre_tool_use_hook_list(
     event_bus: Option<&EventBus>,
 ) -> PreToolUseResult {
     for hook in matching {
-        let mut cmd = std::process::Command::new("sh");
+        let mut cmd = std::process::Command::new(codemason_tools_core::bash::posix_shell());
         cmd.arg("-c")
             .arg(&hook.command)
             .current_dir(working_dir)
@@ -1114,7 +1114,7 @@ async fn run_post_tool_use_hook_list(
             let tool_name = tool_name.clone();
             let command = command.clone();
             move || {
-                let mut cmd = std::process::Command::new("sh");
+                let mut cmd = std::process::Command::new(codemason_tools_core::bash::posix_shell());
                 cmd.arg("-c")
                     .arg(&command)
                     .current_dir(&wd)
@@ -1293,7 +1293,7 @@ pub async fn run_stop_hooks(
         let task = tokio::task::spawn_blocking({
             let command = command.clone();
             move || {
-                let mut cmd = std::process::Command::new("sh");
+                let mut cmd = std::process::Command::new(codemason_tools_core::bash::posix_shell());
                 cmd.arg("-c")
                     .arg(&command)
                     .current_dir(&wd)
@@ -1414,7 +1414,8 @@ pub fn fire_hooks(
             let payload = claude_event_payload(&hook, &working_dir, None, None, None, None, None);
 
             let task = tokio::spawn(async move {
-                let mut cmd = tokio::process::Command::new("sh");
+                let mut cmd =
+                    tokio::process::Command::new(codemason_tools_core::bash::posix_shell());
                 cmd.arg("-c")
                     .arg(&command)
                     .current_dir(&wd)

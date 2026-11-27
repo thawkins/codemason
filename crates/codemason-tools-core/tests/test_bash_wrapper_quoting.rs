@@ -161,7 +161,10 @@ pub use shim::{Tool, ToolContext, ToolOutput};
 
 // Now pull in the private source module so its wrapper builders and quoting
 // helpers are available to the tests.
+// Only the wrapper and quoting helpers are exercised here; the module's other
+// public items are covered through the crate itself.
 #[path = "../src/bash.rs"]
+#[allow(dead_code)]
 mod bash;
 
 use bash::{build_posix_wrapper, build_powershell_wrapper, ps_quote_single, sh_quote_single};

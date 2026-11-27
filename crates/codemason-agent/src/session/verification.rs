@@ -135,7 +135,7 @@ fn execute_verification_script(
 ) -> anyhow::Result<VerificationOutcome> {
     use std::io::Read;
 
-    let result = Command::new("bash")
+    let result = Command::new(codemason_tools_core::bash::bash_program())
         .arg("-c")
         .arg(script)
         .current_dir(working_dir)
