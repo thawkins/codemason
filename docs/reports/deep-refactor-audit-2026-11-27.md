@@ -1,0 +1,270 @@
+# Deep-Refactor Audit, 2026-11-27
+
+**Audited at:** `32f2b4d` (Version 1.0.186), branch `claude/deep-refactor-8aed50`. Car 0 landed on top, as `8e049db`, `77ae198` and `4347b45`.
+**Independence:** this audit was carried out fresh. It does not reconcile or rely on `docs/reports/deep-refactor-audit.md`.
+**Scope:** all 20 crates under `crates/` plus the root `codemason` binary.
+
+**Method:**
+- Five read-only passes over separate areas:
+  - agent;
+  - app-core, gui and `src/`;
+  - llm, config, storage, telemetry and types;
+  - tools and codeindex;
+  - research, specs, plugins, connectors, server, surface, bench, plus build and CI hygiene.
+- Two adversarial verifiers then tried to refute 60 defect claims. I re-checked 8 more by hand.
+- Scanners: `cargo clippy --workspace --all-targets`, every `scripts/check-*.sh`, and test runs of each crate touched.
+- Per-area detail, with full quotes and pin inventories, is in the git-ignored `target/temp/deep-refactor2/` tree:
+  - `area-*.md`;
+  - `verify-a.md`, `verify-b.md`.
+
+Every count gives the command that produced it and the commit it was taken at. Re-derive a count on the branch point of the car that uses it.
+
+**Verdicts:**
+- **R**: reproduced (a test or run shows it).
+- **C**: confirmed by an adversarial trace of the code path.
+- **P**: partly confirmed (the verifier narrowed the claim; the narrowed form is what is stated).
+
+---
+
+## 1. Architecture verdict
+
+**The crate layering is sound: no cycles, and dependencies point downward. The debt is in three places:**
+- **Platform assumptions.** The code is Unix-first, and on Windows the tests leaked into the real user profile.
+- **I/O boundaries.** Child processes, hooks, archives and stream parsers.
+- **God files and copy-paste.** The provider stream parsers, and the archive staging shared by plugins and connectors.
+
+Evidence:
+- **Graph** (`grep -oE '^codemason-[a-z-]+' crates/*/Cargo.toml` at `32f2b4d`):
+  - Bottom to top: types, then config, then storage / surface / codeindex / llm / tools / plugins / connectors, then research / specs, then agent, then server / bench, then app-core, then gui, then the binary.
+  - No leaf crate points back up.
+- **app-core / gui split:** clean and one-way. app-core imports no egui, eframe or winit.
+  - `app-core -> server`: one listen address and the `/webapi` start.
+  - `app-core -> bench`: `/bench`.
+  - These are coupling, not defects.
+- **One misplaced edge:** specs depends on tools-extended only for the `project_scaffold` flag types and `archdoc::ArchitectureStructure`. That edge pulls 10 tree-sitter grammars, lingua and the PDF stack into every specs build (RS-21, effort L, not in this train).
+- **Separate `ToolContext` types are deliberate:** each leaf crate cannot depend on agent, so each context carries only what its tools need. The rest is drift:
+  - `Tool` and `ToolOutput` are copied byte-for-byte into the core, extended and vcs crates.
+  - All four `Event` types are the same `codemason_types::event::Event`, yet the agent's adapters still copy events through private buses (TL-06).
+- **Providers:** the transport helpers in `http_client` are shared, but the frame parsers are copy-pasted. `sse.rs` serves only OpenAI and OpenRouter. Anthropic and Azure-Anthropic are verbatim copies, Bedrock is a third variant, and fixes have drifted between them (CO-05/06/13/15/16).
+- **Config trust boundary holds:** no project-level key can redirect credentials, choose a backend, start schedulers, change plugin permissions or downgrade a sandbox.
+- **God files** (`wc -l` at `32f2b4d`):
+  - `app-core/src/app/slash.rs`: 16,096 lines (`App` has 270 fields).
+  - `agent/src/session/processor.rs`: 5,327 lines; `process_user_message` alone is 1,830 lines.
+- **Dead TUI layer in app-core:**
+  - `App::handle_mouse` (514 lines) has no production caller.
+  - 27 cell-coordinate `Area` fields are never set by the GUI.
+  - 5 copy buffers are never filled.
+  - All of it is pinned by about 24 test files (UI-08..11).
+
+---
+
+## 2. Defects
+
+### 2a. Fixed in this session (Car 0)
+
+| ID | Defect | Fix | Commit |
+|----|--------|-----|--------|
+| W-01 | **Tests wrote into the real user config on Windows.** `Config::global_config_dir()` used `dirs::config_dir()`, which honours `XDG_CONFIG_HOME` only on Linux. 50 test files isolate the config through that variable (`grep -rlE 'set_var\("XDG_CONFIG_HOME"' crates/*/tests tests \| wc -l` at `77ae198`). A connectors run overwrote `%APPDATA%\codemason\codemason.json`. | An absolute `XDG_CONFIG_HOME` is honoured on every platform. `--dry-run`, `/init config` and `/config reload` now resolve through the one function. | `4347b45` |
+| W-02 | **Windows path escape:** `validate_relative_component("/etc/passwd")` was accepted, because `is_absolute()` needs a drive prefix on Windows. A connectors archive entry `/etc/passwd` was then joined to `C:\etc\passwd`. | Uses `has_root()`; the comment that said otherwise is corrected. | `77ae198` |
+| W-03 | The `codemason-types` test binary did not compile on Windows (`std::os::fd` behind a runtime `cfg!`). The structure guard compared `\` paths against `/` paths, so it failed on Windows. | `#[cfg(unix)]` gates; separator normalisation. Non-vacuity proof done. | `8e049db` |
+
+### 2b. Open: high
+
+| ID | Defect | Where | V |
+|----|--------|-------|---|
+| CO-01 | `merge_inner` never copies `stream`, `memory`, `storage`, `agent_perf`, `trigger` or `security_analyzer`. Every load starts from defaults, so these six sections are dropped from every layer, including the user's global file. `/security on` saves the setting, but the analyzer always reads `None`. | `config/src/config.rs` `fn merge_inner` | R (grep of the body) |
+| AG-01 | PreToolUse hooks run synchronously inside async dispatch and never read `timeout_secs`. A hung hook blocks a runtime worker with no limit. | `agent/src/hooks/mod.rs` (sync pre-hook); `session/dispatch.rs` call | C |
+| AG-03 | The whole tool input goes into a hook environment variable. Above about 128 KiB (32 K chars on Windows) the spawn fails and the pre-hook falls through to NoDecision, so guard hooks are silently skipped for large writes. | `hooks/mod.rs` env build + spawn-error arm | C |
+| TL-07 | The SSRF trailing-dot fix covers only `localhost`. `metadata.google.internal.` and `x.nip.io.` pass. 100.64/10 and 64:ff9b::/96 are not blocked, and there is no resolved-address check. | `tools-extended/src/masterfetch/security.rs` (`host_lower` vs `host_norm`) | C |
+
+### 2c. Open: medium
+
+| ID | Defect | Where | V |
+|----|--------|-------|---|
+| AG-02 | A hook timeout drops the JoinHandle only; the child process and the blocking thread leak. | `hooks/mod.rs` (3 timeout sites) | C |
+| AG-05 | `" then "` is found in `to_lowercase()` and that offset slices the original string. `"\u{212A} then x"` panics. | `agent/src/trigger/dynamic.rs` | R (traced: U+212A is 3 bytes, `k` is 1) |
+| AG-06 | Verification kills bash only, so a grandchild holding the pipe defeats the timeout. `read_to_string` empties the output on one non-UTF-8 byte. | `agent/src/session/verification.rs` | C |
+| AG-08 | `Instant::now() + Duration::from_secs(model_u64)` overflows and panics; the schema sets no maximum. | `tool/wait_agents.rs`, `tool/team_wait.rs` | R (traced) |
+| CO-02 | The credential key file is written non-atomically with no `create_new`. Two processes on first run, or a crash mid-write, mint a new key, and every stored credential becomes undecryptable. | `storage/src/storage.rs` key create | C |
+| CO-05 | Anthropic `event: error` mid-stream falls into `_ => {}`, so the provider's error text is lost (the Azure copy too). | `llm/providers/anthropic.rs`, `azure_resource.rs` | C |
+| CO-14 | Only 3 provider options are forwarded, so Bedrock `region` / `profile` / `endpoint_url` never reach the provider. Compaction falls back to a hard-coded model. | `agent/.../loop_steps.rs` options forward | C |
+| TL-02 | The `git_clone` destination check is text-only. On Windows `\x` and `C:x` pass, and a symlinked directory escapes everywhere. | `tools-vcs/src/git/mod.rs` | C |
+| TL-03 | The glob recursion resets the root at every level, so `src/**/*.rs` misses nested files and nested hits come back as bare names. | `tools-core/src/glob.rs` (`collect_matches(sub, sub, ..)`) | R (traced) |
+| TL-04 | Porcelain v2 path = `line[4..]` (the whole record), and v2 `u` lines are never parsed, so the conflicted list is always empty. `short:true` uses v1 and is parsed as v2. | `tools-vcs/src/git/git_status.rs` | R (traced) |
+| TL-06 | The tool-adapter event forwarders subscribe after the tool starts and are aborted on return, so events are lost. The out-forwarder has no session filter. | `agent/src/tool/mod.rs` adapters | C |
+| TL-08 | The model-supplied `max_length` and `timeout` in webfetch have no ceiling. | `tools-extended/src/webfetch.rs` | C |
+| TL-09 | The github.com README `download_url` (raw.githubusercontent.com) is refused as cross-origin, and the error is swallowed, so `/reverse` README is always empty. | `tools-vcs/src/github/client.rs`; `app-core/.../reverse.rs` | C |
+| TL-12 | multiedit writes files one at a time. After a failure, the earlier files stay changed and are not reported, and the "atomic" doc is false. | `tools-core/src/multiedit.rs` | C |
+| RS-01 | `parse_command_markdown` advances `line.len()+1` but `lines()` strips `\r`. On CRLF (the Windows default) the body leaks fence bytes and can panic mid-codepoint. It also parses the user's own commands. | `plugins/src/manifest.rs` | R (traced) |
+| RS-02 | A CRLF `RESEARCH.md` looks frontmatter-less, so placeholder frontmatter is prepended to the whole file. | `research/src/io.rs` `find_yaml_open` | C |
+| RS-06 | The rate-limit window resets at `elapsed_secs >= RATE_LIMIT_PER_MINUTE`, so the request count is used as seconds. It is a fixed window, not the "rolling" one the comment claims. | `server/src/routes/mod.rs` | R (traced) |
+| RS-08 | `/auto/{id}` runs in `std::env::current_dir()`. Session resume changes `cwd_path` but not the process cwd, so runs execute in the wrong project. | `server/src/routes/automation.rs` | C |
+| UI-01 | Ribbon, menu and chip slash commands bypass `is_input_blocked()` and run mid-turn; typed and palette commands queue. A naive fix would also queue `/quit`. | gui `shell.rs` vs app-core `palette.rs` | P |
+| UI-04 | Any provider's model-list result clears `model_loading_state` before checking `provider_id`, so it hides another provider's spinner and drops the pending latch. | `app-core/src/app/event_handler.rs` | R (traced) |
+
+### 2d. Open: low
+
+| ID | Defect (narrowed by the verifier where noted) |
+|----|------|
+| AG-04 | Hook stdin is written before stdout is drained: a hook that ignores stdin and prints more than 64 KiB deadlocks. |
+| AG-07 | `os_info` probe polls `try_wait` without draining: a probe printing more than 64 KiB is killed at 2 s. |
+| AG-10 | `TaskStore` async fns take a blocking flock and do `std::fs` I/O on the runtime. |
+| AG-11 | `backend/remote.rs` reads `.text()` / `.json()` without a bound. |
+| AG-13 | An unknown `MemoryScope` is an error in `custom.rs` but silently `None` in the team tools. |
+| CO-06 | `index.unwrap_or(0)` merges parallel tool calls in copilot and huggingface (refuted for anthropic/azure). |
+| CO-07 | The redaction prefix lists in types `sanitize.rs` and telemetry `sensitive.rs` have drifted. |
+| CO-10 | Rollback restore overwrites user files non-atomically. |
+| CO-12 | ollama_cloud logs the done frame at INFO without `redact_frame`. |
+| CO-09 | `Config::load` fails outright in a read-only cwd with no global config. Creating the default file is deliberate. |
+| RS-03 | Research comparison quotes slice with lowercase offsets, so a quote can come from the wrong sentence after U+0130. |
+| RS-04 / RS-05 | `git+` install size is checked only after the clone. zip/tar extraction has no entry-count cap (plugins and connectors). |
+| RS-07 | `/auto/{id}` returns 404/503 before the secret check, so ids can be enumerated; one shared `"webhook"` rate key. |
+| RS-09 | Derived `Default` on the open-access client gives a zero timeout (no callers today). |
+| RS-14 | The clarify regex's trailing `\b` binds only to the last alternative. |
+| TL-01 | The bg reader stops at the first non-UTF-8 byte, so output is truncated (the hang is refuted); no per-line limit. |
+| TL-05, TL-10, TL-11, TL-13, TL-16 | Unbounded reads that cost memory only. Every tool result is cut to 12k chars before the model (`agent/src/session/history.rs` `MAX_TOOL_RESULT_CHARS_FOR_LLM`), so "floods the model" is refuted. |
+| TL-14 | `rm` on a dangling symlink reports "File not found". |
+| TL-15 | A poisoned containment-cache lock fails open (practically unreachable). |
+| TL-25 | `truncate` keeps `max_chars - 1`. |
+| UI-02 | Input history is one global file, rewritten in full with plain `fs::write`; two windows erase each other's history. |
+| UI-03 | `/websearch` results go through one shared slot, so the result is lost or lands in the wrong session. |
+| UI-06 | `/init config` checks `exists()` and then writes (microsecond race). |
+| W-04 | `legacy_home_dir` / `legacy_data_dir` ignore `HOME` / `XDG_DATA_HOME` on Windows. `test_user_dirs_helpers::test_legacy_dirs_point_at_home_and_data_roots` fails on Windows; 5 test files set `HOME` or `XDG_DATA_HOME` (`grep -rlE 'set_var\("(HOME\|XDG_DATA_HOME)"' crates/*/tests tests` at `4347b45`). **Needs the owner decision O-01.** |
+
+**Refuted:**
+- AG-09: the racy `pending_manager` branch in `team_create.rs` cannot run, because nothing emits that state. It becomes a dead-code row instead.
+- AG-15: session ids are ASCII UUIDs.
+- AG-12 headline: the dry-run and real `--model` paths agree; the duplication is real.
+
+---
+
+## 3. Measured performance waste
+
+| ID | Finding | Evidence |
+|----|---------|----------|
+| RS-16 | connectors `Cursor::new(bytes.to_vec())` copies an archive of up to 50 MiB a second time. | Read of `manifest.rs`; the copy is unconditional |
+| RS-17 | plugins writes the archive to disk and deletes it unread (up to 50 MiB of I/O per install). | `add.rs`: the temp file is never opened for read |
+| RS-18 | research builds a new `reqwest::Client` (pool and TLS) on every open-access call. | `open_access.rs` |
+| TL-16 | codeindex `full_reindex` reads every changed file twice. | `lib.rs` (2 reads per file) |
+
+No timing benchmark was run; each saving is quoted as unknown until measured.
+
+---
+
+## 4. Infra / gates
+
+| ID | Finding |
+|----|---------|
+| I-01 | `cargo-nextest` is not installed on this Windows box, though AGENTS.md mandates it. Runs used the documented `cargo test -p <crate> --test all` form. |
+| I-02 | `cargo fmt` with `newline_style = "Unix"` against a `core.autocrlf=true` checkout makes `git status` list every `.rs` file as modified, though the content is unchanged. Commit by explicit path. A `.gitattributes` with `*.rs text eol=lf` would remove this (owner decision O-07). |
+| RS-22 | CI clippy runs without `--all-targets`, so tests and benches are never linted. Benches compile only on macOS. The bench workflow is manual, uses `@stable` and ends in `\|\| true`. |
+| RS-23 | The shared-guard and redaction suites run three times in CI. |
+| RS-24 | Guard gaps: `check_test_env_isolation.py` skips root `tests/` (4 files call `set_current_dir`), `check_shared_guards.py` skips root `src/`, and `check-vcs-duplication.sh` checks only plugins `add.rs`. |
+| RS-25 | Dev-deps that duplicate normal deps; literal versions where `workspace = true` belongs. No unused normal deps (each was grepped). |
+| W-05 | No CI job runs the suite on Windows; that is how W-01..W-04 survived. |
+
+The `scripts/check-*.sh` guards all ran with no failure text at `32f2b4d`.
+
+---
+
+## 5. Safe backlog (behavior-preserving, frozen tests)
+
+| ID | Candidate | Canonical owner after | Pins | Effort |
+|----|-----------|-----------------------|------|--------|
+| CO-24 | Destructure the overlay in `merge_inner` without `..`, so a forgotten field is a compile error. This is the guard for CO-01. | `config.rs` | ~10 merge tests (behavioural) | M |
+| CO-13/15/16 | Anthropic and Azure parsers become one; the 4 first-byte timeout blocks become one helper; 3 OpenAI-chat loops move onto `sse.rs`. | `llm/providers/{anthropic_sse,sse}.rs`, `http_client` | Messages "initial response timed out", "ended without producing any events", "empty/malformed event stream" stay byte-identical | M each |
+| RS-10/11 | Archive staging and the `git+` parser are copied between plugins and connectors (only plugins rejects symlinks). | `codemason-surface` | `check-vcs-duplication.sh` (new home must not contain `value.starts_with('-')`); test_add, test_connector_install/manifest | M |
+| TL-17 | The uncached containment check duplicates the cached one and has no production caller. | Wrapper over the cached fn | test_path_traversal (21 calls), test_lib_registry | S |
+| TL-19 | `pdf_common::resolve_path` is a byte-identical copy of `path_util::resolve_path`. | tools-core `path_util` | `check-vcs-duplication.sh` placement | S |
+| AG-16/17/18 | Hook env built 4 times; 5 char-boundary helpers; 4 child-process timeout and kill policies. One bounded-run helper also closes AG-02/04/06/07. | `agent` process helper; `codemason_types::strutil` | 5 test files call the sync hook API (keep its signature) | M |
+| AG-12 | 6 `ModelRef` parsers with 3 rules. | One parser in agent | 2 pub fns | S |
+| CO-07 | One credential-prefix list. | `codemason_types::sanitize` | 14 tests; `check_shared_guards.py` | M |
+| CO-17 | `wire/trace.rs` private `write_atomic` (umask perms) duplicates `guard::write_atomic` (0600). | `guard` | test_wire_trace | S |
+| UI-13/14 | Two identical small-button helpers and a hand-built badge. Needs a small, non-focusable `material::button` variant first. | `codemason_gui::material` | material tests | S |
+| RS-19 | `parse_spec_frontmatter_research`: zero callers, wrong doc. | (delete) | none | S |
+| Lying comments | CO-19 doc, CO-20 (3), AG-26 (`#[must_use]` swallowed into the doc), RS-27 (2), RS-28 (`/webapi` token "masked on every render path"; it is not), UI-18 (TUI references), the `config.rs` XDG cache comment | the code | No test greps these texts (re-check per edit) | S |
+| Monster fns | `merge_inner` 379; `storage::migrate` 686; `process_user_message` 1,830; `dispatch_key` 1,147; `handle_key` 1,021; `message_text` 1,105 / 673; `slash_config` 460, `slash_codeindex` 427; research `session.rs` ~958 lines. Decompose in place, one car per function. | Phase helpers in the same file | **Source-text pins:** `storage/tests/test_warm_index_scan.rs:39` (anchor text in `storage.rs`); `app-core/tests/test_codeindex_empty_graph_guard.rs:23` (`"godnodes" =>` in `slash.rs`); `agent/tests/test_tool_input_error.rs:369` (a literal line in `processor.rs`); `check_tool_rename.py` lists `slash.rs`. Literal strings stay in their file. | L |
+
+Re-derive function lengths by brace counting from the `fn` line, for example `awk '/fn merge_inner/,/^    }$/' crates/codemason-config/src/config.rs | wc -l`.
+
+---
+
+## 6. Blocked by pins (needs a test-edit-sanctioned ticket)
+
+| ID | Candidate | Pin |
+|----|-----------|-----|
+| UI-08/09 | Delete the TUI mouse layer: `handle_mouse` chain and 27 `Area` fields. | 24 test files call it; 101 use `tests/term_events` |
+| UI-10/11 | 5 never-filled copy buffers; write-only fields (`selected_agent_index`, `skill_dirs_cache`, ...). | `test_input_deep3.rs:1132`; 7 files read `selected_agent_index` |
+| CO-08 | `Config::save` / `persist_to_source` (zero callers) and `save_to_source` (writes merged secrets into the project file). | `test_codeindex_toggle_persistence.rs`, `test_config_write_target.rs`, `test_tools_config_load.rs` |
+| AG-09 | The dead `pending_manager` branch in `team_create.rs`. | `test_team_store_extra.rs:133` |
+| AG-21 | The `next_task_id` snapshot API, which only tests call. | `test_team_manager_runtime.rs:461` |
+| TL-21 | Three `ToolRegistry` types used only as a list. | test_lib_registry, test_lib_surface, test_vcs_registry_coverage, doctest |
+| CO-23 | Split `storage::migrate`. | `test_warm_index_scan.rs:39` source anchor |
+
+---
+
+## 7. Owner decisions (not ticketed until decided)
+
+| ID | Question |
+|----|----------|
+| O-01 | W-04: honour `HOME` / `XDG_DATA_HOME` on Windows as well (Git Bash sets `HOME`, so this reaches more users), or give the tests a hidden override? |
+| O-02 | AG-14: should a teammate keep its custom agent's pinned model, as `task/mod.rs` does, or take the lead's model? |
+| O-03 | CO-19: enforce `agent.<name>.permission`, or document it as a prompt hint only? |
+| O-04 | UI-01: which slash commands must run immediately mid-turn (`/quit`, `/cancel`, ...)? |
+| O-05 | CO-03 / CO-04: run Bedrock and Gemini against live endpoints. The parsers may not match the real wire formats (binary eventstream; multi-line JSON without `alt=sse`). |
+| O-06 | AG-20: keep the orchestrator modules (621 lines, no production caller) or remove them? RS-21: extract specs' two tools-extended modules into a small crate? |
+| O-07 | Add `.gitattributes` (`* text=auto eol=lf`) and a Windows CI job (I-02, W-05)? |
+
+---
+
+## 8. Deliberate: do not fix
+
+| Item | Why |
+|------|-----|
+| Separate `ToolContext` per tool crate | Leaf crates cannot depend on agent; each context narrows what its tools reach. |
+| AG-23 thin re-export modules | 342 external uses; churn for no gain. |
+| CO-26 project `instructions` / `skill_dirs` / `agent.prompt` | Prompt influence from repo content is by design. |
+| TL-22 test-only pub fns (codeindex store, edit_log clears) | Pinned by their own tests; they follow from the tests-in-`tests/` rule. |
+| RS-26 `event_to_parts` (~882 lines) | A flat exhaustive match; splitting it adds indirection without clarity. |
+| UI-05 starter button replaces the draft | Asserted by `test_messages.rs:309`. |
+| `app-core -> server`, `app-core -> bench` | `/webapi` and `/bench`. |
+
+---
+
+## 9. Cleanup train ledger
+
+Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`, `Rejected`. One car = one PR, in order.
+
+| Car | IDs | Preserved behavior | Validation | Status |
+|-----|-----|--------------------|-----------|--------|
+| 0. Windows isolation | W-01, W-02, W-03 | Linux paths unchanged; Windows tests stop touching the profile | config 460/460, connectors 377/377, types 438/438, app-core init/reload 20/20; the real config's mtime is unchanged | **Done** (`8e049db`, `77ae198`, `4347b45`) |
+| 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | Approved |
+| 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | Approved |
+| 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | Approved |
+| 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | Approved |
+| 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | Approved |
+| 6. Network/SSRF + caps | TL-07 (trailing dot, CGNAT, NAT64), TL-08, TL-11, AG-11, RS-04, RS-05, RS-07 | The same messages for allowed URLs and archives | `test_mf_security*`, `test_add`, `test_connector_install`, `test_automation_surface` | Approved (the resolver-pinning half of TL-07 is M; included) |
+| 7. Research / plugins / server / UI bugs | RS-01, RS-02, RS-03, RS-06, RS-08, RS-09, RS-14, UI-02, UI-03, UI-04, UI-06 | LF / ASCII behaviour unchanged; 429 text unchanged | CRLF fixtures per parser; rate-window test; spinner test | Approved |
+| 8. Perf | RS-16, RS-17, RS-18, TL-16 | Same results | crate suites | Approved |
+| 9. Infra | RS-22, RS-23, RS-24, RS-25, CO-17 | Same build | `cargo clippy --workspace --all-targets` clean; guard self-tests | Approved |
+| 10..n. Refactors | Section 5, one car per row group; monster functions one car each | The suite passes unchanged; no test edits | `cargo test -p <crate> --test all` | Approved |
+| Last. Structural | Section 6 | Each sanctioned test edit enumerated in its ticket; non-vacuity proof per rewritten guard | per row | Blocked: needs test-edit sanction |
+| - | Section 7 | - | - | Blocked: owner decision |
+| - | Section 8 | - | - | Deliberate |
+
+### Prevention decisions
+
+- **Car 0:** Guard added. `test_global_config_dir_xdg` fails if the resolver stops honouring the variable. A Windows CI job (O-07) is the real guard for the class.
+- **Car 1:** Guard added. Exhaustive destructuring in `merge_inner` (CO-24) turns a forgotten section into a compile error.
+- **Cars 2-7:** Guard added (a locking test per defect, with non-ASCII, CRLF or oversized input).
+- **Lying comments:** No guard justified.
+
+---
+
+## 10. Lessons for the next audit
+
+- **Run the suite on the platform you are on before auditing.** On Windows, three test binaries failed or did not compile, and one leaked into the real profile. A test-isolation guard (`check-test-env-isolation.sh`) that checks a lock is held says nothing about whether the variable it sets is honoured on this OS.
+- **`dirs::*` honours XDG and `HOME` only on Linux.** Every `set_var("XDG_*" | "HOME")` isolation is a no-op on Windows and macOS unless the resolver reads the variable itself.
+- **Enumerate struct fields against merge functions.** CO-01 was invisible to tests that build `Config` directly.
+- **Child-process hygiene is the biggest defect class.** It appears in six places, each with its own timeout and kill policy (AG-01/02/04/06/07, TL-05). One helper is the fix.
+- **"Floods the model" claims need the 12k cap in mind:** `MAX_TOOL_RESULT_CHARS_FOR_LLM` refutes them all; only memory use remains.
