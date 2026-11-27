@@ -349,8 +349,7 @@ impl LlmClient for CopilotClient {
         let timeout_secs = request
             .stream_timeout_secs
             .unwrap_or(super::http_client::DEFAULT_STREAM_TIMEOUT_SECS);
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
+        let response = super::http_client::send_within_first_byte_timeout(
             self.http
                 .post(&url)
                 .header(
@@ -369,18 +368,13 @@ impl LlmClient for CopilotClient {
                 .header("x-session-id", request.session_id.as_deref().unwrap_or(""))
                 .body(body_bytes)
                 .send(),
+            timeout_secs,
+            "copilot",
+            &url,
+            || format!("HTTP 408: Copilot API request timed out after {timeout_secs}s"),
+            || format!("Failed to connect to GitHub Copilot API at {url}"),
         )
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(provider = "copilot", url = %url, error = %e, "chat request timed out");
-        })
-        .map_err(|_| {
-            anyhow::anyhow!("HTTP 408: Copilot API request timed out after {timeout_secs}s")
-        })?
-        .inspect_err(|e| {
-            tracing::warn!(provider = "copilot", url = %url, error = %e, "chat request failed");
-        })
-        .with_context(|| format!("Failed to connect to GitHub Copilot API at {url}"))?;
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             // ANTIPAT 3.1/3.2: capped error-body read.

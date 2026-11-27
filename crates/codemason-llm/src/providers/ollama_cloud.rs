@@ -430,26 +430,23 @@ impl LlmClient for OllamaCloudClient {
             tracing::debug!(body_bytes = body_len, "Ollama Cloud request body built");
         }
 
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
+        let response = super::http_client::send_within_first_byte_timeout(
             self.http
                 .post(&url)
                 .header("content-type", "application/json")
-                .header("Authorization", codemason_types::strutil::bearer_auth_header(&self.api_key))
+                .header(
+                    "Authorization",
+                    codemason_types::strutil::bearer_auth_header(&self.api_key),
+                )
                 .body(body_bytes)
                 .send(),
+            timeout_secs,
+            "ollama_cloud",
+            &url,
+            || format!("Ollama Cloud: initial response timed out after {timeout_secs}s"),
+            || format!("Failed to connect to Ollama Cloud at {url}"),
         )
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(provider = "ollama_cloud", url = %url, error = %e, "chat request timed out");
-        })
-        .map_err(|_| {
-            anyhow::anyhow!("Ollama Cloud: initial response timed out after {timeout_secs}s")
-        })?
-        .inspect_err(|e| {
-            tracing::warn!(provider = "ollama_cloud", url = %url, error = %e, "chat request failed");
-        })
-        .with_context(|| format!("Failed to connect to Ollama Cloud at {url}"))?;
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             // ANTIPAT 3.1/3.2: capped error-body read.

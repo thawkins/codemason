@@ -83,6 +83,44 @@ where
 /// providers rely solely on the per-chunk guard above.
 pub const DEFAULT_STREAM_TIMEOUT_SECS: u64 = 600;
 
+/// Send a chat request bounded by the first-byte timeout (CO-15).
+///
+/// The one owner of the timeout, warning logs and error wording the copilot,
+/// ollama, ollama_cloud and openrouter providers shared.
+///
+/// # Arguments
+/// * `send` - the request's `send()` future.
+/// * `timeout_secs` - the first-byte budget, usually
+///   `ChatRequest::stream_timeout_secs` or [`DEFAULT_STREAM_TIMEOUT_SECS`].
+/// * `provider` - the `provider` field of the warning logs.
+/// * `url` - the request URL, for the logs.
+/// * `timed_out` - the error message when the budget runs out.
+/// * `send_failed` - the context added to a transport error.
+///
+/// # Errors
+/// `timed_out()` when no response arrives in time, or the transport error
+/// with `send_failed()` as its context.
+pub async fn send_within_first_byte_timeout(
+    send: impl std::future::Future<Output = reqwest::Result<reqwest::Response>>,
+    timeout_secs: u64,
+    provider: &str,
+    url: &str,
+    timed_out: impl FnOnce() -> String,
+    send_failed: impl FnOnce() -> String,
+) -> anyhow::Result<reqwest::Response> {
+    use anyhow::Context as _;
+    tokio::time::timeout(Duration::from_secs(timeout_secs), send)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(provider, url = %url, error = %e, "chat request timed out");
+        })
+        .map_err(|_| anyhow::anyhow!(timed_out()))?
+        .inspect_err(|e| {
+            tracing::warn!(provider, url = %url, error = %e, "chat request failed");
+        })
+        .with_context(send_failed)
+}
+
 /// Decode a stream chunk onto a growing `String`, buffering any incomplete
 /// trailing multibyte character so it can be completed by the next chunk.
 ///

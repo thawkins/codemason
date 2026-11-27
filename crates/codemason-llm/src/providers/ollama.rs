@@ -327,19 +327,15 @@ impl LlmClient for OllamaClient {
             .stream_timeout_secs
             .unwrap_or(super::http_client::DEFAULT_STREAM_TIMEOUT_SECS);
         let body_bytes = serde_json::to_vec(&body).context("serialise Ollama request body")?;
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
+        let response = super::http_client::send_within_first_byte_timeout(
             req_builder.body(body_bytes).send(),
+            timeout_secs,
+            "ollama",
+            &url,
+            || format!("Ollama: initial response timed out after {timeout_secs}s"),
+            || format!("Failed to connect to Ollama server at {url} - is it running?"),
         )
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(provider = "ollama", url = %url, error = %e, "chat request timed out");
-        })
-        .map_err(|_| anyhow::anyhow!("Ollama: initial response timed out after {timeout_secs}s"))?
-        .inspect_err(|e| {
-            tracing::warn!(provider = "ollama", url = %url, error = %e, "chat request failed");
-        })
-        .with_context(|| format!("Failed to connect to Ollama server at {url} - is it running?"))?;
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             // ANTIPAT 3.1/3.2: capped error-body read.
