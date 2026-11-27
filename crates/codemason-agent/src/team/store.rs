@@ -398,7 +398,8 @@ impl TeamStore {
         let tmp_path = team_dir.join(format!(".{file_name}.{}", uuid::Uuid::new_v4()));
         fs::write(&tmp_path, json).with_context(|| format!("write {}", tmp_path.display()))?;
         let result: Result<()> = (|| {
-            let temp = OpenOptions::new().read(true).open(&tmp_path)?;
+            // Write access: Windows `FlushFileBuffers` refuses a read-only handle.
+            let temp = OpenOptions::new().write(true).open(&tmp_path)?;
             temp.sync_all()
                 .with_context(|| format!("sync temp file {}", tmp_path.display()))?;
             fs::rename(&tmp_path, &config_path).with_context(|| {
