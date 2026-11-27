@@ -5071,7 +5071,7 @@ impl App {
         self.recount_team_messages(&store);
     }
 
-    /// Recount `team_message_counts` from the team's mailbox files.
+    /// Recount `team_message_counts` of the team from its mailbox files.
     ///
     /// `sent` is the number of messages a member wrote and `recv` the number it
     /// was sent, both taken over the whole on-disk mailbox set rather than from
@@ -5129,7 +5129,7 @@ impl App {
             let slot = self
                 .session
                 .team_message_counts
-                .entry(agent_id)
+                .entry((store.config.name.clone(), agent_id))
                 .or_insert((0, 0));
             slot.0 = slot.0.max(sent);
             slot.1 = slot.1.max(recv);

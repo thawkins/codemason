@@ -83,18 +83,27 @@ fn mailbox_traffic_is_counted_for_sender_and_recipient() {
 
     // tm-001 sent two messages to the lead and received one from tm-002.
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&(team.store.config.name.clone(), "tm-001".to_string()))
+            .copied(),
         Some((2, 1)),
         "tm-001 must show its two sends and one receive"
     );
     // tm-002 sent one message.
     assert_eq!(
-        app.session.team_message_counts.get("tm-002").copied(),
+        app.session
+            .team_message_counts
+            .get(&(team.store.config.name.clone(), "tm-002".to_string()))
+            .copied(),
         Some((1, 0))
     );
     // The lead received both of tm-001's messages and sent none.
     assert_eq!(
-        app.session.team_message_counts.get("lead").copied(),
+        app.session
+            .team_message_counts
+            .get(&(team.store.config.name.clone(), "lead".to_string()))
+            .copied(),
         Some((0, 2))
     );
 }
@@ -156,13 +165,17 @@ fn recount_never_lowers_a_counter_an_event_already_raised() {
     send(&team.store.dir, "tm-001", "lead", "one");
 
     let mut app = app_for_team(&team.store, "lead");
-    app.session
-        .team_message_counts
-        .insert("tm-001".to_string(), (5, 0));
+    app.session.team_message_counts.insert(
+        (team.store.config.name.clone(), "tm-001".to_string()),
+        (5, 0),
+    );
     app.refresh_team_member_session_ids();
 
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&(team.store.config.name.clone(), "tm-001".to_string()))
+            .copied(),
         Some((5, 0)),
         "an already-raised counter must not be lowered by the recount"
     );

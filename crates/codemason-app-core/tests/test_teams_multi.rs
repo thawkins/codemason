@@ -125,3 +125,22 @@ async fn test_teams_multi_sections_list_every_team() {
         "beta's members come from its store"
     );
 }
+
+#[tokio::test]
+async fn test_teams_multi_message_counters_follow_their_own_team() {
+    let ws = workspace("message_counters");
+    let mut app = app_with_teams(&ws, 1, 1);
+    app.handle_event(Event::TeammateMessage {
+        session_id: "lead-1".to_string(),
+        team_name: "beta".to_string(),
+        from: "tm-1".to_string(),
+        to: "lead".to_string(),
+        message_type: "notice".to_string(),
+        preview: "hi".to_string(),
+    })
+    .await;
+    let counts = &app.session.team_message_counts;
+    let key = |team: &str| (team.to_string(), "tm-1".to_string());
+    assert_eq!(counts.get(&key("beta")).copied(), Some((1, 0)));
+    assert_eq!(counts.get(&key("alpha")), None, "alpha stays untouched");
+}

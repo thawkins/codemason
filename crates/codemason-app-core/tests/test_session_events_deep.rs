@@ -1090,11 +1090,17 @@ async fn teammate_p2p_message_records_counts_on_both_ends() {
     })
     .await;
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-001".to_string()))
+            .copied(),
         Some((1, 0))
     );
     assert_eq!(
-        app.session.team_message_counts.get("tm-002").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-002".to_string()))
+            .copied(),
         Some((0, 1))
     );
 }

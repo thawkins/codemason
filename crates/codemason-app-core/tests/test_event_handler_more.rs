@@ -556,11 +556,17 @@ async fn teammate_p2p_message_updates_send_and_receive_counts() {
     })
     .await;
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-001".to_string()))
+            .copied(),
         Some((1, 0))
     );
     assert_eq!(
-        app.session.team_message_counts.get("tm-002").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-002".to_string()))
+            .copied(),
         Some((0, 1))
     );
 }
@@ -1053,7 +1059,11 @@ async fn teammate_spawned_adds_member_and_reveals_teams_panel() {
             .iter()
             .any(|m| m.agent_id == "tm-001")
     );
-    assert!(app.session.team_message_counts.contains_key("tm-001"));
+    assert!(
+        app.session
+            .team_message_counts
+            .contains_key(&("alpha".to_string(), "tm-001".to_string()))
+    );
 }
 
 #[tokio::test]

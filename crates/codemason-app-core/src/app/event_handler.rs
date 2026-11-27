@@ -2331,7 +2331,7 @@ impl App {
             self.session.team_members.push(member);
             self.session
                 .team_message_counts
-                .entry(agent_id.to_string())
+                .entry((team_name.to_string(), agent_id.to_string()))
                 .or_insert((0, 0));
         }
         // Always refresh the stored values (session id, status, current task)
@@ -2411,7 +2411,7 @@ impl App {
             let counts = self
                 .session
                 .team_message_counts
-                .entry(from.to_string())
+                .entry((team_name.to_string(), from.to_string()))
                 .or_insert((0, 0));
             counts.0 = counts.0.saturating_add(1);
         }
@@ -2419,7 +2419,7 @@ impl App {
             let counts = self
                 .session
                 .team_message_counts
-                .entry(to.to_string())
+                .entry((team_name.to_string(), to.to_string()))
                 .or_insert((0, 0));
             counts.1 = counts.1.saturating_add(1);
         }
@@ -2448,7 +2448,7 @@ impl App {
             let counts = self
                 .session
                 .team_message_counts
-                .entry(from.to_string())
+                .entry((team_name.to_string(), from.to_string()))
                 .or_insert((0, 0));
             counts.0 = counts.0.saturating_add(1);
         }
@@ -2456,7 +2456,7 @@ impl App {
             let counts = self
                 .session
                 .team_message_counts
-                .entry(to.to_string())
+                .entry((team_name.to_string(), to.to_string()))
                 .or_insert((0, 0));
             counts.1 = counts.1.saturating_add(1);
         }
@@ -2681,7 +2681,9 @@ impl App {
         if self.is_active_or_unset_team(team_name) {
             self.session.active_team = None;
             self.session.team_members.clear();
-            self.session.team_message_counts.clear();
+            self.session
+                .team_message_counts
+                .retain(|(team, _), _| team != team_name);
         }
         if self
             .session

@@ -333,16 +333,15 @@ fn section_rows(
     } else {
         "lead"
     };
-    let (lead_sent, lead_recv) = if is_active {
+    let counts_of = |id: &str| {
         app.session
             .team_message_counts
-            .get(name)
-            .or_else(|| app.session.team_message_counts.get("lead"))
+            .get(&(section.name.clone(), id.to_string()))
             .copied()
-            .unwrap_or((0, 0))
-    } else {
-        (0, 0)
     };
+    let (lead_sent, lead_recv) = counts_of(name)
+        .or_else(|| counts_of("lead"))
+        .unwrap_or((0, 0));
     let lead = Line::new()
         .push(format!("{:<MARKER_W$}", "* "), green)
         .push(format!("{:<ID_W$} ", short_suffix(&lead_session, 8)), green)
@@ -406,12 +405,7 @@ fn section_rows(
         let (sent, recv) = if member.agent_id == "lead" {
             (None, None)
         } else {
-            // The counters follow the session's active team only.
-            let (sent, recv) = is_active
-                .then(|| app.session.team_message_counts.get(&member.agent_id))
-                .flatten()
-                .copied()
-                .unwrap_or((0, 0));
+            let (sent, recv) = counts_of(&member.agent_id).unwrap_or((0, 0));
             (Some(sent), Some(recv))
         };
         let line = Line::new()

@@ -230,7 +230,7 @@ fn layout_teams_window_paints_the_lead_and_teammates() {
     app.session.focused_teammate = Some(("alpha".to_string(), "tm-001".to_string()));
     app.session
         .team_message_counts
-        .insert("tm-001".to_string(), (3, 2));
+        .insert(("alpha".to_string(), "tm-001".to_string()), (3, 2));
 
     render_effects(&mut app, 160, 44);
     // The renderer publishes the cursor row maps instead of the retired

@@ -314,7 +314,7 @@ pub struct SessionView {
     /// Current members of the active team (updated from events).
     pub team_members: Vec<TeamMember>,
     /// Per-teammate message counters: `agent_id -> (sent, received)`.
-    pub team_message_counts: HashMap<String, (u32, u32)>,
+    pub team_message_counts: HashMap<(String, String), (u32, u32)>,
     // -- Teams panel caches (FR-003, FR-009) ---------------------------------
     /// Cached per-agent task counts `(claimed, completed)` for the teams
     /// panel.  Updated by `TeamTaskClaimed` / `TeamTaskCompleted` events

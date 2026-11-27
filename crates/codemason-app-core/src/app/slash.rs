@@ -7376,7 +7376,9 @@ than assumed.
                 let team_dir = store.dir.clone();
                 self.session.active_team = Some(store.config);
                 self.session.team_members.clear();
-                self.session.team_message_counts.clear();
+                self.session
+                    .team_message_counts
+                    .retain(|(team, _), _| team != &name);
                 self.session.team_task_counts.clear();
                 self.session.team_task_counts_dirty = true;
                 self.show_teams = true;
@@ -7661,7 +7663,9 @@ than assumed.
             self.stop_swarm_autocomplete(&team_name).await;
             self.session.active_team = None;
             self.session.team_members.clear();
-            self.session.team_message_counts.clear();
+            self.session
+                .team_message_counts
+                .retain(|(team, _), _| team != &team_name);
             self.session.team_task_counts.clear();
             self.session.team_task_counts_dirty = true;
             self.show_teams = false;
@@ -7765,7 +7769,9 @@ than assumed.
                     if deleting_active {
                         self.session.active_team = None;
                         self.session.team_members.clear();
-                        self.session.team_message_counts.clear();
+                        self.session
+                            .team_message_counts
+                            .retain(|(team, _), _| team != &team_name);
                         self.session.team_task_counts.clear();
                         self.session.team_task_counts_dirty = true;
                         self.show_teams = false;
@@ -8067,7 +8073,9 @@ than assumed.
             };
             self.session.active_team = None;
             self.session.team_members.clear();
-            self.session.team_message_counts.clear();
+            self.session
+                .team_message_counts
+                .retain(|(team, _), _| team != &team_name);
             self.session.team_task_counts.clear();
             self.session.team_task_counts_dirty = true;
             self.show_teams = false;
@@ -8220,7 +8228,9 @@ than assumed.
                     // Update TUI state
                     self.session.active_team = None;
                     self.session.team_members.clear();
-                    self.session.team_message_counts.clear();
+                    self.session
+                        .team_message_counts
+                        .retain(|(team, _), _| team != &team_name);
                     self.session.team_task_counts.clear();
                     self.session.team_task_counts_dirty = true;
                     self.show_teams = false;
