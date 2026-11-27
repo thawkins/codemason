@@ -140,6 +140,7 @@ fn app_with_team(app_status: MemberStatus) -> App {
 async fn mouse_click_outside_the_dialog_is_swallowed() {
     let mut app = app_with_team(MemberStatus::Working);
     app.open_row_action(RowAction::ShutdownTeammate {
+        team_name: String::new(),
         agent_id: "tm-001".to_string(),
         name: "reviewer".to_string(),
     });
@@ -231,7 +232,7 @@ async fn teammate_space_on_a_working_member_opens_the_suspend_dialog() {
         "teammate suspend confirms first"
     );
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(RowAction::SuspendTeammate { agent_id, name }) => {
+        Some(RowAction::SuspendTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }
@@ -272,7 +273,7 @@ async fn teammate_del_opens_the_shutdown_dialog() {
         "teammate shutdown confirms first"
     );
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(RowAction::ShutdownTeammate { agent_id, name }) => {
+        Some(RowAction::ShutdownTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }
@@ -294,7 +295,7 @@ async fn teammate_keyboard_keys_consume_the_key_either_way() {
         .await;
     assert!(app.row_action_confirm_open(), "Space confirms the suspend");
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(RowAction::SuspendTeammate { agent_id, name }) => {
+        Some(RowAction::SuspendTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }

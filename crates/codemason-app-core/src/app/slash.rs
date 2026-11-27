@@ -7457,9 +7457,14 @@ than assumed.
                                         &session_processor.provider_registry,
                                     )),
                                     team_context: None,
-                                    team_manager: session_processor.team_manager.get().map(|tm| {
-                                        tm as Arc<dyn codemason_agent::tool::TeamManagerInterface>
-                                    }),
+                                    team_manager: session_processor
+                                        .team_managers
+                                        .get(&name_clone)
+                                        .map(|tm| {
+                                            tm as Arc<
+                                                dyn codemason_agent::tool::TeamManagerInterface,
+                                            >
+                                        }),
                                     code_index: None,
                                     bg_service: None,
                                     spec_manager: session_processor.spec_manager.get().cloned(),
@@ -8181,7 +8186,7 @@ than assumed.
                     // agent/poll loop is aborted so it cannot recreate
                     // the tree after removal, and the member is marked
                     // Stopped on disk.
-                    let manager = self.session_processor.team_manager.get();
+                    let manager = self.session_processor.team_managers.get(&team_name);
                     let mut deactivated: Vec<String> = Vec::new();
                     for m in &mut store.config.members {
                         if m.status != MemberStatus::Stopped {
@@ -8380,7 +8385,9 @@ than assumed.
                         .session
                         .focused_teammate
                         .as_ref()
-                        .and_then(|id| self.session.team_members.iter().find(|m| m.agent_id == *id))
+                        .and_then(|(_, id)| {
+                            self.session.team_members.iter().find(|m| m.agent_id == *id)
+                        })
                         .map(|m| m.name.clone())
                         .unwrap_or_default();
                     self.append_assistant_text(&format!(
@@ -13818,10 +13825,11 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
             .as_ref()
             .map(|t| t.name.clone())
             .ok_or_else(|| anyhow::anyhow!("no active team"))?;
-        let manager =
-            self.session_processor.team_manager.get().ok_or_else(|| {
-                anyhow::anyhow!("team manager for '{team_name}' is not initialised")
-            })?;
+        let manager = self
+            .session_processor
+            .team_managers
+            .get(&team_name)
+            .ok_or_else(|| anyhow::anyhow!("team manager for '{team_name}' is not initialised"))?;
 
         // FR-008: the status move goes through the manager's single status
         // writer, so an approval leaves `PlanPending` for `Working` with the

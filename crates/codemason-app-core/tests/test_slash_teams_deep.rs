@@ -108,7 +108,13 @@ async fn focus_single_match_focuses_teammate() {
     app.session.team_members.push(alice);
 
     app.execute_slash_command("/team focus alice").await;
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
     let text = last_message(&app);
     assert!(text.contains("Focused on **alice**"), "text: {text}");
 }
@@ -120,7 +126,7 @@ async fn focus_without_argument_clears_focus() {
     app.session
         .team_members
         .push(TeamMember::new("alice", "tm-001", "general"));
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-001".to_string()));
 
     app.execute_slash_command("/team focus").await;
     assert_eq!(app.status, "team: focus cleared");

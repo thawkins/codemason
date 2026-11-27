@@ -1,6 +1,8 @@
 //! The Teams panel (the Teams pane): the TUI's Teams window table.
 //!
-//! The rows are the TUI's (`layout_teams.rs`): the team title (`Team: name
+//! The pane lists every team the session runs (one section per team, in team
+//! name order). Each section holds the rows of the TUI's Teams window
+//! (`layout_teams.rs`): the team title (`Team: name
 //! (lead + N teammates)`), a header naming the columns, the lead row, one
 //! row per teammate (focus marker, id, `name-id` label, agent type, status
 //! word, model or `(inherited)`, elapsed, steps, claimed and done task
@@ -18,8 +20,8 @@
 //! one) through `App::row_action_confirm` (drawn by
 //! `crate::dialogs::confirm`), Enter focuses it and opens its output, and
 //! Esc closes the window. As the TUI's renderer does, this panel publishes
-//! the painted row keys (`teams_row_agent_ids`) and the teammate ids in
-//! paint order (`teams_teammate_agent_ids`), and a click on a row calls
+//! the painted row keys (`teams_row_agent_ids`) and the teammates in
+//! paint order (`teams_teammate_agent_ids`), both keyed by `(team name, id)`, and a click on a row calls
 //! `App::teams_cursor_from_click`. For the paging keys it reports the rows
 //! in view as `teams_rows_area`'s height.
 //!
@@ -35,7 +37,7 @@ use std::collections::HashMap;
 use codemason_agent::team::{
     MemberStatus, PendingPlan, TaskStatus, TaskStore, TeamMember, TeamStore, pending_plans,
 };
-use codemason_app_core::app::App;
+use codemason_app_core::app::{App, TeamSection};
 use codemason_app_core::geometry::Area;
 use codemason_app_core::styled::ThemeColor;
 use codemason_types::strutil::{format_duration_compact, short_suffix, truncate_chars_no_ellipsis};
@@ -119,11 +121,8 @@ fn is_terminal(status: &MemberStatus) -> bool {
 }
 
 /// The team's store, if it can be read.
-fn team_store(app: &App) -> Option<TeamStore> {
-    app.session
-        .active_team
-        .as_ref()
-        .and_then(|team| TeamStore::load_by_name(&team.name, &app.cwd_path).ok())
+fn team_store(app: &App, team_name: &str) -> Option<TeamStore> {
+    TeamStore::load_by_name(team_name, &app.cwd_path).ok()
 }
 
 /// Claimed and done task counts per teammate, from the team's task list.
@@ -249,29 +248,62 @@ fn counters(
 }
 
 /// The team title, as the TUI's table border names it.
-fn title(app: &App) -> String {
-    let name = app
-        .session
-        .active_team
-        .as_ref()
-        .map_or("team", |team| team.name.as_str());
-    let count = app.session.team_members.len();
+fn title(section: &TeamSection) -> String {
+    let count = section.members.len();
+    let name = if section.name.is_empty() {
+        "team"
+    } else {
+        section.name.as_str()
+    };
     format!(
         "Team: {name}  (lead + {count} teammate{})",
         if count == 1 { "" } else { "s" }
     )
 }
 
-/// Every row of the table with its key (empty for a row the cursor cannot
-/// select, `"lead"` for the lead, else the teammate's agent id).
-fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
+/// Every row of the pane with its `(team name, key)`: one section per team.
+/// The key is empty for a row the cursor cannot select, `"lead"` for a
+/// lead, else the teammate's agent id.
+///
+/// # Arguments
+///
+/// * `app` - the App whose teams are listed.
+/// * `palette` - the colours to draw with.
+pub fn team_rows(app: &App, palette: &Palette) -> Vec<(Line, (String, String))> {
+    let global = app.active_model_ref_string();
+    app.team_sections()
+        .iter()
+        .flat_map(|section| {
+            section_rows(app, palette, section, global.as_deref())
+                .into_iter()
+                .map(|(line, key)| (line, (section.name.clone(), key)))
+        })
+        .collect()
+}
+
+/// One team's rows: its title, the column header, the lead, the teammates
+/// and the hints, each with its key (see [`team_rows`]).
+fn section_rows(
+    app: &App,
+    palette: &Palette,
+    section: &TeamSection,
+    global: Option<&str>,
+) -> Vec<(Line, String)> {
     let hint = palette.muted;
-    let store = team_store(app);
+    let store = team_store(app, &section.name);
     let counts = task_counts(store.as_ref());
     let parked = plans(store.as_ref());
-    let global = app.active_model_ref_string();
-    let lead_session = app.session.session_id.clone().unwrap_or_default();
+    let lead_session = section.lead_session_id.clone();
+    let is_active = app
+        .session
+        .active_team
+        .as_ref()
+        .is_some_and(|team| team.name == section.name);
     let mut out = vec![(
+        Line::new().push(title(section), palette.color(ThemeColor::Accent)),
+        String::new(),
+    )];
+    out.push((
         Line::new().push(
             format!(
                 "{:MARKER_W$}{:<ID_W$} {:<LABEL_W$} {:<AGENT_TYPE_W$} {:<STATUS_W$} \
@@ -294,16 +326,23 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             hint,
         ),
         String::new(),
-    )];
+    ));
     let green = palette.color(ThemeColor::Success);
-    let name = &app.session.agent_name;
-    let (lead_sent, lead_recv) = app
-        .session
-        .team_message_counts
-        .get(name)
-        .or_else(|| app.session.team_message_counts.get("lead"))
-        .copied()
-        .unwrap_or((0, 0));
+    let name = if is_active {
+        app.session.agent_name.as_str()
+    } else {
+        "lead"
+    };
+    let (lead_sent, lead_recv) = if is_active {
+        app.session
+            .team_message_counts
+            .get(name)
+            .or_else(|| app.session.team_message_counts.get("lead"))
+            .copied()
+            .unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
     let lead = Line::new()
         .push(format!("{:<MARKER_W$}", "* "), green)
         .push(format!("{:<ID_W$} ", short_suffix(&lead_session, 8)), green)
@@ -332,13 +371,17 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
             Some(lead_recv),
             palette,
         )
-        .hover(name.as_str()),
+        .hover(name),
         "lead".to_string(),
     ));
-    let members = &app.session.team_members;
+    let members = &section.members;
     for (index, member) in members.iter().enumerate() {
         let short = short_suffix(&member.agent_id, 8);
-        let focused = app.session.focused_teammate.as_deref() == Some(member.agent_id.as_str());
+        let focused = app
+            .session
+            .focused_teammate
+            .as_ref()
+            .is_some_and(|(team, id)| *team == section.name && *id == member.agent_id);
         let connector = if index + 1 == members.len() {
             "`- "
         } else {
@@ -351,7 +394,7 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
         } else {
             (palette.color(ThemeColor::Accent), palette.text)
         };
-        let (model, model_color) = model_column(member, global.as_deref(), palette);
+        let (model, model_color) = model_column(member, global, palette);
         let label = truncate_chars_no_ellipsis(&format!("{}-{short}", member.name), LABEL_W);
         let steps = member
             .session_id
@@ -363,10 +406,10 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
         let (sent, recv) = if member.agent_id == "lead" {
             (None, None)
         } else {
-            let (sent, recv) = app
-                .session
-                .team_message_counts
-                .get(&member.agent_id)
+            // The counters follow the session's active team only.
+            let (sent, recv) = is_active
+                .then(|| app.session.team_message_counts.get(&member.agent_id))
+                .flatten()
                 .copied()
                 .unwrap_or((0, 0));
             (Some(sent), Some(recv))
@@ -473,15 +516,20 @@ fn rows(app: &App, palette: &Palette) -> Vec<(Line, String)> {
 /// * `palette` - the colours to draw with.
 pub fn teams_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     app.refresh_team_member_session_ids();
-    let rows = rows(app, palette);
-    let keys: Vec<String> = rows.iter().map(|(_, key)| key.clone()).collect();
-    // The cursor is an ordinal over the teammate rows only (plan lines and
-    // hints are not rows of their own).
+    let rows = team_rows(app, palette);
+    let keys: Vec<(String, String)> = rows.iter().map(|(_, key)| key.clone()).collect();
+    // The cursor is an ordinal over the teammate rows only (titles, plan
+    // lines and hints are not rows of their own), across every team.
     app.teams_teammate_agent_ids = app
-        .session
-        .team_members
-        .iter()
-        .map(|member| member.agent_id.clone())
+        .team_sections()
+        .into_iter()
+        .flat_map(|section| {
+            let team = section.name;
+            section
+                .members
+                .into_iter()
+                .map(move |member| (team.clone(), member.agent_id))
+        })
         .collect();
     app.teams_row_agent_ids = keys;
     let cursor_row = app
@@ -492,7 +540,6 @@ pub fn teams_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
     let legend_height = legend_height(ui, LEGEND);
     let mut drawn = None;
     ui.vertical(|ui| {
-        ui.strong(title(app));
         let list_height = (ui.available_height() - legend_height).max(0.0);
         ui.allocate_ui(egui::vec2(ui.available_width(), list_height), |ui| {
             drawn = Some(show_lines(
@@ -501,7 +548,7 @@ pub fn teams_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                 rows.len(),
                 |index| rows.get(index).map(|(l, _)| l.clone()).unwrap_or_default(),
                 cursor_row,
-                |index| rows.get(index).is_some_and(|(_, key)| !key.is_empty()),
+                |index| rows.get(index).is_some_and(|(_, (_, key))| !key.is_empty()),
                 Follow::None,
             ));
         });

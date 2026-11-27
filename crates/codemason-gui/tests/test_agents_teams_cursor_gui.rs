@@ -309,7 +309,7 @@ async fn teams_space_splits_by_member_status() {
         "a live member confirms first"
     );
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(codemason_app_core::app::RowAction::SuspendTeammate { agent_id, name }) => {
+        Some(codemason_app_core::app::RowAction::SuspendTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }
@@ -360,7 +360,7 @@ async fn teams_del_arms_the_shutdown_dialog() {
 
     assert!(app.row_action_confirm_open(), "Del confirms the shutdown");
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(codemason_app_core::app::RowAction::ShutdownTeammate { agent_id, name }) => {
+        Some(codemason_app_core::app::RowAction::ShutdownTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }
@@ -385,7 +385,10 @@ fn teams_enter_focuses_and_opens_the_overlay() {
     app.teams_cursor_focus();
 
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "Enter focuses the teammate (FR-038)"
     );
@@ -548,14 +551,15 @@ async fn teams_click_selects_the_clicked_member_row() {
     ));
     render_teams(&mut app, 160, 44);
 
-    // Row 1 is the lead (no selection), row 2 the first member.
-    assert!(app.teams_cursor_from_click(1));
+    // Row 0 is the team title, row 2 the lead (no selection), row 3 the
+    // first member (row 1 is the column header).
+    assert!(app.teams_cursor_from_click(2));
     assert_eq!(
         app.teams_cursor_teammate, None,
         "the lead is not addressable"
     );
     assert!(
-        app.teams_cursor_from_click(2),
+        app.teams_cursor_from_click(3),
         "a click on the member row is handled"
     );
     assert_eq!(app.teams_cursor_teammate, Some(0));
@@ -575,14 +579,19 @@ fn teams_cursor_skips_the_plan_line_of_a_planning_member() {
     render_teams(&mut app, 200, 40);
     assert_eq!(
         app.teams_teammate_agent_ids,
-        vec!["agent-plan".to_string(), "agent-work".to_string()]
+        vec![
+            (String::new(), "agent-plan".to_string()),
+            (String::new(), "agent-work".to_string()),
+        ]
     );
 
     app.move_teams_cursor(1);
     app.move_teams_cursor(1);
     assert_eq!(app.teams_cursor_teammate, Some(1));
     assert_eq!(
-        app.teams_teammate_agent_ids.get(1).map(String::as_str),
+        app.teams_teammate_agent_ids
+            .get(1)
+            .map(|(_, id)| id.as_str()),
         Some("agent-work")
     );
 }

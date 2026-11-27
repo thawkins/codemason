@@ -325,10 +325,11 @@ pub struct SessionView {
     /// loads from disk once, then clears it so subsequent frames use the
     /// in-memory cache only.
     pub team_task_counts_dirty: bool,
-    /// Currently focused teammate (agent_id). When set, the status
-    /// bar shows a focus indicator and the input box routes messages
-    /// to this teammate's mailbox instead of the lead session.
-    pub focused_teammate: Option<String>,
+    /// Currently focused teammate as `(team_name, agent_id)`. When set, the
+    /// status bar shows a focus indicator and the input box routes messages
+    /// to this teammate's mailbox instead of the lead session. The team name
+    /// is part of the key because agent ids repeat across teams.
+    pub focused_teammate: Option<(String, String)>,
     /// Active swarm state (if a /swarm is running).
     pub swarm_state: Option<SwarmState>,
     /// Pending result from an async `/swarm` LLM decomposition call.

@@ -1323,6 +1323,8 @@ pub enum RowAction {
     /// Suspend a teammate whose status is not suspended (`[stop]` on a
     /// non-suspended teammate row, FR-040).
     SuspendTeammate {
+        /// The team the member belongs to.
+        team_name: String,
         /// The member id the answer dispatches to.
         agent_id: String,
         /// The member name shown by the row, for the dialog body.
@@ -1330,6 +1332,8 @@ pub enum RowAction {
     },
     /// Shut a teammate down gracefully (`[x]` on a teammate row, FR-040).
     ShutdownTeammate {
+        /// The team the member belongs to.
+        team_name: String,
         /// The member id the answer dispatches to.
         agent_id: String,
         /// The member name shown by the row, for the dialog body.
@@ -1343,6 +1347,8 @@ pub enum RowAction {
     /// exit behind a confirmation so the key keeps one meaning per status and
     /// a mistyped `Del` cannot silently restart work.
     ResumeTeammate {
+        /// The team the member belongs to.
+        team_name: String,
         /// The member id the answer dispatches to.
         agent_id: String,
         /// The member name shown by the row, for the dialog body.
@@ -1466,14 +1472,14 @@ impl RowAction {
                     short_suffix(task_id, 8)
                 )
             }
-            Self::SuspendTeammate { agent_id, name }
-            | Self::ShutdownTeammate { agent_id, name } => {
+            Self::SuspendTeammate { agent_id, name, .. }
+            | Self::ShutdownTeammate { agent_id, name, .. } => {
                 format!("{name} ({agent_id})")
             }
             // The body has to say what confirmation buys, not only who it is
             // about: the parked member's state is the reason the dialog exists
             // (spec `teamssetup` FR-029, FR-032).
-            Self::ResumeTeammate { agent_id, name } => {
+            Self::ResumeTeammate { agent_id, name, .. } => {
                 format!("{name} ({agent_id}) blocked -> resume")
             }
             Self::DeleteSession {
@@ -1799,6 +1805,17 @@ pub struct InputRenderCache {
     pub height: u16,
     /// Cursor position (display row, column) inside the wrapped rows.
     pub cursor_pos: (usize, usize),
+}
+
+/// One team's section of the Teams pane.
+#[derive(Debug, Clone)]
+pub struct TeamSection {
+    /// The team's name.
+    pub name: String,
+    /// The lead session's id, for the lead row.
+    pub lead_session_id: String,
+    /// The team's teammates, in roster order.
+    pub members: Vec<codemason_agent::team::TeamMember>,
 }
 
 /// State for the scrollable output overlay panel.
@@ -3946,18 +3963,22 @@ pub struct App {
     /// Moved by `Up`/`Down`/`PgUp`/`PgDn`; `Space`, `Del` and `Enter` act on
     /// the row it selects.
     pub teams_cursor_teammate: Option<usize>,
-    /// Teammate agent ids in painted row order, recorded by the renderer every
-    /// frame so the cursor ordinal, `Space`/`Del`/`Enter` and scroll-sync all
-    /// resolve to the same rows the table paints (replaces the mouse row map).
-    pub teams_teammate_agent_ids: Vec<String>,
+    /// Teammates as `(team_name, agent_id)` in painted row order across every
+    /// team section, recorded by the renderer every frame so the cursor
+    /// ordinal, `Space`/`Del`/`Enter` and scroll-sync all resolve to the same
+    /// rows the table paints (replaces the mouse row map). The team name is
+    /// part of the key because agent ids (`tm-001`) repeat across teams.
+    pub teams_teammate_agent_ids: Vec<(String, String)>,
     /// Painted-row -> click key for the Teams table (spec `agentui` T-008).
     ///
-    /// Index equals the painted content row (0 = header, 1 = lead, then the
+    /// Index equals the painted content row (per team: title, header, lead, then the
     /// teammate rows or the empty-state hint). An empty string marks a row
-    /// that opens nothing, `"lead"` is the lead row, and a member agent id is
-    /// a teammate row. Recorded by the renderer every frame; kept for
-    /// diagnostics and the cursor's painted-row -> scroll sync.
-    pub teams_row_agent_ids: Vec<String>,
+    /// that opens nothing, `"lead"` is a team's lead row, and a member agent
+    /// id is a teammate row. Each key is paired with its team name, because
+    /// one pane paints a section per team. Recorded by the renderer every
+    /// frame; kept for diagnostics and the cursor's painted-row -> scroll
+    /// sync.
+    pub teams_row_agent_ids: Vec<(String, String)>,
     /// In-flight sub-agent launches on the shared launch set
     /// (spec `agentssetup` D3).
     ///

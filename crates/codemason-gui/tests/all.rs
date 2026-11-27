@@ -317,6 +317,8 @@ mod test_slash_commands_gui;
 mod test_swarm_gui;
 #[path = "test_tasks_panel_gui.rs"]
 mod test_tasks_panel_gui;
+#[path = "test_teams_multi_gui.rs"]
+mod test_teams_multi_gui;
 #[path = "test_teams_tui_gui.rs"]
 mod test_teams_tui_gui;
 #[path = "test_teams_window_frame_gui.rs"]

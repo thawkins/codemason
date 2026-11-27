@@ -83,7 +83,13 @@ fn test_opening_teams_row_output_view_from_the_keyboard() {
     render(&mut app);
     app.move_teams_cursor(1);
     app.teams_cursor_focus();
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
     let view = app.output_view.as_ref().expect("the overlay must open");
     match &view.target {
         codemason_app_core::app::OutputViewTarget::TeamMember { session_id, .. } => {

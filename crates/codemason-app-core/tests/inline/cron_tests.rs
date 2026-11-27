@@ -876,7 +876,7 @@ fn create_test_processor() -> codemason_agent::session::processor::SessionProces
         permission_checker,
         event_bus,
         agent_manager: std::sync::OnceLock::new(),
-        team_manager: Default::default(),
+        team_managers: Default::default(),
         team_context_cache: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),

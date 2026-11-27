@@ -167,6 +167,7 @@ async fn enter_after_toggling_accepts_the_pending_action() {
 async fn esc_dismisses_the_dialog() {
     let mut app = app_with_task();
     app.open_row_action(RowAction::SuspendTeammate {
+        team_name: String::new(),
         agent_id: "tm-001".to_string(),
         name: "reviewer".to_string(),
     });
@@ -334,6 +335,7 @@ fn every_row_action_confirms_with_its_own_verb() {
         ),
         (
             RowAction::SuspendTeammate {
+                team_name: String::new(),
                 agent_id: "tm-001".to_string(),
                 name: "reviewer".to_string(),
             },
@@ -341,6 +343,7 @@ fn every_row_action_confirms_with_its_own_verb() {
         ),
         (
             RowAction::ShutdownTeammate {
+                team_name: String::new(),
                 agent_id: "tm-001".to_string(),
                 name: "reviewer".to_string(),
             },
@@ -348,6 +351,7 @@ fn every_row_action_confirms_with_its_own_verb() {
         ),
         (
             RowAction::ResumeTeammate {
+                team_name: String::new(),
                 agent_id: "tm-001".to_string(),
                 name: "reviewer".to_string(),
             },

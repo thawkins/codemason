@@ -84,7 +84,10 @@ async fn test_team_focus_does_not_retitle_or_route_the_input() {
 
     app.focus_teammate_by_id("tm-001");
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "focusing must register before the border can be checked (FR-058)"
     );
@@ -105,7 +108,13 @@ async fn test_team_focus_does_not_retitle_or_route_the_input() {
     assert!(app.output_view.is_none());
     // Re-land on the only member for the delivery half of the test.
     app.cycle_focused_teammate(true);
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
 
     // FR-058 (amended): delivery to a teammate is `/team message`'s job, not the
     // input box's - `send_teammate_message` is the arm behind that command.

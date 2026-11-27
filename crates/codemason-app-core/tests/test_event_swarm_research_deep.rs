@@ -922,11 +922,23 @@ async fn alt_down_and_alt_up_cycle_teammate_focus() {
     app.session.active_team = Some(TeamConfig::new("team-a", "s1"));
 
     app.handle_key_event(alt_key(KeyCode::Down)).await;
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
     assert_eq!(app.status, "team: focused -> swarm-s1");
 
     app.handle_key_event(alt_key(KeyCode::Down)).await;
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-002"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-002")
+    );
 
     // Forward from the last member clears the focus.
     app.handle_key_event(alt_key(KeyCode::Down)).await;
@@ -936,10 +948,22 @@ async fn alt_down_and_alt_up_cycle_teammate_focus() {
 
     // Backward from "no focus" lands on the last member.
     app.handle_key_event(alt_key(KeyCode::Up)).await;
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-002"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-002")
+    );
 
     app.handle_key_event(alt_key(KeyCode::Up)).await;
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
 
     // Backward from the first member clears the focus again.
     app.handle_key_event(alt_key(KeyCode::Up)).await;
@@ -950,7 +974,7 @@ async fn alt_down_and_alt_up_cycle_teammate_focus() {
 async fn alt_down_without_members_clears_the_focus() {
     let mut app = new_app("s1");
     app.session.team_members.clear();
-    app.session.focused_teammate = Some("tm-999".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-999".to_string()));
 
     app.handle_key_event(alt_key(KeyCode::Down)).await;
     assert_eq!(app.session.focused_teammate, None);
@@ -963,7 +987,13 @@ async fn team_focus_by_name_resolves_ambiguity_and_misses() {
     app.session.team_members = vec![member("swarm-s1", "tm-001"), member("swarm-s2", "tm-002")];
 
     app.execute_slash_command("/team focus swarm-s1").await;
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
     assert!(joined_text(&app).contains("Focused on **swarm-s1**"));
 
     app.execute_slash_command("/team focus swarm").await;
@@ -985,7 +1015,7 @@ async fn enter_with_a_focused_teammate_still_addresses_the_lead_session() {
 
     app.session.active_team = Some(TeamConfig::new("team-a", "s1"));
     app.session.team_members = vec![member("swarm-s1", "tm-001")];
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-001".to_string()));
     app.session.input = "please review the diff".to_string();
     app.session.input_cursor = app.session.input.chars().count();
 
@@ -1019,7 +1049,7 @@ async fn focused_message_without_a_team_or_member_reports_the_reason() {
     crate::without_host_providers(&mut app);
     app.session.active_team = None;
     app.session.team_members = vec![member("swarm-s1", "tm-001")];
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-001".to_string()));
     app.session.input = "hello".to_string();
     app.session.input_cursor = 5;
     app.handle_key_event(key(KeyCode::Enter)).await;
@@ -1033,7 +1063,7 @@ async fn focused_message_without_a_team_or_member_reports_the_reason() {
     crate::without_host_providers(&mut app);
     app.session.active_team = Some(TeamConfig::new("team-a", "s1"));
     app.session.team_members = vec![member("swarm-s1", "tm-001")];
-    app.session.focused_teammate = Some("tm-404".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-404".to_string()));
     app.session.input = "hello".to_string();
     app.session.input_cursor = 5;
     app.handle_key_event(key(KeyCode::Enter)).await;
@@ -1051,7 +1081,7 @@ async fn focused_message_for_a_missing_team_store_reports_the_load_failure() {
     let (_g, _e, _temp, mut app) = isolated_app();
     app.session.active_team = Some(TeamConfig::new("ghost-team", "s1"));
     app.session.team_members = vec![member("swarm-s1", "tm-001")];
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-001".to_string()));
     app.session.input = "hello".to_string();
     app.session.input_cursor = 5;
 

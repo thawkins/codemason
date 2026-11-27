@@ -573,7 +573,7 @@ async fn team_cleaned_up_clears_members_and_swarm_state() {
         .team_members
         .push(TeamMember::new("writer", "tm-001", "general"));
     app.show_teams = true;
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some(("alpha".to_string(), "tm-001".to_string()));
     app.session.swarm_state = Some(codemason_agent::team::SwarmState {
         team_name: "alpha".to_string(),
         prompt: "x".to_string(),

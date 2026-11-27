@@ -529,7 +529,7 @@ async fn test_team_create_sets_active_team() {
     assert!(app.show_teams, "show_teams should be enabled");
     assert!(app.session.team_members.is_empty(), "no teammates yet");
     assert!(
-        app.session_processor.team_manager.get().is_some(),
+        !app.session_processor.team_managers.all().is_empty(),
         "TeamManager should be initialised after /team create"
     );
     assert!(
@@ -1129,13 +1129,15 @@ async fn test_event_teammate_spawned_binds_team_manager() {
     let _ = std::env::set_current_dir(original_dir);
 
     assert!(
-        app.session_processor.team_manager.get().is_some(),
+        !app.session_processor.team_managers.all().is_empty(),
         "the spawn handler must bind the TeamManager so watchdog progress recording works (FR-051)"
     );
     assert!(
         app.session_processor
-            .team_manager
-            .get()
+            .team_managers
+            .all()
+            .into_iter()
+            .next()
             .expect("bound manager")
             .team_dir
             .ends_with(&store.dir),
@@ -1160,7 +1162,7 @@ async fn test_event_teammate_suspend_resume_update_member_status() {
         app.session_processor.clone(),
         app.event_bus.clone(),
     ));
-    if app.session_processor.team_manager.set(mgr).is_err() {
+    if app.session_processor.team_managers.bind(mgr).is_err() {
         // Tests share the process processor in some configurations; the
         // status assertions below are independent of the binding.
     }
@@ -1220,7 +1222,7 @@ async fn test_event_teammate_stopped_marks_row_stopped() {
         app.session_processor.clone(),
         app.event_bus.clone(),
     ));
-    let _ = app.session_processor.team_manager.set(mgr);
+    let _ = app.session_processor.team_managers.bind(mgr);
     let mut m = TeamMember::new("writer", "tm-001", "general");
     m.status = MemberStatus::Working;
     m.current_task_id = Some("task-001".to_string());
@@ -1265,7 +1267,7 @@ async fn test_event_teammate_status_events_record_watchdog_progress() {
         app.session_processor.clone(),
         app.event_bus.clone(),
     ));
-    let _ = app.session_processor.team_manager.set(mgr);
+    let _ = app.session_processor.team_managers.bind(mgr);
     app.session
         .team_members
         .push(TeamMember::new("writer", "tm-001", "general"));
@@ -1326,7 +1328,10 @@ async fn test_team_focus_cycle_down_from_unfocused_opens_first_member() {
     app.cycle_focused_teammate(true);
 
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "cycling forward from no focus must land on the first member (FR-046)"
     );
@@ -1355,14 +1360,29 @@ async fn test_team_focus_cycle_moves_through_members_in_order() {
         .push(TeamMember::new("tester", "tm-002", "general"));
 
     app.cycle_focused_teammate(true);
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
     app.cycle_focused_teammate(true);
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-002"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-002")
+    );
     assert_eq!(app.status, "team: focused -> tester");
 
     app.cycle_focused_teammate(false);
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "cycling backward must move to the previous member (FR-046)"
     );
@@ -1383,7 +1403,13 @@ async fn test_team_focus_cycle_past_ends_clears_focus_and_output_view() {
     // the end: focus and the output view clear together (FR-046).
     app.cycle_focused_teammate(true);
     app.cycle_focused_teammate(true);
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-002"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-002")
+    );
     assert!(app.output_view.is_some());
     app.cycle_focused_teammate(true);
     assert!(
@@ -1399,13 +1425,22 @@ async fn test_team_focus_cycle_past_ends_clears_focus_and_output_view() {
     // Up with no focus lands on the last member...
     app.cycle_focused_teammate(false);
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-002"),
         "cycling backward from no focus must land on the last member (FR-046)"
     );
     // ...the next up moves to the previous member...
     app.cycle_focused_teammate(false);
-    assert_eq!(app.session.focused_teammate.as_deref(), Some("tm-001"));
+    assert_eq!(
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
+        Some("tm-001")
+    );
     // ...and the third up goes past the start, clearing the pair again.
     app.cycle_focused_teammate(false);
     assert!(app.session.focused_teammate.is_none());
@@ -1416,7 +1451,7 @@ async fn test_team_focus_cycle_past_ends_clears_focus_and_output_view() {
 #[tokio::test]
 async fn test_team_focus_cycle_with_no_members_clears_stale_focus() {
     let mut app = support::make_app();
-    app.session.focused_teammate = Some("ghost".to_string());
+    app.session.focused_teammate = Some((String::new(), "ghost".to_string()));
 
     app.cycle_focused_teammate(true);
 

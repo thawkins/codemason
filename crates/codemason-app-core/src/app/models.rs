@@ -1073,9 +1073,9 @@ impl App {
         known_team_dir: Option<std::path::PathBuf>,
         reconcile: bool,
     ) {
-        // A manager whose team is gone (closed, deleted, cleaned up) is
-        // unbound so this team gets its own runtime instead of the old one.
-        if let Some(stale) = self.session_processor.team_manager.stale() {
+        // Managers whose team is gone (closed, deleted, cleaned up) are
+        // unbound. Live managers of other teams are never touched.
+        for stale in self.session_processor.team_managers.prune_stale() {
             self.push_log_no_agent(
                 LogLevel::Info,
                 format!(
@@ -1083,13 +1083,12 @@ impl App {
                     stale.team_name
                 ),
             );
-            self.session_processor.team_manager.clear_if(&stale);
         }
         if self
             .session_processor
-            .team_manager
-            .get()
-            .is_some_and(|bound| bound.team_name == team_name)
+            .team_managers
+            .get(team_name)
+            .is_some()
         {
             return;
         }
@@ -1135,18 +1134,19 @@ impl App {
         // itself, so it needs the `Arc` this manager lives in.
         let manager = manager.into_arc();
 
-        // A manager bound to another team is replaced; it stays alive for as
-        // long as its own teammate tasks hold it.
-        let previous = self.session_processor.team_manager.replace(manager.clone());
+        // `bind` refuses a live manager for the same team, so one bound in
+        // the meantime wins and this one is dropped unused.
+        if self
+            .session_processor
+            .team_managers
+            .bind(manager.clone())
+            .is_err()
+        {
+            return;
+        }
         self.push_log_no_agent(
             LogLevel::Info,
-            match previous {
-                Some(old) => format!(
-                    "TeamManager rebound from team '{}' to team '{team_name}'",
-                    old.team_name
-                ),
-                None => format!("TeamManager initialised for team '{team_name}'"),
-            },
+            format!("TeamManager initialised for team '{team_name}'"),
         );
         // Only reconcile when explicitly requested (i.e. when the team was seeded
         // via the LLM tool path and members may be queued in Spawning state).

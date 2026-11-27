@@ -613,6 +613,8 @@ mod test_syntax_highlight;
 mod test_tasks_panel;
 #[path = "test_teams_message_counts.rs"]
 mod test_teams_message_counts;
+#[path = "test_teams_multi.rs"]
+mod test_teams_multi;
 #[path = "test_teams_tui.rs"]
 mod test_teams_tui;
 #[path = "test_teams_window_table.rs"]

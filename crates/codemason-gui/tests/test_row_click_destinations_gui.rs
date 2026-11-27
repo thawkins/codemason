@@ -262,7 +262,10 @@ fn enter_on_the_teammate_cursor_focuses_the_teammate_and_reports_it() {
     app.teams_cursor_focus();
 
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "Enter on the teammate cursor focuses the teammate (FR-038)"
     );
@@ -299,7 +302,9 @@ fn the_teammate_cursor_never_reaches_the_lead_row() {
         "Up past the top clamps at the first teammate row - never the lead (FR-067)"
     );
     assert_eq!(
-        app.teams_teammate_agent_ids.first().map(String::as_str),
+        app.teams_teammate_agent_ids
+            .first()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "the lead is not part of the cursor range (FR-067)"
     );
@@ -416,7 +421,10 @@ async fn teams_focus_survives_a_close_and_reopen() {
     app.move_teams_cursor(1);
     app.teams_cursor_focus();
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "Enter focuses the teammate"
     );
@@ -431,7 +439,10 @@ async fn teams_focus_survives_a_close_and_reopen() {
     assert!(!app.show_teams_window);
     assert!(app.output_view.is_none(), "the overlay closed first");
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "closing the window preserves the focused teammate (FR-065)"
     );
@@ -439,7 +450,10 @@ async fn teams_focus_survives_a_close_and_reopen() {
     app.toggle_teams_window();
     assert!(app.show_teams_window);
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "reopening preserves the focused teammate (FR-065)"
     );

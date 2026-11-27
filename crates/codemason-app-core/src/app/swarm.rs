@@ -250,7 +250,7 @@ impl App {
 
         // Trigger reconcile - the manager picks up Spawning members and spawns them.
         // Blocked members are skipped by reconcile (they aren't MemberStatus::Spawning).
-        if let Some(manager) = self.session_processor.team_manager.get() {
+        if let Some(manager) = self.session_processor.team_managers.get(team_name) {
             manager.clone().reconcile_spawning_members();
         } else {
             self.ensure_team_manager_for_team_inner(team_name, Some(team_dir.to_path_buf()), true);
@@ -551,7 +551,7 @@ impl App {
                 ),
             );
         } // Trigger reconcile to spawn newly-unblocked members
-        if let Some(manager) = self.session_processor.team_manager.get() {
+        if let Some(manager) = self.session_processor.team_managers.get(&team_name) {
             manager.clone().reconcile_spawning_members();
         }
 

@@ -84,9 +84,7 @@ async fn test_team_binding_without_agent_manager_is_a_no_op() {
 
 // -- Rebinding (review P0-4) -------------------------------------------------
 
-use codemason_agent::team::{
-    Mailbox, MemberStatus, MessageType, TeamManager, TeamManagers, TeamMember, TeamStatus,
-};
+use codemason_agent::team::{Mailbox, MemberStatus, MessageType, TeamManager, TeamMember};
 use codemason_agent::tool::{TeamManagerInterface, Tool, ToolContext};
 
 /// A manager over a fresh team `name`, led by `lead-sess`, in `workspace`.
