@@ -73,8 +73,10 @@ impl Tool for RmTool {
         )?;
 
         // ANTIPAT F-10: probe via the async metadata call, not blocking
-        // exists()/is_dir() on the async execution path.
-        let meta = tokio::fs::metadata(&path)
+        // exists()/is_dir() on the async execution path. TL-14: inspect the
+        // link itself, not its target, so a dangling link or a link to a
+        // directory is deleted as the one file it is.
+        let meta = tokio::fs::symlink_metadata(&path)
             .await
             .map_err(|_| anyhow::anyhow!("File not found: {}", path.display()))?;
 

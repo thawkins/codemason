@@ -197,3 +197,32 @@ async fn test_background_command_wait_timeout() {
     // Clean up so the test process does not linger.
     let _ = cmd.cancel().await;
 }
+
+/// One invalid UTF-8 byte must not end the capture (TL-01): the old line
+/// reader failed on it and every later line was lost.
+#[tokio::test]
+async fn test_background_command_keeps_output_after_invalid_utf8() {
+    let cmd = BackgroundCommand::spawn(
+        "test-utf8".to_string(),
+        r"printf 'before\n\377bad\n'; for i in 1 2 3; do echo after-$i; done".to_string(),
+        std::env::current_dir().unwrap(),
+        None,
+        String::new(),
+    )
+    .await
+    .expect("spawn should succeed");
+
+    cmd.wait(10)
+        .await
+        .expect("wait should finish before timeout");
+    let (stdout, _stderr) = cmd.output();
+    assert!(stdout.contains("before\n"), "{stdout:?}");
+    assert!(
+        stdout.contains("bad\n"),
+        "the invalid line is kept lossily: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("after-3\n"),
+        "output after the bad byte is kept: {stdout:?}"
+    );
+}

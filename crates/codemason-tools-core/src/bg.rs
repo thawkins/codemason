@@ -318,9 +318,9 @@ impl BackgroundCommand {
         let session_id_stdout = session_id.clone();
         let command_stdout = command.clone();
         let stdout_handle = tokio::spawn(async move {
-            let mut lines = stdout_reader.lines();
+            let mut reader = stdout_reader;
             loop {
-                match lines.next_line().await {
+                match next_lossy_line(&mut reader).await {
                     Ok(Some(line)) => {
                         let formatted = format!("{line}\n");
                         Self::append_line(
@@ -355,9 +355,9 @@ impl BackgroundCommand {
         let task_id_stderr = task_id.clone();
         let session_id_stderr = session_id.clone();
         let stderr_handle = tokio::spawn(async move {
-            let mut lines = stderr_reader.lines();
+            let mut reader = stderr_reader;
             loop {
-                match lines.next_line().await {
+                match next_lossy_line(&mut reader).await {
                     Ok(Some(line)) => {
                         let formatted = format!("{line}\n");
                         Self::append_line(
@@ -588,5 +588,45 @@ impl BackgroundCommand {
             exit_code = ?exit_code,
             "Background command finished"
         );
+    }
+}
+
+/// Longest line kept as one capture entry; a longer run is split (TL-01).
+const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// Read the next line from `reader`, decoding it lossily (TL-01).
+///
+/// `AsyncBufReadExt::lines` fails on the first non-UTF-8 byte, which ended
+/// the capture and dropped everything after it (common for code-page output
+/// on Windows), and it buffers a line of any length. This splits on `\n`
+/// (dropping a trailing `\r`), replaces invalid bytes, and returns a run of
+/// [`MAX_LINE_BYTES`] without a newline as a line of its own. `Ok(None)` is
+/// the end of the stream.
+async fn next_lossy_line<R>(reader: &mut R) -> std::io::Result<Option<String>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then(|| String::from_utf8_lossy(&line).into_owned()));
+        }
+        let room = MAX_LINE_BYTES - line.len();
+        let window = &available[..available.len().min(room)];
+        if let Some(end) = window.iter().position(|&b| b == b'\n') {
+            line.extend_from_slice(&window[..end]);
+            reader.consume(end + 1);
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+        }
+        let taken = window.len();
+        line.extend_from_slice(window);
+        reader.consume(taken);
+        if line.len() >= MAX_LINE_BYTES {
+            return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+        }
     }
 }

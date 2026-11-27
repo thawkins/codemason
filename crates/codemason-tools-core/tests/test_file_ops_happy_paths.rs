@@ -369,3 +369,22 @@ async fn test_calculator_returns_result_and_reports_errors() {
         .unwrap_err();
     assert_ne!(err.to_string(), "");
 }
+
+/// `rm` deletes a symlink itself (TL-14): a dangling link is deleted, not
+/// reported missing, and a link to a directory is deleted without touching
+/// the directory.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_rm_deletes_a_symlink_not_its_target() {
+    let dir = temp_dir("rm_symlink");
+    std::os::unix::fs::symlink(dir.join("missing-target"), dir.join("dangling")).unwrap();
+    std::fs::create_dir_all(dir.join("realdir")).unwrap();
+    std::os::unix::fs::symlink(dir.join("realdir"), dir.join("dirlink")).unwrap();
+
+    run(&RmTool, json!({"path": "dangling"}), &dir).await;
+    run(&RmTool, json!({"path": "dirlink"}), &dir).await;
+
+    assert!(std::fs::symlink_metadata(dir.join("dangling")).is_err());
+    assert!(std::fs::symlink_metadata(dir.join("dirlink")).is_err());
+    assert!(dir.join("realdir").is_dir(), "the target directory is kept");
+}

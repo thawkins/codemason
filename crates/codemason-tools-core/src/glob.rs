@@ -219,7 +219,7 @@ fn collect_matches(
             .map(|sub| {
                 let mut local = Vec::new();
                 if let Err(e) = collect_matches(
-                    sub,
+                    root.as_path(),
                     sub,
                     matcher.as_ref(),
                     &mut local,
@@ -244,7 +244,14 @@ fn collect_matches(
             if results.len() >= max_results {
                 return Ok(());
             }
-            collect_matches(sub, sub, matcher.as_ref(), results, max_results, depth + 1)?;
+            collect_matches(
+                root.as_path(),
+                sub,
+                matcher.as_ref(),
+                results,
+                max_results,
+                depth + 1,
+            )?;
         }
     }
     Ok(())

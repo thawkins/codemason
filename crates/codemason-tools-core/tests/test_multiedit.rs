@@ -840,3 +840,53 @@ async fn test_multiedit_out_of_workspace_edit_aborts_the_batch() {
         "no edit in a rejected batch may be applied"
     );
 }
+
+// -- All-or-nothing write (TL-12) -------------------------------------------
+
+/// When one file cannot be written, no file is modified: the module promises
+/// atomic edits, and the old per-file write left earlier files edited.
+#[tokio::test]
+async fn test_failed_write_leaves_every_file_unmodified() {
+    let tmp = TempDir::new().unwrap();
+    // Several writable files, so whatever order the writes run in, at least
+    // one would have been written before the read-only one under the old code.
+    let writable: Vec<_> = ["a.rs", "b.rs", "c.rs", "d.rs"]
+        .iter()
+        .map(|name| write_file(tmp.path(), name, "alpha\n"))
+        .collect();
+    let locked = write_file(tmp.path(), "locked.rs", "alpha\n");
+    let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&locked, perms.clone()).unwrap();
+
+    let input = json!({
+        "edits": [
+            { "path": "a.rs", "old_str": "alpha", "new_str": "ALPHA" },
+            { "path": "b.rs", "old_str": "alpha", "new_str": "ALPHA" },
+            { "path": "locked.rs", "old_str": "alpha", "new_str": "ALPHA" },
+            { "path": "c.rs", "old_str": "alpha", "new_str": "ALPHA" },
+            { "path": "d.rs", "old_str": "alpha", "new_str": "ALPHA" }
+        ]
+    });
+    let result = MultiEditTool.execute(input, &ctx(tmp.path())).await;
+
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&locked, perms).unwrap();
+    let err = result.expect_err("the read-only file fails the batch");
+    assert!(err.to_string().contains("no file was modified"), "{err}");
+    for path in &writable {
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "alpha\n",
+            "{}",
+            path.display()
+        );
+    }
+    let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".multiedit"))
+        .collect();
+    assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+}
