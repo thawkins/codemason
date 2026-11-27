@@ -192,6 +192,7 @@ async fn test_team_binding_shutdown_tool_ignores_a_manager_of_another_team() {
         config: None,
         bg_service: None,
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
         permission_checker: None,
         tool_registry: ToolContext::default_tool_registry(),
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),

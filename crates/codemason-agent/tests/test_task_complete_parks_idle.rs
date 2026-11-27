@@ -56,6 +56,7 @@ fn ctx_for(manager: &Arc<TeamManager>, agent_id: &str) -> ToolContext {
         config: None,
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
         permission_checker: None,
         allowed_roots: vec![manager.team_dir.clone()],
         canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),

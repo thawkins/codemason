@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::agent::oasf::{CODEMASON_MODULE_TYPE, CodemasonAgentPayload, OasfAgentRecord};
-use crate::agent::{AgentInfo, AgentMode, ModelRef};
+use crate::agent::{AgentInfo, AgentMode, AgentRole, ModelRef};
 use crate::permission::{Permission, PermissionAction, PermissionRule};
 use crate::skill::plugin_store_dirs;
 use codemason_plugins::scanned_plugin_agent_files;
@@ -320,6 +320,8 @@ struct ProfileFrontmatter {
     thinking: Option<ThinkingConfig>,
     /// Permission rules - same schema as OASF `codemason/agent/v1`.
     permissions: Option<Vec<crate::agent::oasf::CodemasonPermissionRule>>,
+    /// Functional role: `"standard"` (default) or `"team-leader"`.
+    role: Option<crate::agent::AgentRole>,
     /// Skill names to preload.
     #[serde(default)]
     skills: Vec<String>,
@@ -376,6 +378,7 @@ fn load_agent_profile(path: &Path, is_project_local: bool) -> Result<CustomAgent
         model: fm.model,
         skills: fm.skills,
         permissions: fm.permissions,
+        role: fm.role,
         hidden: fm.hidden,
         memory: fm.memory,
         thinking: fm.thinking,
@@ -534,6 +537,8 @@ pub fn record_to_agent_info(
         return Err("max_steps must be greater than 0".to_string());
     }
 
+    let role = payload.role.unwrap_or_default();
+
     // -- Parse permissions --------------------------------------------------
     let permission = if let Some(ref rules) = payload.permissions {
         rules
@@ -556,6 +561,8 @@ pub fn record_to_agent_info(
                 })
             })
             .collect::<Result<Vec<_>, String>>()?
+    } else if role == AgentRole::TeamLeader {
+        crate::agent::team_leader_permissions()
     } else {
         crate::agent::default_permissions()
     };
@@ -603,6 +610,7 @@ pub fn record_to_agent_info(
         model_pinned,
         allowed_tools: None,
         stall_timeout_secs: None,
+        role,
     };
 
     Ok(Arc::new(agent_info))

@@ -517,6 +517,7 @@ async fn test_skill_manage_reports_a_stale_entry_when_it_applies_the_restriction
         config: None,
         allowed_roots: Vec::new(),
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
         permission_checker: None,
         tool_registry: Arc::clone(&registry),
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),

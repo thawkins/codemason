@@ -7484,6 +7484,7 @@ than assumed.
                                     // SEC-codemason-team-001: hand the nested team_create
                                     // call the session's checker so a blueprint seed
                                     // cannot execute tools without approval.
+                                    agent_role: codemason_agent::agent::AgentRole::Standard,
                                     permission_checker: Some(
                                         session_processor.permission_checker.clone(),
                                     ),

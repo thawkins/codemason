@@ -107,6 +107,10 @@ pub struct OasfModule {
 /// Payload of a `codemason/agent/v1` module - the codemason-specific agent definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodemasonAgentPayload {
+    /// Functional role (`"standard"` or `"team-leader"`). Defaults to standard.
+    #[serde(default)]
+    pub role: Option<crate::agent::AgentRole>,
+
     /// System prompt for the agent.
     ///
     /// Supports template variables: `{{WORKING_DIR}}`, `{{FILE_TREE}}`,

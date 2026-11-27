@@ -163,6 +163,7 @@ fn test_agent_web_fetch_tool_uses_mf_fetch_youtube_title() {
                 tool_registry: Arc::new(crate::tool::create_default_registry()),
                 read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
                 cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+                agent_role: crate::agent::AgentRole::Standard,
                 permission_checker: None,
                 canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
             },
@@ -388,6 +389,7 @@ fn test_tool_context() -> AgentToolContext {
         tool_registry: Arc::new(crate::tool::create_default_registry()),
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+        agent_role: crate::agent::AgentRole::Standard,
         permission_checker: None,
         canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
     }

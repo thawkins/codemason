@@ -78,6 +78,9 @@ mod test_agent_skill_hooks_extra;
 #[path = "test_agent_thinking_defaults.rs"]
 mod test_agent_thinking_defaults;
 
+#[path = "test_agent_team_leader.rs"]
+mod test_agent_team_leader;
+
 #[path = "test_agentskills_discovery.rs"]
 mod test_agentskills_discovery;
 

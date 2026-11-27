@@ -451,6 +451,7 @@ async fn test_team_status_reports_the_hook_failure_count() {
             std::collections::HashMap::new(),
         )),
         cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
         permission_checker: None,
         canonical_cache: std::sync::Arc::new(codemason_tools_core::CanonicalPathCache::new()),
         tool_registry: ToolContext::default_tool_registry(),
