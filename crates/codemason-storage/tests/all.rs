@@ -48,6 +48,8 @@ mod test_background_tasks_crud;
 mod test_compaction_prune;
 #[path = "test_compaction_role.rs"]
 mod test_compaction_role;
+#[path = "test_credential_key_file.rs"]
+mod test_credential_key_file;
 #[path = "test_cron_automation_lifecycle.rs"]
 mod test_cron_automation_lifecycle;
 #[path = "test_cron_events_table.rs"]

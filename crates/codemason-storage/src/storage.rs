@@ -218,57 +218,117 @@ static CREDENTIAL_KEY: LazyLock<[u8; 32]> = LazyLock::new(|| {
 ///
 /// Returns `None` when the key file cannot be read or created.
 ///
-/// Ordering invariant (audit T-112): the unix path creates the file with
-/// `mode(0o600)` *before* the `write_all` of the key bytes; on any failure the
+/// Ordering invariant (audit T-112): the key bytes are written to a temp file
+/// created `0600` on unix *before* they are published, and on any failure the
 /// key is not returned, so no encryption ever happens under a world-readable
 /// or unwritten key file.
 fn load_or_create_credential_key() -> Option<[u8; 32]> {
-    let dir = credential_key_dir()?;
-    if std::fs::create_dir_all(&dir).is_err() {
+    load_or_create_credential_key_in(&credential_key_dir()?)
+}
+
+/// [`load_or_create_credential_key`] with the key directory supplied, so a
+/// test can point it at a scratch directory.
+///
+/// The key is minted exactly once (audit CO-02). It is written in full to a
+/// private temp file and then published with `hard_link`, which fails when
+/// the key file already exists: a reader never sees a partial key, and of two
+/// processes starting together the second adopts the first one's key instead
+/// of replacing it. A key file of the wrong length is never replaced, because
+/// replacing it would orphan every stored credential; the caller then falls
+/// back to a per-process key.
+#[doc(hidden)]
+#[must_use]
+pub fn load_or_create_credential_key_in(dir: &std::path::Path) -> Option<[u8; 32]> {
+    if std::fs::create_dir_all(dir).is_err() {
         return None;
     }
     let path = dir.join(CREDENTIAL_KEY_FILE);
-    if let Ok(existing) = std::fs::read(&path)
-        && existing.len() == 32
-    {
-        return existing.as_slice().try_into().ok();
+    match read_credential_key(&path) {
+        KeyFile::Valid(key) => return Some(key),
+        KeyFile::Missing => {}
+        KeyFile::Unusable => return None,
     }
 
     let key = fill_random();
-
-    // Write 0600 from creation on unix; ignore the mode elsewhere.
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let opened = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path);
-        match opened {
-            Ok(mut file) => {
-                if file.write_all(&key).is_err() {
-                    tracing::warn!(path = %path.display(), "failed to write credential key");
-                    return None;
-                }
-            }
+    let suffix: [u8; 8] = fill_random();
+    let tmp_path = dir.join(format!(
+        ".{CREDENTIAL_KEY_FILE}.{}.{:016x}.tmp",
+        std::process::id(),
+        u64::from_le_bytes(suffix)
+    ));
+    if let Err(e) = write_new_key_file(&tmp_path, &key) {
+        tracing::warn!(path = %tmp_path.display(), error = %e, "failed to write credential key");
+        let _ = std::fs::remove_file(&tmp_path); // INTENTIONAL: best-effort cleanup of a failed temp key
+        return None;
+    }
+    let published = std::fs::hard_link(&tmp_path, &path);
+    let _ = std::fs::remove_file(&tmp_path); // INTENTIONAL: the temp name is unique; a leftover is harmless
+    match published {
+        Ok(()) => Some(key),
+        // Another process published first: adopt its key.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => match read_credential_key(&path)
+        {
+            KeyFile::Valid(key) => Some(key),
+            KeyFile::Missing | KeyFile::Unusable => None,
+        },
+        // A filesystem without hard links: create the key file in place,
+        // still refusing to replace an existing one.
+        Err(_) => match write_new_key_file(&path, &key) {
+            Ok(()) => Some(key),
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "failed to create credential key");
-                return None;
+                None
             }
-        }
+        },
     }
-    #[cfg(not(unix))]
-    {
-        if std::fs::write(&path, key).is_err() {
-            tracing::warn!(path = %path.display(), "failed to write credential key");
-            return None;
-        }
-    }
+}
 
-    Some(key)
+/// What is at the credential key path.
+enum KeyFile {
+    /// A complete 32-byte key.
+    Valid([u8; 32]),
+    /// No key file yet.
+    Missing,
+    /// A key file that cannot be read or has the wrong length.
+    Unusable,
+}
+
+/// Read the credential key file at `path`.
+fn read_credential_key(path: &std::path::Path) -> KeyFile {
+    match std::fs::read(path) {
+        Ok(bytes) => match <[u8; 32]>::try_from(bytes.as_slice()) {
+            Ok(key) => KeyFile::Valid(key),
+            Err(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    bytes = bytes.len(),
+                    "credential key file has the wrong length; leaving it in place"
+                );
+                KeyFile::Unusable
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => KeyFile::Missing,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "failed to read credential key");
+            KeyFile::Unusable
+        }
+    }
+}
+
+/// Create `path` (failing if it exists), owner-only on unix, and write and
+/// sync `key` into it.
+fn write_new_key_file(path: &std::path::Path, key: &[u8; 32]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(key)?;
+    file.sync_all()
 }
 
 /// Directory holding the per-install credential key.
