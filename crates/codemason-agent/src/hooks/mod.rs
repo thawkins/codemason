@@ -50,7 +50,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// Cap a string at `max` characters, trimming whitespace.
@@ -595,24 +594,44 @@ fn apply_hook_env(cmd: &mut std::process::Command, hook: &HookConfig, working_di
 }
 
 /// Run a fully-configured hook command, writing `payload` to its stdin when
-/// present.
+/// present, for at most `timeout`.
 ///
-/// A write error is ignored: the hook may exit without reading its stdin.
+/// A hook that outlives `timeout` is killed with everything it started and
+/// reported as an [`std::io::ErrorKind::TimedOut`] error (AG-01, AG-02); stdin
+/// is written while the output drains, so a hook that ignores its input
+/// cannot deadlock (AG-04). A write error is ignored: the hook may exit
+/// without reading its stdin.
 fn run_hook_command(
     cmd: &mut std::process::Command,
     payload: Option<String>,
+    timeout: std::time::Duration,
 ) -> std::io::Result<std::process::Output> {
-    use std::io::Write;
-    let Some(payload) = payload else {
-        return cmd.output();
-    };
-    cmd.stdin(Stdio::piped());
-    let mut child = cmd.spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // INTENTIONAL: best-effort hook stdin write; the hook result is checked below
-        let _ = stdin.write_all(payload.as_bytes());
+    crate::child_process::run_with_deadline(cmd, payload.map(String::into_bytes), timeout)?
+        .into_output(timeout)
+}
+
+/// Largest tool input or output passed to a hook through an environment
+/// variable (AG-03).
+///
+/// A larger value makes the spawn itself fail (Linux caps one variable at
+/// 128 KiB, Windows at 32 K characters), which skipped guard hooks for big
+/// writes. Above the cap the variable is set empty and `<NAME>_TRUNCATED=1`
+/// is set, so a guard can refuse what it cannot inspect; a plugin hook still
+/// gets the full value in its stdin event (`codemason.json` hooks are
+/// env-only).
+#[cfg(windows)]
+const HOOK_ENV_VALUE_MAX: usize = 16 * 1024;
+#[cfg(not(windows))]
+const HOOK_ENV_VALUE_MAX: usize = 64 * 1024;
+
+/// Set the hook environment variable `name` to `value`, or to empty plus a
+/// `<name>_TRUNCATED=1` marker when `value` exceeds [`HOOK_ENV_VALUE_MAX`].
+fn set_payload_env(cmd: &mut std::process::Command, name: &str, value: &str) {
+    if value.len() <= HOOK_ENV_VALUE_MAX {
+        cmd.env(name, value);
+    } else {
+        cmd.env(name, "").env(format!("{name}_TRUNCATED"), "1");
     }
-    child.wait_with_output()
 }
 
 /// Result of running a pre-tool-use hook.
@@ -761,8 +780,8 @@ fn run_pre_tool_use_hook_list(
             .arg(&hook.command)
             .current_dir(working_dir)
             .env("CODEMASON_TOOL_NAME", tool_name)
-            .env("CODEMASON_TOOL_INPUT", tool_input)
             .env("CODEMASON_SESSION_ID", session_id);
+        set_payload_env(&mut cmd, "CODEMASON_TOOL_INPUT", tool_input);
         apply_hook_env(&mut cmd, &hook, working_dir);
         let output = run_hook_command(
             &mut cmd,
@@ -775,6 +794,7 @@ fn run_pre_tool_use_hook_list(
                 None,
                 Some(session_id),
             ),
+            std::time::Duration::from_secs(hook.timeout_secs),
         );
 
         match output {
@@ -1122,14 +1142,14 @@ async fn run_post_tool_use_hook_list(
                     .env("CODEMASON_WORKING_DIR", wd.display().to_string())
                     .env("CLAUDE_PROJECT_DIR", wd.display().to_string())
                     .env("CODEMASON_TOOL_NAME", &tool_name)
-                    .env("CODEMASON_TOOL_INPUT", &tool_input)
-                    .env("CODEMASON_TOOL_OUTPUT", &tool_output)
                     .env("CODEMASON_TOOL_SUCCESS", &success_str)
                     .env("CODEMASON_SESSION_ID", &session_id_for_cmd);
+                set_payload_env(&mut cmd, "CODEMASON_TOOL_INPUT", &tool_input);
+                set_payload_env(&mut cmd, "CODEMASON_TOOL_OUTPUT", &tool_output);
                 if let Some(root) = &plugin_root {
                     cmd.env("CLAUDE_PLUGIN_ROOT", root.display().to_string());
                 }
-                run_hook_command(&mut cmd, payload)
+                run_hook_command(&mut cmd, payload, timeout)
             }
         });
         match tokio::time::timeout(timeout, task).await {
@@ -1304,7 +1324,7 @@ pub async fn run_stop_hooks(
                 if let Some(root) = &plugin_root {
                     cmd.env("CLAUDE_PLUGIN_ROOT", root.display().to_string());
                 }
-                run_hook_command(&mut cmd, payload)
+                run_hook_command(&mut cmd, payload, timeout)
             }
         });
 
@@ -1413,9 +1433,8 @@ pub fn fire_hooks(
             let plugin_root = hook.plugin_root.clone();
             let payload = claude_event_payload(&hook, &working_dir, None, None, None, None, None);
 
-            let task = tokio::spawn(async move {
-                let mut cmd =
-                    tokio::process::Command::new(codemason_tools_core::bash::posix_shell());
+            let task = tokio::task::spawn_blocking(move || {
+                let mut cmd = std::process::Command::new(codemason_tools_core::bash::posix_shell());
                 cmd.arg("-c")
                     .arg(&command)
                     .current_dir(&wd)
@@ -1428,7 +1447,7 @@ pub fn fire_hooks(
                 if let Some(root) = &plugin_root {
                     cmd.env("CLAUDE_PLUGIN_ROOT", root.display().to_string());
                 }
-                match run_hook_command_async(cmd, payload).await {
+                match run_hook_command(&mut cmd, payload, timeout) {
                     Ok(out) if !out.status.success() => {
                         // Hook output is arbitrary user content: redact it so an
                         // echoed credential never reaches the log (audit finding;
@@ -1465,25 +1484,6 @@ pub fn fire_hooks(
             }
         }
     });
-}
-
-/// Run a hook command asynchronously, writing `payload` to its stdin when
-/// present (used by the fire-and-forget triggers).
-async fn run_hook_command_async(
-    mut cmd: tokio::process::Command,
-    payload: Option<String>,
-) -> std::io::Result<std::process::Output> {
-    use tokio::io::AsyncWriteExt;
-    let Some(payload) = payload else {
-        return cmd.output().await;
-    };
-    cmd.stdin(Stdio::piped());
-    let mut child = cmd.spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // INTENTIONAL: best-effort hook stdin write; the hook result is checked below
-        let _ = stdin.write_all(payload.as_bytes()).await;
-    }
-    child.wait_with_output().await
 }
 
 /// Fire hooks for turn start event.

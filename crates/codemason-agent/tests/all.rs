@@ -249,6 +249,8 @@ mod test_history_estimators;
 #[path = "test_history_version_cache.rs"]
 mod test_history_version_cache;
 
+#[path = "test_hook_process_limits.rs"]
+mod test_hook_process_limits;
 #[path = "test_hooks.rs"]
 mod test_hooks;
 

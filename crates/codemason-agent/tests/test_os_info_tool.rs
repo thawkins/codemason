@@ -761,3 +761,17 @@ async fn test_os_info_hardware_excludes_sensitive_identifiers() {
         );
     }
 }
+
+#[test]
+fn test_os_info_probe_runner_keeps_a_verbose_probe() {
+    // A probe printing more than a pipe buffer must not be killed as hung (AG-07).
+    let mut command = std::process::Command::new(codemason_tools_core::bash::posix_shell());
+    command.arg("-c").arg("head -c 1048576 /dev/zero");
+    let output = codemason_agent::tool::os_info::run_with_timeout(
+        &mut command,
+        std::time::Duration::from_secs(10),
+    )
+    .expect("the probe completes");
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), 1_048_576);
+}

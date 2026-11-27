@@ -315,6 +315,13 @@ PostToolUse hooks additionally receive:
 | `CODEMASON_TOOL_OUTPUT`  | JSON string of the tool output                       |
 | `CODEMASON_TOOL_SUCCESS` | `"true"` or `"false"`                                |
 
+A tool input or output larger than 64 KiB (16 KiB on Windows) does not fit in
+an environment variable. The variable is then set empty and
+`CODEMASON_TOOL_INPUT_TRUNCATED=1` (or `CODEMASON_TOOL_OUTPUT_TRUNCATED=1`) is
+set, so a guard can refuse what it cannot inspect; a plugin hook still gets
+the full value in its stdin event. A hook that runs longer than its
+`timeout_secs` is killed together with everything it started.
+
 Turn and compaction triggers additionally receive:
 
 | Variable                        | Description                                    |

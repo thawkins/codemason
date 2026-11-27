@@ -78,22 +78,19 @@ Evidence:
 | W-12 | **Data loss on Windows:** worktree prune matched subdirectory sessions with `/` only, so it deleted a checkout a live session in `worktree\src` was using. Also: `\?\` paths handed to git; npm discovery never found `npm.cmd`; `/bench` manifests failed their own path guard; container, `@include`, memory, file-menu and clipboard paths assumed `/`. | Either separator in the in-use SQL; `dunce`; `which`; `/`-joined manifest paths; root/prefix checks. | `dd71af1` |
 | W-13 | The project-teams walk took `~/.codemason` (the legacy global dir) as a project, so projects under home put their teams in the home folder. | The walk stops at the home folder, compared canonically (8.3 short names). | `cf638a8` |
 | W-14 | Embedded skill data was checked out CRLF under `core.autocrlf`, so Windows builds shipped CRLF skill files. | `.gitattributes` pins that directory to LF (narrow form of O-07). | `65a4c2e` |
+| AG-01..04, 06, 07 | Hook and child-process limits: pre-tool hooks ignored `timeout_secs` and blocked a runtime worker; timed-out hooks leaked the process; a >128 KiB (32 K chars on Windows) tool input made the spawn fail so guard hooks were skipped; stdin-vs-stdout deadlock; verification killed bash only and lost output on one non-UTF-8 byte; a verbose probe was killed as hung. Found on the way: Git for Windows' `binbash.exe` is a launcher, so killing it left scripts running. | One `child_process::run_with_deadline` (AG-18): concurrent stdin, drained pipes, process-tree kill (process group / `taskkill /T`); pre-hooks on the blocking pool; env values over 64 KiB (16 KiB Windows) become empty + `_TRUNCATED=1`. | batch 2 |
 
 ### 2b. Open: high
 
 | ID | Defect | Where | V |
 |----|--------|-------|---|
-| AG-01 | PreToolUse hooks run synchronously inside async dispatch and never read `timeout_secs`. A hung hook blocks a runtime worker with no limit. | `agent/src/hooks/mod.rs` (sync pre-hook); `session/dispatch.rs` call | C |
-| AG-03 | The whole tool input goes into a hook environment variable. Above about 128 KiB (32 K chars on Windows) the spawn fails and the pre-hook falls through to NoDecision, so guard hooks are silently skipped for large writes. | `hooks/mod.rs` env build + spawn-error arm | C |
 | TL-07 | The SSRF trailing-dot fix covers only `localhost`. `metadata.google.internal.` and `x.nip.io.` pass. 100.64/10 and 64:ff9b::/96 are not blocked, and there is no resolved-address check. | `tools-extended/src/masterfetch/security.rs` (`host_lower` vs `host_norm`) | C |
 
 ### 2c. Open: medium
 
 | ID | Defect | Where | V |
 |----|--------|-------|---|
-| AG-02 | A hook timeout drops the JoinHandle only; the child process and the blocking thread leak. | `hooks/mod.rs` (3 timeout sites) | C |
 | AG-05 | `" then "` is found in `to_lowercase()` and that offset slices the original string. `"\u{212A} then x"` panics. | `agent/src/trigger/dynamic.rs` | R (traced: U+212A is 3 bytes, `k` is 1) |
-| AG-06 | Verification kills bash only, so a grandchild holding the pipe defeats the timeout. `read_to_string` empties the output on one non-UTF-8 byte. | `agent/src/session/verification.rs` | C |
 | AG-08 | `Instant::now() + Duration::from_secs(model_u64)` overflows and panics; the schema sets no maximum. | `tool/wait_agents.rs`, `tool/team_wait.rs` | R (traced) |
 | CO-05 | Anthropic `event: error` mid-stream falls into `_ => {}`, so the provider's error text is lost (the Azure copy too). | `llm/providers/anthropic.rs`, `azure_resource.rs` | C |
 | CO-14 | Only 3 provider options are forwarded, so Bedrock `region` / `profile` / `endpoint_url` never reach the provider. Compaction falls back to a hard-coded model. | `agent/.../loop_steps.rs` options forward | C |
@@ -118,8 +115,6 @@ Evidence:
 | W-15 | Six app-core tests fail only in a single-process `cargo test` run (cwd / config races: `test_multisession_new_session_in_a_permitted_path`, `test_project_command_add_registers_permitted_directories_only`, `test_directory_menu_has_back_to_fuzzy_entry`, `test_file_menu_ctrl_backslash_toggles_hidden_filter`, `test_slash_system_sets_prompt`, `test_slash_unknown_command_shows_error`). Each passes alone; every cwd-changing helper holds `global_env_lock`, so the writer is not yet found. Nextest (one process per test) cannot hit it. |
 | W-16 | `image_load::file_uri` on a *relative* path yields `file://shots/x.png`, which `uri_path` and the loader read as the UNC host `\shots\x.png` on Windows (a network read). Production callers checked pass absolute paths; no guard enforces it. |
 | W-17 | 28 agent tests and `scripts/check-test-env-isolation.sh` need `python3`; a Windows box without Python cannot run them, and the guard script cannot run at all. |
-| AG-04 | Hook stdin is written before stdout is drained: a hook that ignores stdin and prints more than 64 KiB deadlocks. |
-| AG-07 | `os_info` probe polls `try_wait` without draining: a probe printing more than 64 KiB is killed at 2 s. |
 | AG-10 | `TaskStore` async fns take a blocking flock and do `std::fs` I/O on the runtime. |
 | AG-11 | `backend/remote.rs` reads `.text()` / `.json()` without a bound. |
 | AG-13 | An unknown `MemoryScope` is an error in `custom.rs` but silently `None` in the team tools. |
@@ -250,7 +245,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 | 0. Windows isolation | W-01, W-02, W-03 | Linux paths unchanged; Windows tests stop touching the profile | config 460/460, connectors 377/377, types 438/438, app-core init/reload 20/20; the real config's mtime is unchanged | **Done** (`8e049db`, `77ae198`, `4347b45`) |
 | 0b. Windows portability | W-04, W-07..W-14 | Unix behaviour unchanged; no assertion weakened (test edits enumerated in `feebc7a`, `9f8446d`) | Windows: agent 401 to 29 failed (28 need python3), app-core 82 to 6 (single-process races, invisible under nextest), gui 2 to 0, storage 427/427; real profile untouched across full runs | **Done** (`5ff13fb`..`cf638a8`) |
 | 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | **Done** (`3984496`, `86dfcb2`, `3fba902`) |
-| 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | Approved |
+| 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | **Done** (see commit "fix(agent): one deadline-bounded child runner") |
 | 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | Approved |
 | 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | Approved |
 | 5. Tool correctness | TL-02, TL-03, TL-04, TL-09, TL-12, TL-14, TL-01, TL-25 | In-root paths still accepted; the same output format | `test_glob_tool`, `test_git_tools` (strict path asserts), `test_multiedit`, `test_github_client_coverage` (cross-origin raw URL case) | Approved |
