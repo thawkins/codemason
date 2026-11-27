@@ -122,3 +122,54 @@ async fn test_git_status_short_exact_paths() {
     let meta = out.metadata.expect("metadata");
     assert_paths(&meta, "short");
 }
+
+/// Build a repository whose paths git prints quoted: a space (quoted by the
+/// short format), a non-ASCII name (quoted as octal escapes by both formats
+/// under the default `core.quotePath`), and a rename to a name with a space.
+fn build_quoted_repo(dir: &Path) {
+    setup_git_repo(dir);
+    fs::write(dir.join("tracked file.txt"), "one\n").unwrap();
+    fs::write(dir.join("old.txt"), "rename me, a reasonably long line\n").unwrap();
+    run_shell("git add -A", dir);
+    run_shell("git commit -q -m base", dir);
+    fs::write(dir.join("tracked file.txt"), "two\n").unwrap();
+    fs::write(dir.join("a b.txt"), "untracked\n").unwrap();
+    fs::write(dir.join("caf\u{e9}.md"), "untracked\n").unwrap();
+    let mv = Command::new("git")
+        .args(["mv", "old.txt", "new name.txt"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(mv.status.success(), "git mv: {mv:?}");
+}
+
+/// Quoted paths are decoded in both modes, not reported with their quotes
+/// and escapes.
+#[tokio::test]
+async fn test_git_status_porcelain_decodes_quoted_paths() {
+    let _env_lock = crate::global_env_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    build_quoted_repo(tmp.path());
+
+    for short in [false, true] {
+        let out = GitStatusTool
+            .execute(json!({ "short": short }), &make_ctx(tmp.path()))
+            .await
+            .unwrap();
+        let meta = out.metadata.expect("metadata");
+        let mut untracked = list(&meta, "untracked");
+        untracked.sort();
+        assert_eq!(
+            untracked,
+            vec!["a b.txt".to_string(), "caf\u{e9}.md".to_string()],
+            "short={short}: {}",
+            out.content
+        );
+        assert_eq!(
+            list(&meta, "modified"),
+            vec!["tracked file.txt"],
+            "short={short}"
+        );
+        assert_eq!(list(&meta, "staged"), vec!["new name.txt"], "short={short}");
+    }
+}

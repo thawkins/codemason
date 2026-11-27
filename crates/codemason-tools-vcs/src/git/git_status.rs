@@ -160,7 +160,7 @@ impl StatusLists {
     /// `# branch.*` headers (handled by the caller).
     fn push_v2(&mut self, line: &str) {
         if let Some(path) = line.strip_prefix("? ") {
-            self.untracked.push(path.to_string());
+            self.untracked.push(unquote_path(path));
             return;
         }
         // Field count before the path for each record kind.
@@ -176,14 +176,15 @@ impl StatusLists {
             return;
         };
         // A rename record carries `path<TAB>origPath`; report the new path.
-        let path = rest.split('\t').next().unwrap_or(rest);
+        // A tab inside a name is printed quoted as `\t`, so the split is safe.
+        let path = unquote_path(rest.split('\t').next().unwrap_or(rest));
         if conflict {
-            self.conflicted.push(path.to_string());
+            self.conflicted.push(path);
             return;
         }
         let mut xy = xy.chars();
         if let (Some(x), Some(y)) = (xy.next(), xy.next()) {
-            self.classify(x, y, '.', path);
+            self.classify(x, y, '.', &path);
         }
     }
 
@@ -197,18 +198,103 @@ impl StatusLists {
         let rest = chars.as_str();
         match (x, y) {
             ('#', '#') | ('!', '!') => {}
-            ('?', '?') => self.untracked.push(rest.to_string()),
+            ('?', '?') => self.untracked.push(unquote_path(rest)),
             ('D', 'D')
             | ('A', 'U')
             | ('U', 'D')
             | ('U', 'A')
             | ('D', 'U')
             | ('A', 'A')
-            | ('U', 'U') => self.conflicted.push(rest.to_string()),
+            | ('U', 'U') => self.conflicted.push(unquote_path(rest)),
             _ => {
-                let path = rest.rsplit(" -> ").next().unwrap_or(rest);
-                self.classify(x, y, ' ', path);
+                self.classify(x, y, ' ', &short_target(rest));
             }
         }
     }
+}
+
+/// The destination path of a short-format (porcelain v1) entry: the part after
+/// ` -> ` for a rename or copy, otherwise the whole entry; decoded.
+///
+/// An unquoted short-format path contains no spaces (git quotes those), so the
+/// separator can only appear inside a quoted origin, which is skipped first.
+fn short_target(rest: &str) -> String {
+    let after_origin = if rest.starts_with('"') {
+        quoted_len(rest).map_or(rest, |len| &rest[len..])
+    } else {
+        rest
+    };
+    match after_origin.find(" -> ") {
+        Some(at) => unquote_path(&after_origin[at + 4..]),
+        None => unquote_path(rest),
+    }
+}
+
+/// The byte length of the C-style quoted string at the start of `s`,
+/// including both quotes, or `None` when it is not closed.
+fn quoted_len(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Decode a path as git prints it.
+///
+/// Git wraps a path holding a space (short format), a control character, a
+/// quote, a backslash or, under the default `core.quotePath`, a non-ASCII byte
+/// in double quotes with C-style escapes: `\t`, `\n`, `\"`, `\\` and the like,
+/// and `\ooo` octal for raw bytes (`caf\303\251` is `café` in UTF-8). Anything
+/// not wrapped in quotes is returned unchanged.
+fn unquote_path(raw: &str) -> String {
+    let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return raw.to_string();
+    };
+    let bytes = inner.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' || i + 1 == bytes.len() {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        let escaped = bytes[i + 1];
+        let simple = match escaped {
+            b'a' => Some(0x07),
+            b'b' => Some(0x08),
+            b't' => Some(b'\t'),
+            b'n' => Some(b'\n'),
+            b'v' => Some(0x0b),
+            b'f' => Some(0x0c),
+            b'r' => Some(b'\r'),
+            b'"' => Some(b'"'),
+            b'\\' => Some(b'\\'),
+            _ => None,
+        };
+        if let Some(byte) = simple {
+            out.push(byte);
+            i += 2;
+            continue;
+        }
+        let octal = &bytes[i + 1..bytes.len().min(i + 4)];
+        if octal.len() == 3 && octal.iter().all(|b| (b'0'..=b'7').contains(b)) {
+            let value = octal
+                .iter()
+                .fold(0u32, |acc, b| acc * 8 + u32::from(b - b'0'));
+            out.push(u8::try_from(value).unwrap_or(b'?'));
+            i += 4;
+        } else {
+            // An escape git does not produce: keep it as written.
+            out.push(b'\\');
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
