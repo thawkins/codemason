@@ -862,3 +862,5 @@ mod test_session_archive_project;
 mod test_session_project_attach;
 #[path = "test_session_worktree.rs"]
 mod test_session_worktree;
+#[path = "test_team_create_leader_gate.rs"]
+mod test_team_create_leader_gate;

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, ToolOutput};
 use crate::team::TaskStore;
+use crate::team::TeamStatus;
 use crate::team::TeamStore;
 use crate::team::manager::HookOutcome;
 use crate::tool::metadata::MetadataBuilder;
@@ -72,6 +73,9 @@ async fn dispatch_seed_tool(
     }
 }
 
+/// Stable reason code for a `team_create` call from a non-leader agent.
+pub const REASON_NOT_TEAM_LEADER: &str = "not_team_leader";
+
 /// Creates a new team directory and initial config.
 pub struct TeamCreateTool;
 
@@ -82,7 +86,8 @@ impl Tool for TeamCreateTool {
     }
 
     fn description(&self) -> &'static str {
-        "Create a new named agent team. ALWAYS pass 'context' with the user's \
+        "Create a new named agent team. Only a team-leader agent may call this \
+             (spawn one with new_agent agent=\"team-leader\"); team names are unique. ALWAYS pass 'context' with the user's \
              specific request (e.g. which directory/files to review, what task to \
              perform, where to write output). If a blueprint is provided, all teammates \
              defined in the blueprint's spawn-prompts.json are spawned automatically - \
@@ -130,6 +135,21 @@ impl Tool for TeamCreateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        // `seed_only` (the leader launch path and `/team create`) is exempt;
+        // any other creation is reserved for a team-leader agent.
+        let seed_only = input
+            .get("seed_only")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !seed_only && ctx.agent_role != crate::agent::AgentRole::TeamLeader {
+            return Err(super::param_schema::reason_error(
+                REASON_NOT_TEAM_LEADER,
+                "team_create may only be called by a team-leader agent. Spawn one with \
+                 new_agent agent=\"team-leader\" background=true and pass the blueprint and \
+                 context in its task.",
+            ));
+        }
+
         // Blueprint is mandatory now. Validate presence.
         let bp = input
             .get("blueprint")
@@ -139,25 +159,22 @@ impl Tool for TeamCreateTool {
             .map(ToString::to_string)
             .ok_or_else(|| anyhow::anyhow!("'blueprint' parameter is required"))?;
 
-        // Determine team name: use provided name or generate from blueprint + timestamp
-        let name = input
+        // Explicit name (None when generating one).
+        let explicit_name = input
             .get("name")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map_or_else(
-                || {
-                    // SEC-codemason-team-002: the blueprint name is path-adjacent
-                    // too, so the generated team name is slugified rather than
-                    // interpolated raw.
-                    format!(
-                        "{}-{}",
-                        crate::team::slugify_team_name(&bp),
-                        Utc::now().format("%Y%m%d-%H-%M-%S")
-                    )
-                },
-                ToString::to_string,
-            );
+            .map(ToString::to_string);
+        // SEC-codemason-team-002: the blueprint name is path-adjacent too, so
+        // the generated base name is slugified rather than interpolated raw.
+        let base_name = explicit_name.clone().unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                crate::team::slugify_team_name(&bp),
+                Utc::now().format("%Y%m%d-%H-%M-%S")
+            )
+        });
 
         let project_local = input
             .get("project_local")
@@ -181,12 +198,14 @@ impl Tool for TeamCreateTool {
         // fail with ENOTEMPTY (CI flake in
         // `test_slash_arms_deep::team_clear_removes_ta` and
         // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
-        let seed_only = input
-            .get("seed_only")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
 
-        let mut store = open_team_store(&name, ctx, project_local, seed_only)?;
+        let (name, mut store) = open_team_store(
+            &base_name,
+            explicit_name.is_some(),
+            ctx,
+            project_local,
+            seed_only,
+        )?;
 
         // M8-T2: collect per-prompt blueprint spawn failures so the lead is
         // told which teammates failed to spawn instead of only seeing them
@@ -232,14 +251,7 @@ impl Tool for TeamCreateTool {
                 .custom("lead_session_id", &ctx.session_id)
                 .custom("project_local", project_local)
                 .custom("members_spawned", final_store.config.members.len())
-                .custom(
-                    "auto_named",
-                    input
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .map(str::trim)
-                        .is_none_or(str::is_empty),
-                )
+                .custom("auto_named", explicit_name.is_none())
                 // M8-T2: include the per-prompt spawn failure list in metadata
                 // so programmatic consumers (HTTP API, tests) can detect
                 // partial blueprint seeding without parsing the text output.
@@ -250,44 +262,66 @@ impl Tool for TeamCreateTool {
     }
 }
 
-/// Open the team store `team_create` seeds: the existing team for `seed_only`,
-/// otherwise a newly created one, falling back to the existing team (or a
-/// config-less team directory) when the name is already taken.
+/// Open the team store `team_create` seeds, returning the final team name.
+///
+/// `seed_only` loads the existing team. Otherwise the team is created with an
+/// atomic create-directory-exclusive (see `TeamStore::create`), so concurrent
+/// creates cannot both win. A generated name that collides gets `-2`, `-3`,
+/// ... until it is free; an explicit name that matches an Active team is
+/// refused, and a non-Active or config-less team of that name is reopened.
 ///
 /// # Errors
 ///
-/// Returns an error when the team cannot be created or loaded.
+/// Returns an error when the team cannot be created or loaded, or when an
+/// explicit name is already taken by an Active team.
 fn open_team_store(
     name: &str,
+    explicit: bool,
     ctx: &ToolContext,
     project_local: bool,
     seed_only: bool,
-) -> Result<TeamStore> {
+) -> Result<(String, TeamStore)> {
     if seed_only {
-        return TeamStore::load_by_name(name, &ctx.working_dir);
+        return Ok((
+            name.to_string(),
+            TeamStore::load_by_name(name, &ctx.working_dir)?,
+        ));
     }
-    match TeamStore::create(name, &ctx.session_id, &ctx.working_dir, project_local) {
-        Ok(store) => Ok(store),
-        Err(e) if e.to_string().contains("already exists") => {
-            // Team already exists; try to load it and continue so that blueprint
-            // seeding can run against an existing team when requested.
-            match TeamStore::load_by_name(name, &ctx.working_dir) {
-                Ok(existing_store) => Ok(existing_store),
-                Err(load_err)
-                    if load_err.to_string().contains("read")
-                        && load_err.to_string().contains("config.json") =>
-                {
-                    TeamStore::initialize_existing_without_config(
-                        name,
-                        &ctx.session_id,
-                        &ctx.working_dir,
-                    )
+    let mut candidate = name.to_string();
+    for suffix in 2u32.. {
+        match TeamStore::create(&candidate, &ctx.session_id, &ctx.working_dir, project_local) {
+            Ok(store) => return Ok((candidate, store)),
+            Err(e) if e.to_string().contains("already exists") => {
+                if !explicit {
+                    candidate = format!("{name}-{suffix}");
+                    continue;
                 }
-                Err(load_err) => Err(load_err),
+                return match TeamStore::load_by_name(&candidate, &ctx.working_dir) {
+                    Ok(existing) if existing.config.status == TeamStatus::Active => {
+                        Err(anyhow::anyhow!(
+                            "team '{candidate}' already exists and is active; choose a \
+                             different name"
+                        ))
+                    }
+                    Ok(existing) => Ok((candidate, existing)),
+                    Err(load_err)
+                        if load_err.to_string().contains("read")
+                            && load_err.to_string().contains("config.json") =>
+                    {
+                        let store = TeamStore::initialize_existing_without_config(
+                            &candidate,
+                            &ctx.session_id,
+                            &ctx.working_dir,
+                        )?;
+                        Ok((candidate, store))
+                    }
+                    Err(load_err) => Err(load_err),
+                };
             }
+            Err(e) => return Err(e),
         }
-        Err(e) => Err(e),
     }
+    unreachable!("the suffix loop only exits by return")
 }
 
 /// Locate the blueprint directory for `bp`, closest wins:

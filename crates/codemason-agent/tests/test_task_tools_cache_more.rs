@@ -43,7 +43,7 @@ fn ctx_in(dir: &std::path::Path, bus: Arc<EventBus>) -> ToolContext {
         allowed_roots: vec![dir.to_path_buf()],
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
-        agent_role: codemason_agent::agent::AgentRole::Standard,
+        agent_role: codemason_agent::agent::AgentRole::TeamLeader,
         permission_checker: None,
         canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
         tool_registry: ToolContext::default_tool_registry(),
@@ -285,30 +285,20 @@ async fn team_create_auto_names_when_no_name_is_given() {
 }
 
 #[tokio::test]
-async fn team_create_reloads_an_existing_team() {
+async fn team_create_refuses_an_existing_active_team() {
     let ws = workspace();
     let bus = Arc::new(EventBus::new(16));
-    // First call creates the team.
+    let input = json!({ "blueprint": "demo", "context": "x", "name": "reload-team" });
     team_create_tool()
-        .execute(
-            json!({ "blueprint": "demo", "context": "x", "name": "reload-team" }),
-            &ctx_in(ws.path(), bus.clone()),
-        )
+        .execute(input.clone(), &ctx_in(ws.path(), bus.clone()))
         .await
         .expect("first create succeeds");
-    // Second call hits the "already exists" branch and loads the team back.
-    let out = team_create_tool()
-        .execute(
-            json!({ "blueprint": "demo", "context": "x", "name": "reload-team" }),
-            &ctx_in(ws.path(), bus),
-        )
+    // The name is taken by an Active team, so a second create is refused.
+    let err = team_create_tool()
+        .execute(input, &ctx_in(ws.path(), bus))
         .await
-        .expect("re-create loads the existing team");
-    assert!(
-        out.content.contains("created successfully"),
-        "{}",
-        out.content
-    );
+        .expect_err("re-create of an active team is refused");
+    assert!(err.to_string().contains("reload-team"), "{err}");
 }
 
 #[tokio::test]

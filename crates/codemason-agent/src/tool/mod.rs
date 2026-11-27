@@ -568,9 +568,10 @@ pub struct ToolContext {
     /// never execute nested tools); a nested call then fails closed on an
     /// `Ask` verdict instead of silently running.
     pub permission_checker: Option<Arc<parking_lot::RwLock<crate::permission::PermissionChecker>>>,
-    /// Role of the agent running this tool call. `team_create` is reserved for
-    /// [`crate::agent::AgentRole::TeamLeader`]; callers without a running
-    /// agent pass [`crate::agent::AgentRole::Standard`].
+    /// Role of the agent running this tool call. `team_create` (unless
+    /// `seed_only`) requires [`crate::agent::AgentRole::TeamLeader`], and
+    /// `new_agent` refuses a `TeamLeader`; callers without a running agent
+    /// pass [`crate::agent::AgentRole::Standard`].
     pub agent_role: crate::agent::AgentRole,
 }
 
