@@ -1429,6 +1429,9 @@ fn test_db_prune_dialog_keys_work_with_the_prompt_focused() {
 
 #[test]
 fn test_context_menu_rows_are_material_items_with_their_icons_and_state() {
+    // Pin an empty clipboard: the real desktop clipboard would otherwise
+    // decide whether Paste is enabled.
+    let _clipboard = codemason_app_core::clipboard::ClipboardTestOverrideGuard::new("");
     let (_rt, _events, mut harness) = rig(|app| {
         app.session.input = "hello world".to_string();
         app.session.input_cursor = 11;
