@@ -168,7 +168,7 @@ def scan() -> dict[str, int]:
         src = path.read_text(encoding="utf-8", errors="replace")
         n = count_sites(src)
         if n:
-            counts[str(path)] = n
+            counts[path.as_posix()] = n  # `/` on Windows too, to match the baseline
     return counts
 
 
