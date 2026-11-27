@@ -99,14 +99,10 @@ ctor = { workspace = true }
 tokio-stream = { workspace = true }
 # Builds the text PDF for the ranged `@file.pdf#a-b` mention test.
 lopdf = { workspace = true }
-anyhow = { workspace = true }
 tempfile = "3.5"
 # SERIALISES process-global-state tests (perf profiling atomics); the inline
 # perf tests mutate static atomics shared across every test thread.
 serial_test = "4"
-# Team runtime / coordination-tool integration tests (relocated from the
-# retired codemason-team crate in ANTIPAT M7.8) exercise BashTool/CommandCatalog.
-codemason-tools-core = { path = "../codemason-tools-core" }
 criterion = { workspace = true, features = ["async_tokio"] }
 axum = { workspace = true }
 # Local mock GitHub/GitLab API for the pull/merge request count service

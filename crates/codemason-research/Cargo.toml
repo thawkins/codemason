@@ -43,7 +43,6 @@ ctor = { workspace = true }
 tempfile = "3"
 criterion = { workspace = true }
 codemason-specs = { path = "../codemason-specs" }
-async-trait = { workspace = true }
 proptest = "1"
 
 [build-dependencies]

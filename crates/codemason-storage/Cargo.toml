@@ -18,38 +18,36 @@ path = "tests/all.rs"
 codemason-types = { path = "../codemason-types" }
 
 # Core async runtime
-tokio = { version = "1.42", features = ["full"] }
+tokio = { workspace = true }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Error handling
-anyhow = "1.0"
+anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 # Logging
-tracing = "0.1"
+tracing = { workspace = true }
 
 # Database
 rusqlite = { workspace = true }
 
 # Utilities
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 similar = { workspace = true }
-blake3 = "1.6"
+blake3 = { workspace = true }
 base64 = { workspace = true }
 # SEC-codemason-storage-001 (SECTASKS T-017): AEAD for the credential store
 # (replaces the unauthenticated XOR stream cipher).
 chacha20poly1305 = "0.11"
-uuid = { version = "1.23", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }
 rand = { workspace = true }
 dirs = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
-chrono = { workspace = true }
-serde_json = { workspace = true }
 criterion = { workspace = true }
 tempfile = "3.14"
 

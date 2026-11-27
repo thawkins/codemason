@@ -18,27 +18,27 @@ codemason-config = { path = "../codemason-config" }
 async-trait = { workspace = true }
 
 # Core async runtime
-tokio = { version = "1.42", features = ["full"] }
+tokio = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
-serde_json = "1.0"
+serde_json = { workspace = true }
 
 # Error handling
-anyhow = "1.0"
+anyhow = { workspace = true }
 
 # Logging
-tracing = "0.1"
+tracing = { workspace = true }
 
 # HTTP client
 reqwest = { workspace = true, features = ["json", "stream"] }
 bytes = "1"
-futures = "0.3"
+futures = { workspace = true }
 async-stream = { workspace = true }
 
 # Utilities
-chrono = { version = "0.4", features = ["serde"] }
-regex = "1.11"
+chrono = { workspace = true }
+regex = { workspace = true }
 dirs = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
@@ -52,7 +52,7 @@ ctor = { workspace = true }
 codemason-storage = { path = "../codemason-storage" }
 tempfile = "3.14"
 # `test-util` lets the stall-guard test pause time instead of waiting 120 s.
-tokio = { version = "1.42", features = ["full", "test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

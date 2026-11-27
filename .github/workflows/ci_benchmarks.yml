@@ -12,4 +12,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run benchmarks (criterion)
-        run: timeout 1800s cargo bench --workspace || true
+        # No `|| true`: a bench that fails to build or panics must fail the run
+        # (RS-22). `timeout` still bounds it.
+        run: timeout 1800s cargo bench --workspace
