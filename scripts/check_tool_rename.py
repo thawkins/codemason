@@ -447,11 +447,13 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     # --- Shell program names: the shell binary, not the Bash tool ---
     Exemption(
-        "crates/codemason-agent/src/session/verification.rs",
+        "crates/codemason-tools-core/src/bash.rs",
         ("bash",),
-        'let result = Command::new("bash")',
+        'ShellType::Bash | ShellType::PowerShell(_) => PathBuf::from("bash"),',
         1,
-        "spawns the shell program to run a verification script",
+        "bash_program(): the shell binary hooks and verification scripts run "
+        "under (verification.rs now calls it instead of naming `bash`)",
+        ("e", "b"),
     ),
     Exemption(
         "crates/codemason-tools-core/src/bash.rs",
