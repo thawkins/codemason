@@ -965,9 +965,38 @@ impl AgentManager {
         agent_name: &str,
         text: &str,
     ) -> anyhow::Result<String> {
-        if self.suspend_flags.contains_key(child_session_id) {
-            anyhow::bail!("a sub-agent task is already running in '{child_session_id}'");
+        // Reserve the session atomically: a `contains_key` check followed by the
+        // later `insert` in `spawn_background_mode` leaves a gap across awaits in
+        // which two resumes (or a resume and a send) could both pass the guard
+        // and run two tasks in one session. `spawn_background_mode` replaces the
+        // reservation with the live flag once the task is registered.
+        match self.suspend_flags.entry(child_session_id.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(_) => {
+                anyhow::bail!("a sub-agent task is already running in '{child_session_id}'");
+            }
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(Arc::new(AtomicBool::new(false)));
+            }
         }
+        let launched = self
+            .launch_resumed(child_session_id, agent_name, text)
+            .await;
+        if launched.is_err() {
+            // Every failure happens before the task is registered, so the
+            // reservation is still ours to release.
+            self.suspend_flags.remove(child_session_id);
+        }
+        launched
+    }
+
+    /// The fallible part of [`Self::resume_detached`], run once the session is
+    /// reserved. Returns the new detached task id.
+    async fn launch_resumed(
+        &self,
+        child_session_id: &str,
+        agent_name: &str,
+        text: &str,
+    ) -> anyhow::Result<String> {
         let session = self
             .processor
             .session_manager

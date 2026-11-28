@@ -624,6 +624,8 @@ mod test_team_manager_runtime;
 #[path = "test_team_manager_spawn.rs"]
 mod test_team_manager_spawn;
 
+#[path = "test_resume_detached_race.rs"]
+mod test_resume_detached_race;
 #[path = "test_team_caller_roles.rs"]
 mod test_team_caller_roles;
 #[path = "test_team_manager_binding.rs"]
