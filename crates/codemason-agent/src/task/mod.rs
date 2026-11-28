@@ -1255,8 +1255,11 @@ impl AgentManager {
                     }
                     cancel_flags.remove(&tid);
                     if let Some(child) = tasks.get(&tid).map(|e| e.child_session_id.clone()) {
-                        suspend_flags.remove(&child);
+                        // Inbox first: a resume reserves the suspend flag
+                        // before it opens the inbox, so removing the flag
+                        // first could delete a resume's fresh inbox.
                         inboxes.remove(&child);
+                        suspend_flags.remove(&child);
                     }
                     event_bus.publish(Event::SubagentCancelled {
                         session_id: parent_sid,
@@ -1317,8 +1320,11 @@ impl AgentManager {
                     }
                     cancel_flags.remove(&tid);
                     if let Some(child) = tasks.get(&tid).map(|e| e.child_session_id.clone()) {
-                        suspend_flags.remove(&child);
+                        // Inbox first: a resume reserves the suspend flag
+                        // before it opens the inbox, so removing the flag
+                        // first could delete a resume's fresh inbox.
                         inboxes.remove(&child);
+                        suspend_flags.remove(&child);
                     }
                     event_bus.publish(Event::SubagentComplete {
                         session_id: parent_sid,
@@ -1356,8 +1362,11 @@ impl AgentManager {
                     }
                     cancel_flags.remove(&tid);
                     if let Some(child) = tasks.get(&tid).map(|e| e.child_session_id.clone()) {
-                        suspend_flags.remove(&child);
+                        // Inbox first: a resume reserves the suspend flag
+                        // before it opens the inbox, so removing the flag
+                        // first could delete a resume's fresh inbox.
                         inboxes.remove(&child);
+                        suspend_flags.remove(&child);
                     }
 
                     if is_cancelled {
