@@ -87,3 +87,68 @@ fn test_agent_team_leader_default_role_standard() {
     let agent = resolve_agent("explore", &Config::default()).expect("resolve");
     assert_eq!(agent.role, AgentRole::Standard);
 }
+
+/// Load the custom agent `name` from a scratch project whose
+/// `.codemason/agents/<name>.md` has the JSON `frontmatter`.
+fn load_custom(scratch: &str, name: &str, frontmatter: &str) -> codemason_agent::agent::AgentInfo {
+    let root = scratch_dir(scratch);
+    let agents = root.join(".codemason").join("agents");
+    std::fs::create_dir_all(&agents).expect("create agents dir");
+    std::fs::write(
+        agents.join(format!("{name}.md")),
+        format!("---\n{frontmatter}\n---\nLead the team.\n"),
+    )
+    .expect("write agent");
+    let (defs, diagnostics) = load_custom_agents(&root);
+    defs.iter()
+        .find(|d| d.agent_info.name == name)
+        .unwrap_or_else(|| panic!("agent not loaded: {diagnostics:?}"))
+        .agent_info
+        .as_ref()
+        .clone()
+}
+
+#[test]
+fn test_agent_team_leader_custom_primary_mode_forced_subagent() {
+    let _guard = crate::global_env_lock();
+    for mode in ["primary", "all"] {
+        let agent = load_custom(
+            &format!("team_leader_custom_mode_{mode}"),
+            "boss",
+            &format!(
+                "{{\"name\":\"boss\",\"description\":\"Leads\",\"role\":\"team-leader\",\
+                 \"mode\":\"{mode}\"}}"
+            ),
+        );
+        assert_eq!(agent.role, AgentRole::TeamLeader);
+        assert_eq!(
+            agent.mode,
+            AgentMode::Subagent,
+            "a leader in mode {mode} only runs as a sub-agent"
+        );
+    }
+}
+
+#[test]
+fn test_agent_team_leader_custom_permissions_merge_leader_policy() {
+    let _guard = crate::global_env_lock();
+    let agent = load_custom(
+        "team_leader_custom_permissions",
+        "builder-boss",
+        "{\"name\":\"builder-boss\",\"description\":\"Leads\",\"role\":\"team-leader\",\
+         \"permissions\":[{\"permission\":\"bash\",\"pattern\":\"cargo *\",\"action\":\"allow\"}]}",
+    );
+    let checker = PermissionChecker::new(agent.permission.clone());
+    assert_eq!(
+        checker.check("team:manage", "tool:team_create"),
+        PermissionAction::Allow,
+        "the leader tool policy still applies"
+    );
+    assert_eq!(checker.check("edit", "src/lib.rs"), PermissionAction::Deny);
+    assert_eq!(
+        checker.check("bash", "cargo test"),
+        PermissionAction::Allow,
+        "the custom rule extends the policy"
+    );
+    assert_eq!(checker.check("bash", "rm -rf /"), PermissionAction::Deny);
+}

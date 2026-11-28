@@ -538,10 +538,23 @@ pub fn record_to_agent_info(
     }
 
     let role = payload.role.unwrap_or_default();
+    // A team leader only runs as a background sub-agent of the primary
+    // (team-leader-agent spec, section 3): a `primary` or `all` mode would
+    // let the primary itself run as a leader and call `team_create`.
+    let mode = match (role, mode) {
+        (AgentRole::TeamLeader, AgentMode::Primary | AgentMode::All) => {
+            tracing::warn!(
+                agent = %record.name,
+                "custom team-leader agent declared a primary mode; it runs as a sub-agent"
+            );
+            AgentMode::Subagent
+        }
+        (AgentRole::TeamLeader | AgentRole::Standard, mode) => mode,
+    };
 
     // -- Parse permissions --------------------------------------------------
-    let permission = if let Some(ref rules) = payload.permissions {
-        rules
+    let custom_rules = if let Some(ref rules) = payload.permissions {
+        let parsed = rules
             .iter()
             .map(|r| {
                 let action = match r.action.as_str() {
@@ -560,11 +573,24 @@ pub fn record_to_agent_info(
                     action,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?
-    } else if role == AgentRole::TeamLeader {
-        crate::agent::team_leader_permissions()
+            .collect::<Result<Vec<_>, String>>()?;
+        Some(parsed)
     } else {
-        crate::agent::default_permissions()
+        None
+    };
+    // A leader always gets the leader tool policy; its own rules are appended
+    // after it, so (last match wins) they narrow or extend it. `new_agent`
+    // stays refused for a leader whatever its rules say: the tool checks the
+    // role itself.
+    let permission = match (role, custom_rules) {
+        (AgentRole::TeamLeader, Some(custom)) => {
+            let mut rules = crate::agent::team_leader_permissions();
+            rules.extend(custom);
+            rules
+        }
+        (AgentRole::TeamLeader, None) => crate::agent::team_leader_permissions(),
+        (AgentRole::Standard, Some(custom)) => custom,
+        (AgentRole::Standard, None) => crate::agent::default_permissions(),
     };
 
     // -- Parse provider options ---------------------------------------------
