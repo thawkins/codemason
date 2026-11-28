@@ -232,11 +232,7 @@ impl App {
                 ref path,
                 ref markdown,
             } => {
-                let md = markdown.clone();
-                let p = path.clone();
-                let n = name.clone();
-                self.status = format!("research: viewing {n}");
-                self.open_research_view(n, p, md);
+                self.on_open_research_view(name, path, markdown);
             }
             Event::ReasoningDelta {
                 ref session_id,
@@ -248,9 +244,7 @@ impl App {
             Event::CompressionStarted { ref session_id, .. }
                 if self.is_current_session(session_id) =>
             {
-                self.session.compress_in_progress = true;
-                self.status = "compressing context...".to_string();
-                self.push_log_no_agent(LogLevel::Info, "Context compression started".to_string());
+                self.on_compression_started();
             }
             Event::CompressionFinished {
                 ref session_id,
@@ -271,12 +265,7 @@ impl App {
                 ref session_id,
                 outbound_bytes,
             } if self.is_current_session(session_id) => {
-                // Accumulate across the whole turn (reset happens at turn
-                // start in dispatch_user_message / dispatch_bang_command /
-                // start_goal_loop), not per LLM request - each tool-call
-                // round-trip within a turn also fires RequestStarted.
-                self.session.stream_out_bytes += outbound_bytes;
-                telemetry_counters::increment_llm_requests(1);
+                self.on_request_started(outbound_bytes);
             }
             Event::ToolCallStart {
                 ref session_id,
@@ -382,11 +371,7 @@ impl App {
                 ref task,
                 ref context,
             } if self.is_current_session(session_id) => {
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("agent switch requested -> {} ({})", to, task),
-                );
-                self.session.pending_plan_task = Some((task.clone(), context.clone()));
+                self.on_agent_switch_requested(to, task, context);
             }
             Event::AgentRestoreRequested {
                 ref session_id,
@@ -499,8 +484,7 @@ impl App {
                 ref session_id,
                 percent,
             } if self.is_current_session(session_id) => {
-                self.quota_percent = Some(percent);
-                self.push_log_no_agent(LogLevel::Info, format!("quota: {:.1}% used", percent));
+                self.on_quota_update(percent);
             }
             Event::ToolsSent {
                 ref session_id,
@@ -508,13 +492,7 @@ impl App {
             } if self.is_current_session(session_id)
                 && self.event_bus.current_step(session_id) <= 1 =>
             {
-                // Only log the list of tools during system initialisation (first step).
-                // The SessionProcessor increments the EventBus step at the start of
-                // each loop iteration; the first LLM request corresponds to step 1.
-                self.push_log_no_agent(
-                    LogLevel::Info,
-                    format!("tools sent: [{}]", tools.join(", ")),
-                );
+                self.on_tools_sent(tools);
             }
             Event::ModelResponse {
                 ref session_id,
@@ -604,26 +582,14 @@ impl App {
                 ref task_id,
                 ref child_session_id,
             } if self.is_current_or_descendant_session(session_id) => {
-                self.note_subagent_suspended(task_id);
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("[pause] Task suspended ({})", short_id(task_id)),
-                    None,
-                    Some(child_session_id.clone()),
-                );
+                self.on_subagent_suspended(task_id, child_session_id);
             }
             Event::SubagentResumed {
                 ref session_id,
                 ref task_id,
                 ref child_session_id,
             } if self.is_current_or_descendant_session(session_id) => {
-                self.note_subagent_resumed(task_id);
-                self.push_log_for(
-                    LogLevel::Info,
-                    format!("> Task resumed ({})", short_id(task_id)),
-                    None,
-                    Some(child_session_id.clone()),
-                );
+                self.on_subagent_resumed(task_id, child_session_id);
             }
             Event::SubagentKilled {
                 ref session_id,
@@ -646,12 +612,7 @@ impl App {
                 ref status,
                 ..
             } if self.is_current_session(session_id) => {
-                if let Some(task) = self.bg_tasks.iter_mut().find(|t| t.id == *task_id) {
-                    task.status = status.clone();
-                    if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
-                        task.completed_at = Some(chrono::Utc::now());
-                    }
-                }
+                self.on_background_task_updated(task_id, status);
             }
             Event::BackgroundTaskCompleted {
                 ref session_id,
@@ -791,11 +752,7 @@ impl App {
                 ref provider_id,
                 ref provider_name,
             } => {
-                self.model_loading_state = Some(ModelLoadingState {
-                    provider_id: provider_id.clone(),
-                    provider_name: provider_name.clone(),
-                    started_at: std::time::Instant::now(),
-                });
+                self.on_provider_loading_started(provider_id, provider_name);
             }
             Event::ProviderLoadingFinished {
                 ref provider_id,
@@ -897,6 +854,136 @@ impl App {
         if let Event::GitLabSetupComplete { success, ref error } = event {
             self.on_gitlab_setup_complete(success, error);
         }
+    }
+
+    /// Handle [`Event::OpenResearchView`]: show the research item in the viewer.
+    ///
+    /// # Arguments
+    /// * `name` - research item name shown in the title and status line.
+    /// * `path` - absolute path to the item's `RESEARCH.md`.
+    /// * `markdown` - markdown body to display.
+    fn on_open_research_view(&mut self, name: &str, path: &std::path::Path, markdown: &str) {
+        let md = markdown.to_string();
+        let p = path.to_path_buf();
+        let n = name.to_string();
+        self.status = format!("research: viewing {n}");
+        self.open_research_view(n, p, md);
+    }
+
+    /// Handle [`Event::CompressionStarted`]: mark compression in progress and
+    /// log it.
+    fn on_compression_started(&mut self) {
+        self.session.compress_in_progress = true;
+        self.status = "compressing context...".to_string();
+        self.push_log_no_agent(LogLevel::Info, "Context compression started".to_string());
+    }
+
+    /// Handle [`Event::RequestStarted`]: count outbound bytes and the request.
+    ///
+    /// # Arguments
+    /// * `outbound_bytes` - approximate serialized request payload size.
+    fn on_request_started(&mut self, outbound_bytes: u64) {
+        // Accumulate across the whole turn (reset happens at turn
+        // start in dispatch_user_message / dispatch_bang_command /
+        // start_goal_loop), not per LLM request - each tool-call
+        // round-trip within a turn also fires RequestStarted.
+        self.session.stream_out_bytes += outbound_bytes;
+        telemetry_counters::increment_llm_requests(1);
+    }
+
+    /// Handle [`Event::AgentSwitchRequested`]: log it and queue the plan task.
+    ///
+    /// # Arguments
+    /// * `to` - name of the target agent.
+    /// * `task` - task description for the target agent.
+    /// * `context` - additional context for the task.
+    fn on_agent_switch_requested(&mut self, to: &str, task: &str, context: &str) {
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("agent switch requested -> {} ({})", to, task),
+        );
+        self.session.pending_plan_task = Some((task.to_string(), context.to_string()));
+    }
+
+    /// Handle [`Event::QuotaUpdate`]: record and log the quota percentage.
+    ///
+    /// # Arguments
+    /// * `percent` - quota consumed, 0.0 to 100.0.
+    fn on_quota_update(&mut self, percent: f32) {
+        self.quota_percent = Some(percent);
+        self.push_log_no_agent(LogLevel::Info, format!("quota: {:.1}% used", percent));
+    }
+
+    /// Handle [`Event::ToolsSent`] on the first step: log the tool list.
+    ///
+    /// # Arguments
+    /// * `tools` - names of the tools included in the request.
+    fn on_tools_sent(&mut self, tools: &[String]) {
+        // Only log the list of tools during system initialisation (first step).
+        // The SessionProcessor increments the EventBus step at the start of
+        // each loop iteration; the first LLM request corresponds to step 1.
+        self.push_log_no_agent(
+            LogLevel::Info,
+            format!("tools sent: [{}]", tools.join(", ")),
+        );
+    }
+
+    /// Handle [`Event::SubagentSuspended`]: note the pause and log it.
+    ///
+    /// # Arguments
+    /// * `task_id` - the suspended task.
+    /// * `child_session_id` - the sub-agent's session, used to attribute the log.
+    fn on_subagent_suspended(&mut self, task_id: &str, child_session_id: &str) {
+        self.note_subagent_suspended(task_id);
+        self.push_log_for(
+            LogLevel::Info,
+            format!("[pause] Task suspended ({})", short_id(task_id)),
+            None,
+            Some(child_session_id.to_string()),
+        );
+    }
+
+    /// Handle [`Event::SubagentResumed`]: note the resume and log it.
+    ///
+    /// # Arguments
+    /// * `task_id` - the resumed task.
+    /// * `child_session_id` - the sub-agent's session, used to attribute the log.
+    fn on_subagent_resumed(&mut self, task_id: &str, child_session_id: &str) {
+        self.note_subagent_resumed(task_id);
+        self.push_log_for(
+            LogLevel::Info,
+            format!("> Task resumed ({})", short_id(task_id)),
+            None,
+            Some(child_session_id.to_string()),
+        );
+    }
+
+    /// Handle [`Event::BackgroundTaskUpdated`]: update the task's status and,
+    /// on a terminal status, its completion time.
+    ///
+    /// # Arguments
+    /// * `task_id` - the background task.
+    /// * `status` - the new status string.
+    fn on_background_task_updated(&mut self, task_id: &str, status: &str) {
+        if let Some(task) = self.bg_tasks.iter_mut().find(|t| t.id == task_id) {
+            task.status = status.to_string();
+            if matches!(status, "completed" | "failed" | "cancelled") {
+                task.completed_at = Some(chrono::Utc::now());
+            }
+        }
+    }
+
+    /// Handle [`Event::ProviderLoadingStarted`]: open the model-list spinner.
+    ///
+    /// # Arguments
+    /// * `provider_id` - provider identifier.
+    /// * `provider_name` - human-readable provider name.
+    fn on_provider_loading_started(&mut self, provider_id: &str, provider_name: &str) {
+        self.model_loading_state = Some(ModelLoadingState {
+            provider_id: provider_id.to_string(),
+            provider_name: provider_name.to_string(),
+            started_at: std::time::Instant::now(),
+        });
     }
 
     /// Handle [`Event::CopilotDeviceFlowComplete`] after the main dispatch.

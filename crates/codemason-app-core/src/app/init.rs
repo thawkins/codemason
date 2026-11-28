@@ -110,137 +110,35 @@ impl App {
         let git_branch = Self::detect_git_branch(&cwd_path);
         sub.record("App: git branch detect", t0.elapsed());
 
-        let t0 = Instant::now();
-        let configured_provider = Self::detect_provider(&storage);
-        // Best-effort startup cleanup; failure leaves stale rows only.
-        if let Err(e) = storage.delete_discovered_models("huggingface") {
-            tracing::warn!(error = %e, "stale huggingface model cleanup failed");
-        }
-        sub.record("App: provider detect", t0.elapsed());
-
-        // Ensure the initial agent_info has a model if none was provided.
-        let t0 = Instant::now();
-        if agent_info.model.is_none() {
-            if let Some(model_ref) =
-                codemason_agent::agent::resolve_default_model(&agent_info, &provider_registry)
-            {
-                tracing::info!(
-                    agent = %agent_info.name,
-                    provider = %model_ref.provider_id,
-                    model = %model_ref.model_id,
-                    "Auto-assigned default model to initial agent in TUI"
-                );
-                agent_info.model = Some(model_ref);
-            }
-        }
-        sub.record("App: model resolution", t0.elapsed());
+        let configured_provider = Self::detect_startup_provider(&storage, &mut sub);
+        Self::resolve_initial_agent_model(&mut agent_info, &provider_registry, &mut sub);
 
         let agent_name = agent_info.name.clone();
 
-        let log_window_path = {
-            let log_dir = crate::app::helpers::log_root().join("logwindow");
-            // Best-effort directory creation; failure only disables the
-            // per-session log window file.
-            if let Err(e) = std::fs::create_dir_all(&log_dir) {
-                tracing::debug!(error = %e, "log window directory creation failed");
-            }
-            let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-            Some(log_dir.join(format!("logwindow-{ts}.log")))
-        };
+        let log_window_path = Self::new_log_window_path();
 
-        let t0 = Instant::now();
-        let builtin_agents = codemason_agent::agent::create_builtin_agents();
-        sub.record("App: builtin agents", t0.elapsed());
+        let AgentRoster {
+            cycleable_agents,
+            current_agent_index,
+            custom_defs,
+            all_diagnostics,
+            agent_diag_logs,
+        } = Self::load_agent_roster(&cwd_path, &agent_info.name, &mut sub);
 
-        let t0 = Instant::now();
-        let builtin_names: std::collections::HashSet<String> =
-            builtin_agents.iter().map(|a| a.name.clone()).collect();
-
-        let (custom_defs, mut all_diagnostics) =
-            codemason_agent::agent::custom::load_custom_agents(&cwd_path);
-        sub.record("App: custom agent loading", t0.elapsed());
-
-        let cycleable_agents: Vec<AgentInfo> = builtin_agents
-            .into_iter()
-            .filter(|a| !a.hidden)
-            .chain(
-                custom_defs
-                    .iter()
-                    .filter(|d| !d.agent_info.hidden)
-                    .map(|d| {
-                        let mut info = d.agent_info.as_ref().clone();
-                        if builtin_names.contains(&info.name) {
-                            let new_name = format!("custom:{}", info.name);
-                            all_diagnostics.push(format!(
-                          "custom agent '{}' collides with a built-in agent name - loaded as '{}'",
-                          info.name, new_name
-                      ));
-                            info.name = new_name;
-                        }
-                        info
-                    }),
-            )
-            .collect();
-        let current_agent_index = cycleable_agents
-            .iter()
-            .position(|a| a.name == agent_info.name)
-            .unwrap_or(0);
-
-        // Pre-format the custom-agent warning log entries so
-        // `all_diagnostics` can be moved (not cloned) into the struct below.
-        let agent_diag_logs: Vec<String> = all_diagnostics
-            .iter()
-            .map(|diag| format!("[custom agents] {}", diag))
-            .collect();
-
-        // Load persisted model selection
-        let t0 = Instant::now();
-        let app_config = match codemason_agent::Config::load() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                tracing::warn!(error = %e, "config load failed, using defaults");
-                Default::default()
-            }
-        };
-        // FR-028: report a hook whose `matcher` names only a retired tool
-        // spelling. The interactive surface's load is here - immediately after
-        // the configuration is read and before any turn runs - so the warning
-        // is in the log window before the first prompt, which is what TC-023
-        // step 4 asks for. The matcher is not rewritten: the file belongs to
-        // its author, and a load-time rewrite would leave the on-disk text
-        // disagreeing with the running session.
-        let _reported_stale_matchers =
-            codemason_agent::hooks::report_retired_matcher_spellings_once(
-                &codemason_agent::hooks::parse_hook_configs(&app_config.hooks),
-            );
-        sub.record("App: config reload", t0.elapsed());
-
-        let t0 = Instant::now();
-        let selected_model = storage.get_setting("selected_model").ok().flatten();
-        let selected_model_ctx_window = storage
-            .get_setting("selected_model_ctx_window")
-            .ok()
-            .flatten()
-            .and_then(|s| s.parse::<usize>().ok());
-        let selected_thinking_level = Self::load_persisted_thinking_level(storage.as_ref());
-        sub.record("App: settings load", t0.elapsed());
+        let app_config = Self::load_startup_config(&mut sub);
+        let model_settings = Self::load_model_settings(&storage, &mut sub);
         let t0 = Instant::now();
         let sidebar = crate::sessions_sidebar_state::SidebarState::load(&storage);
         let (themes, theme, theme_warnings) = Self::load_themes(&cwd_path);
         let mut app = Self {
-            session: {
-                let mut session =
-                    crate::app::SessionView::new(agent_name, agent_info, current_agent_index);
-                session.directory = cwd_path.clone();
-                session.selected_model = selected_model;
-                session.selected_model_ctx_window = selected_model_ctx_window;
-                session.selected_thinking_level = selected_thinking_level;
-                session.active_backend = app_config
-                    .effective_execution_backend()
-                    .as_str()
-                    .to_string();
-                session
-            },
+            session: Self::initial_session_view(
+                agent_name,
+                agent_info,
+                current_agent_index,
+                &cwd_path,
+                model_settings,
+                &app_config,
+            ),
             background: crate::app::SessionRegistry::default(),
             sidebar,
             request_counts: Arc::new(
@@ -527,17 +425,264 @@ impl App {
             skill_dirs_cache: Vec::new(),
             trigger_runtime: None,
         }; // end Self { ... }
-        for warning in theme_warnings {
-            app.push_log(crate::app::LogLevel::Warn, warning, None);
+        app.log_startup_warnings(theme_warnings, t0, agent_diag_logs);
+        app.run_post_init();
+
+        app
+    }
+
+    /// Detect the configured provider and drop stale discovered models.
+    ///
+    /// # Arguments
+    /// * `storage` - the application storage.
+    /// * `sub` - startup timings; records `App: provider detect`.
+    ///
+    /// # Returns
+    /// The provider detected from storage, if any.
+    fn detect_startup_provider(
+        storage: &Storage,
+        sub: &mut StartupTimings,
+    ) -> Option<crate::app::state::ConfiguredProvider> {
+        let t0 = Instant::now();
+        let configured_provider = Self::detect_provider(storage);
+        // Best-effort startup cleanup; failure leaves stale rows only.
+        if let Err(e) = storage.delete_discovered_models("huggingface") {
+            tracing::warn!(error = %e, "stale huggingface model cleanup failed");
         }
-        if let Some(ref mut st) = app.startup_timings {
+        sub.record("App: provider detect", t0.elapsed());
+        configured_provider
+    }
+
+    /// Give the initial agent a default model when it has none.
+    ///
+    /// # Arguments
+    /// * `agent_info` - the initial agent; its `model` is set when resolved.
+    /// * `provider_registry` - registry used to resolve the default model.
+    /// * `sub` - startup timings; records `App: model resolution`.
+    fn resolve_initial_agent_model(
+        agent_info: &mut AgentInfo,
+        provider_registry: &ProviderRegistry,
+        sub: &mut StartupTimings,
+    ) {
+        // Ensure the initial agent_info has a model if none was provided.
+        let t0 = Instant::now();
+        if agent_info.model.is_none() {
+            if let Some(model_ref) =
+                codemason_agent::agent::resolve_default_model(agent_info, provider_registry)
+            {
+                tracing::info!(
+                    agent = %agent_info.name,
+                    provider = %model_ref.provider_id,
+                    model = %model_ref.model_id,
+                    "Auto-assigned default model to initial agent in TUI"
+                );
+                agent_info.model = Some(model_ref);
+            }
+        }
+        sub.record("App: model resolution", t0.elapsed());
+    }
+
+    /// Create the log-window directory and name this run's log-window file.
+    ///
+    /// # Returns
+    /// The timestamped log-window file path.
+    fn new_log_window_path() -> Option<std::path::PathBuf> {
+        let log_dir = crate::app::helpers::log_root().join("logwindow");
+        // Best-effort directory creation; failure only disables the
+        // per-session log window file.
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            tracing::debug!(error = %e, "log window directory creation failed");
+        }
+        let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        Some(log_dir.join(format!("logwindow-{ts}.log")))
+    }
+
+    /// Load the built-in and custom agents and build the cycle order.
+    ///
+    /// # Arguments
+    /// * `cwd_path` - project directory searched for custom agents.
+    /// * `initial_agent` - name of the initial agent, used for the start index.
+    /// * `sub` - startup timings; records the built-in and custom agent loads.
+    ///
+    /// # Returns
+    /// The agent roster: cycleable agents, the start index, the custom agent
+    /// definitions, their diagnostics and the pre-formatted warning log lines.
+    fn load_agent_roster(
+        cwd_path: &std::path::Path,
+        initial_agent: &str,
+        sub: &mut StartupTimings,
+    ) -> AgentRoster {
+        let t0 = Instant::now();
+        let builtin_agents = codemason_agent::agent::create_builtin_agents();
+        sub.record("App: builtin agents", t0.elapsed());
+
+        let t0 = Instant::now();
+        let builtin_names: std::collections::HashSet<String> =
+            builtin_agents.iter().map(|a| a.name.clone()).collect();
+
+        let (custom_defs, mut all_diagnostics) =
+            codemason_agent::agent::custom::load_custom_agents(cwd_path);
+        sub.record("App: custom agent loading", t0.elapsed());
+
+        let cycleable_agents: Vec<AgentInfo> = builtin_agents
+            .into_iter()
+            .filter(|a| !a.hidden)
+            .chain(
+                custom_defs
+                    .iter()
+                    .filter(|d| !d.agent_info.hidden)
+                    .map(|d| {
+                        let mut info = d.agent_info.as_ref().clone();
+                        if builtin_names.contains(&info.name) {
+                            let new_name = format!("custom:{}", info.name);
+                            all_diagnostics.push(format!(
+                          "custom agent '{}' collides with a built-in agent name - loaded as '{}'",
+                          info.name, new_name
+                      ));
+                            info.name = new_name;
+                        }
+                        info
+                    }),
+            )
+            .collect();
+        let current_agent_index = cycleable_agents
+            .iter()
+            .position(|a| a.name == initial_agent)
+            .unwrap_or(0);
+
+        // Pre-format the custom-agent warning log entries so
+        // `all_diagnostics` can be moved (not cloned) into the struct below.
+        let agent_diag_logs: Vec<String> = all_diagnostics
+            .iter()
+            .map(|diag| format!("[custom agents] {}", diag))
+            .collect();
+
+        AgentRoster {
+            cycleable_agents,
+            current_agent_index,
+            custom_defs,
+            all_diagnostics,
+            agent_diag_logs,
+        }
+    }
+
+    /// Load the configuration and report retired hook-matcher spellings.
+    ///
+    /// # Arguments
+    /// * `sub` - startup timings; records `App: config reload`.
+    ///
+    /// # Returns
+    /// The loaded configuration, or the defaults when loading fails.
+    fn load_startup_config(sub: &mut StartupTimings) -> codemason_agent::Config {
+        // Load persisted model selection
+        let t0 = Instant::now();
+        let app_config = match codemason_agent::Config::load() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(error = %e, "config load failed, using defaults");
+                Default::default()
+            }
+        };
+        // FR-028: report a hook whose `matcher` names only a retired tool
+        // spelling. The interactive surface's load is here - immediately after
+        // the configuration is read and before any turn runs - so the warning
+        // is in the log window before the first prompt, which is what TC-023
+        // step 4 asks for. The matcher is not rewritten: the file belongs to
+        // its author, and a load-time rewrite would leave the on-disk text
+        // disagreeing with the running session.
+        let _reported_stale_matchers =
+            codemason_agent::hooks::report_retired_matcher_spellings_once(
+                &codemason_agent::hooks::parse_hook_configs(&app_config.hooks),
+            );
+        sub.record("App: config reload", t0.elapsed());
+        app_config
+    }
+
+    /// Read the persisted model selection settings.
+    ///
+    /// # Arguments
+    /// * `storage` - the application storage.
+    /// * `sub` - startup timings; records `App: settings load`.
+    ///
+    /// # Returns
+    /// The selected model, its context window and the thinking level.
+    fn load_model_settings(storage: &Storage, sub: &mut StartupTimings) -> ModelSettings {
+        let t0 = Instant::now();
+        let selected_model = storage.get_setting("selected_model").ok().flatten();
+        let selected_model_ctx_window = storage
+            .get_setting("selected_model_ctx_window")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<usize>().ok());
+        let selected_thinking_level = Self::load_persisted_thinking_level(storage);
+        sub.record("App: settings load", t0.elapsed());
+        ModelSettings {
+            model: selected_model,
+            ctx_window: selected_model_ctx_window,
+            thinking_level: selected_thinking_level,
+        }
+    }
+
+    /// Build the focused session's view for a new `App`.
+    ///
+    /// # Arguments
+    /// * `agent_name` - the initial agent's name.
+    /// * `agent_info` - the initial agent.
+    /// * `current_agent_index` - the agent's index in the cycle order.
+    /// * `cwd_path` - the session directory.
+    /// * `settings` - the persisted model selection.
+    /// * `app_config` - configuration supplying the execution backend.
+    ///
+    /// # Returns
+    /// The initial [`crate::app::SessionView`].
+    fn initial_session_view(
+        agent_name: String,
+        agent_info: AgentInfo,
+        current_agent_index: usize,
+        cwd_path: &std::path::Path,
+        settings: ModelSettings,
+        app_config: &codemason_agent::Config,
+    ) -> crate::app::SessionView {
+        let mut session = crate::app::SessionView::new(agent_name, agent_info, current_agent_index);
+        session.directory = cwd_path.to_path_buf();
+        session.selected_model = settings.model;
+        session.selected_model_ctx_window = settings.ctx_window;
+        session.selected_thinking_level = settings.thinking_level;
+        session.active_backend = app_config
+            .effective_execution_backend()
+            .as_str()
+            .to_string();
+        session
+    }
+
+    /// Log the startup theme and custom-agent warnings and record the struct
+    /// initialisation time between them.
+    ///
+    /// # Arguments
+    /// * `theme_warnings` - warnings from loading the theme catalog.
+    /// * `t0` - when struct initialisation started.
+    /// * `agent_diag_logs` - pre-formatted custom-agent warnings.
+    fn log_startup_warnings(
+        &mut self,
+        theme_warnings: Vec<String>,
+        t0: Instant,
+        agent_diag_logs: Vec<String>,
+    ) {
+        for warning in theme_warnings {
+            self.push_log(crate::app::LogLevel::Warn, warning, None);
+        }
+        if let Some(ref mut st) = self.startup_timings {
             st.record("App: struct init", t0.elapsed());
         }
         // Log any warnings from custom agent loading into the log panel
         for msg in agent_diag_logs {
-            app.push_log_no_agent(LogLevel::Warn, msg);
+            self.push_log_no_agent(LogLevel::Warn, msg);
         }
+    }
 
+    /// Run the post-construction initialisation: bash and directory lists,
+    /// the GitLab credential migration and the Model Router restore.
+    fn run_post_init(&mut self) {
         let t0 = Instant::now();
         // Initialise the bash allowlist/denylist from config
         codemason_agent::bash_lists::load_from_config();
@@ -546,19 +691,41 @@ impl App {
         codemason_agent::dir_lists::load_from_config();
 
         // Migrate legacy file-based GitLab credentials into the database
-        codemason_agent::gitlab::auth::migrate_legacy_files(app.storage.as_ref());
+        codemason_agent::gitlab::auth::migrate_legacy_files(self.storage.as_ref());
 
         // Restore the Model Router as the active provider if it was the
         // persisted current model when the previous session exited.
-        app.restore_router_state();
+        self.restore_router_state();
 
-        if let Some(ref mut st) = app.startup_timings {
+        if let Some(ref mut st) = self.startup_timings {
             st.record(
                 "App: post-init (bash/dir lists, gitlab, router)",
                 t0.elapsed(),
             );
         }
-
-        app
     }
+}
+
+/// The agents a new `App` starts with, built by [`App::load_agent_roster`].
+struct AgentRoster {
+    /// Built-in and custom agents in cycle order.
+    cycleable_agents: Vec<AgentInfo>,
+    /// Index of the initial agent in `cycleable_agents` (0 when absent).
+    current_agent_index: usize,
+    /// The custom agent definitions that were loaded.
+    custom_defs: Vec<codemason_agent::agent::custom::CustomAgentDef>,
+    /// Diagnostics from custom agent loading, including name collisions.
+    all_diagnostics: Vec<String>,
+    /// `all_diagnostics` pre-formatted as log lines.
+    agent_diag_logs: Vec<String>,
+}
+
+/// The persisted model selection read at startup.
+struct ModelSettings {
+    /// The `selected_model` setting.
+    model: Option<String>,
+    /// The `selected_model_ctx_window` setting, parsed.
+    ctx_window: Option<usize>,
+    /// The persisted thinking level.
+    thinking_level: Option<codemason_types::ThinkingLevel>,
 }
