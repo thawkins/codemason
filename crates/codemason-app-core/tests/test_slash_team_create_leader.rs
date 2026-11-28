@@ -265,3 +265,52 @@ async fn test_slash_team_create_leader_context_reaches_teammates() {
         "alice's spawn prompt carries the context: {prompt}"
     );
 }
+
+/// Archiving the primary cancels the team leaders it spawned, as `/team
+/// close` does, so no leader keeps running under an archived session.
+#[tokio::test]
+async fn test_slash_team_create_leader_archive_cancels_leaders() {
+    let ws = workspace("archive_cancels");
+    let (mut app, manager) = app_in(&ws);
+    let primary = app.session.session_id.clone().expect("primary");
+    // A leader that is still running (a real one fails at once here: its
+    // model is not registered), and an ordinary sub-agent that is not one.
+    let task = |id: &str, child: &str, agent: &str| TaskEntry {
+        id: id.to_string(),
+        parent_session_id: primary.clone(),
+        child_session_id: child.to_string(),
+        agent_name: agent.to_string(),
+        task_prompt: "work".to_string(),
+        background: true,
+        detached: false,
+        status: TaskStatus::Running,
+        result: None,
+        error: None,
+        created_at: Utc::now(),
+        completed_at: None,
+        reported: false,
+        waiter_count: 0,
+        output_file: None,
+        report_status: ReportStatus::default(),
+        time_bound_secs: None,
+    };
+    let leader = manager.insert_task_for_test(task("leader-1", "leader-sess", "team-leader"));
+    let explorer = manager.insert_task_for_test(task("explore-1", "explore-sess", "explore"));
+
+    app.execute_slash_command("/session archive").await;
+
+    for _ in 0..200 {
+        if leader.load(Ordering::Relaxed) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        leader.load(Ordering::Relaxed),
+        "archiving the primary cancels its team leader"
+    );
+    assert!(
+        !explorer.load(Ordering::Relaxed),
+        "an ordinary sub-agent is not a team leader"
+    );
+}

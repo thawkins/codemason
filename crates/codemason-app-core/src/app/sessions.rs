@@ -1289,7 +1289,9 @@ impl App {
 
     /// Archives session `id` from the sidebar (FR-08). The focused session
     /// is closed as `/session archive` does; an open background session is
-    /// dropped from the background. A running session is refused.
+    /// dropped from the background. A running session is refused. The
+    /// archived session's running team leaders are cancelled, as
+    /// `/team close` cancels a team's leader.
     ///
     /// # Errors
     ///
@@ -1312,12 +1314,58 @@ impl App {
         self.storage
             .archive_session(id)
             .map_err(|e| e.to_string())?;
+        self.cancel_running_leaders_of(id);
         self.forget_session_step_state(id);
         self.persist_open_sessions();
         self.release_unused_projects();
         self.sidebar.dirty = true;
         self.status = format!("archived session {}", short_session_id(id));
         Ok(())
+    }
+
+    /// Cancels every running team-leader task that session `parent_id`
+    /// spawned, so archiving a primary never leaves its leaders (and their
+    /// teams) running. A task is a leader when its agent resolves to the
+    /// team-leader role or its session leads a bound team. The cancels run
+    /// in the background; each is the `/team close` leader cancel.
+    fn cancel_running_leaders_of(&self, parent_id: &str) {
+        let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
+            return;
+        };
+        let processor = std::sync::Arc::clone(&self.session_processor);
+        let working_dir = self.cwd_path.clone();
+        let parent_id = parent_id.to_string();
+        tokio::spawn(async move {
+            let config = processor.load_config_cached();
+            let leaders: Vec<String> = agent_manager
+                .tasks_snapshot()
+                .await
+                .into_iter()
+                .filter(|task| task.parent_session_id == parent_id && !task.status.is_terminal())
+                .filter(|task| {
+                    codemason_agent::agent::resolve_agent_with_customs(
+                        &task.agent_name,
+                        &config,
+                        &working_dir,
+                    )
+                    .is_ok_and(|agent| agent.role == codemason_agent::agent::AgentRole::TeamLeader)
+                        || processor
+                            .team_managers
+                            .all()
+                            .iter()
+                            .any(|team| team.lead_session_id == task.child_session_id)
+                })
+                .map(|task| task.child_session_id)
+                .collect();
+            for leader in leaders {
+                if codemason_agent::team::leader::cancel_leader_for_session(&agent_manager, &leader)
+                    .await
+                {
+                    tracing::info!(parent = %parent_id, leader = %leader,
+                        "archived session: its team leader was cancelled");
+                }
+            }
+        });
     }
 
     /// Archives every session in `ids` (the project and selection menus).
@@ -1887,6 +1935,7 @@ impl App {
         self.storage
             .archive_session(&id)
             .map_err(|e| e.to_string())?;
+        self.cancel_running_leaders_of(&id);
         self.close_focused_session()?;
         self.status = format!("archived session {}", short_session_id(&id));
         Ok(())
