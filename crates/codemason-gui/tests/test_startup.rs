@@ -18,15 +18,22 @@ use codemason_agent::StartupTimings;
 use codemason_app_core::app::StartupSession;
 use codemason_gui::{GuiOptions, main_thread_channel, run_gui};
 
-/// Restores the environment variables a test changed, even if it panics,
-/// then releases the env lock it holds (the lock field is declared last).
+/// Restores the environment variables and the cwd a test changed, even if
+/// it panics, then releases the env lock it holds (the lock field is
+/// declared last).
 struct EnvRestore {
     vars: Vec<(&'static str, Option<OsString>)>,
+    cwd: Option<PathBuf>,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Drop for EnvRestore {
     fn drop(&mut self) {
+        if let Some(cwd) = &self.cwd
+            && let Err(e) = std::env::set_current_dir(cwd)
+        {
+            eprintln!("could not restore cwd {}: {e}", cwd.display());
+        }
         for (name, value) in &self.vars {
             match value {
                 // SAFETY: `self._lock` serialises every env mutation.
@@ -38,20 +45,29 @@ impl Drop for EnvRestore {
     }
 }
 
-/// Take the binary-wide env lock, point the display check at a dummy display
-/// and the user config dirs at a scratch tree, and return the guard that
-/// restores them and holds the lock (a test must not take it again).
+/// Take the binary-wide env lock, point the display check at a dummy display,
+/// the user config dirs at a scratch tree and the cwd at a scratch project,
+/// and return the guard that restores them and holds the lock (a test must
+/// not take it again).
+///
+/// `run_gui` works on the process cwd - the crate directory under nextest -
+/// where it builds the code index and `Config::load()` writes its first-run
+/// default `.codemason/codemason.json`; the scratch project keeps both out of
+/// the repository (AGENTS.md "Test Layout").
 fn scratch_env(tag: &str) -> EnvRestore {
     let lock = crate::global_env_lock();
     let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/temp")
+        .join("../../target/temp")
         .join(format!("gui-startup-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("scratch dir");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(&project).expect("scratch project");
     let names = ["DISPLAY", "XDG_CONFIG_HOME", "HOME"];
     let restore = EnvRestore {
         vars: names.iter().map(|n| (*n, std::env::var_os(n))).collect(),
+        cwd: std::env::current_dir().ok(),
         _lock: lock,
     };
+    std::env::set_current_dir(&project).expect("enter scratch project");
     // SAFETY: `restore` holds the env lock.
     unsafe {
         std::env::set_var("DISPLAY", ":99");
