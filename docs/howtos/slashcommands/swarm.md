@@ -89,10 +89,17 @@ predecessor that recorded no result is marked
 silently omitted, and the teammate is told to pass its own `result` so its
 dependents receive it in turn.
 
-A swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its
-own teammate (a ready task at spawn, a dependent one at unblock). An idle
+A swarm team runs with `auto_claim_tasks` off and gives each task to its own
+teammate: a ready task is assigned at spawn, and a dependent one is reserved for
+its teammate (assigned but still pending) and claimed when it unblocks. An idle
 teammate therefore never takes another subtask with only a task id - it always
 has that task's description and dependency results.
+
+Each swarm teammate gets a readable name prefixed by its agent type,
+`<agent_type>-<adjective>-<surname>` (for example `explore-focused-turing`).
+In the Sessions pane a teammate that is still waiting on its dependencies is
+listed dimmed and cannot be opened until it starts; its tooltip says it is
+blocked and lists the teammates it is waiting for.
 
 ### The swarm's team leader synthesises one answer
 

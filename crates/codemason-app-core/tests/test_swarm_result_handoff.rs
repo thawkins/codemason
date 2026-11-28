@@ -54,6 +54,8 @@ async fn swarm_with_blocked_dependent(dir: &Path) -> (App, PathBuf) {
     tasks.add_task(done).await.expect("seed s1");
     let mut pending = Task::new("s2", "Title s2");
     pending.depends_on = vec!["s1".to_string()];
+    // A dependent swarm task is reserved for its teammate at seeding.
+    pending.assigned_to = Some("tm-002".to_string());
     tasks.add_task(pending).await.expect("seed s2");
 
     let mut first = TeamMember::new("swarm-s1", "tm-001", "general");
@@ -133,9 +135,10 @@ async fn test_swarm_unblock_rewrites_prompt_with_predecessor_result() {
     std::fs::remove_dir_all(&dir).expect("clean scratch dir");
 }
 
-/// A decomposition landing creates a swarm team with auto-claim off, gives
-/// each ready task to its own teammate, leaves a dependent task unassigned
-/// until unblock, and keeps the goal for the synthesis step.
+/// A decomposition landing creates a swarm team with auto-claim off, names
+/// each teammate `<agent-type>-<adjective>-<surname>`, gives each ready task
+/// to its own teammate, reserves a dependent task (still pending) for its
+/// teammate until unblock, and keeps the goal for the synthesis step.
 #[tokio::test]
 async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
     let dir = scratch("decompose");
@@ -177,11 +180,17 @@ async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
         config.lead_session_id, leaders[0].child_session_id,
         "the swarm team is led by its team leader, not the primary"
     );
-    let s1_agent = config
-        .member_by_name("swarm-s1")
-        .expect("s1 member")
-        .agent_id
-        .clone();
+    assert_eq!(config.members.len(), 2);
+    for member in &config.members {
+        let parts: Vec<&str> = member.name.split('-').collect();
+        assert_eq!(parts.len(), 3, "readable name: {}", member.name);
+        assert_eq!(
+            parts[0], member.agent_type,
+            "prefixed by agent type: {}",
+            member.name
+        );
+        assert!(!member.name.starts_with("swarm-"), "{}", member.name);
+    }
 
     let tasks = TaskStore::open(&team_dir)
         .expect("task store")
@@ -190,10 +199,15 @@ async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
         .tasks;
     let s1 = tasks.iter().find(|t| t.id == "s1").expect("s1");
     assert_eq!(s1.status, TaskStatus::InProgress);
-    assert_eq!(s1.assigned_to.as_deref(), Some(s1_agent.as_str()));
     let s2 = tasks.iter().find(|t| t.id == "s2").expect("s2");
     assert_eq!(s2.status, TaskStatus::Pending);
-    assert_eq!(s2.assigned_to, None);
+    let (Some(s1_agent), Some(s2_agent)) = (s1.assigned_to.as_deref(), s2.assigned_to.as_deref())
+    else {
+        panic!("both tasks have their teammate: {s1:?} {s2:?}");
+    };
+    assert_ne!(s1_agent, s2_agent, "one teammate per subtask");
+    assert!(config.member_by_id(s1_agent).is_some());
+    assert!(config.member_by_id(s2_agent).is_some());
 
     app.stop_swarm_autocomplete(&state.team_name).await;
     std::fs::remove_dir_all(&dir).expect("clean scratch dir");

@@ -451,11 +451,13 @@ async fn team_spawn_tool_rejects_missing_required_args() {
         .expect_err("empty input rejected");
     assert!(err.to_string().contains("team_name"), "err: {err}");
 
+    // `teammate_name` is optional (a readable name is generated), so the
+    // next missing required argument is reported instead.
     let err = spawn_tool()
         .execute(json!({"team_name": "t"}), &ctx)
         .await
-        .expect_err("missing teammate_name rejected");
-    assert!(err.to_string().contains("teammate_name"), "err: {err}");
+        .expect_err("missing prompt rejected");
+    assert!(err.to_string().contains("prompt"), "err: {err}");
 
     let err = spawn_tool()
         .execute(json!({"team_name": "t", "teammate_name": "bob"}), &ctx)
@@ -554,4 +556,49 @@ async fn team_spawn_tool_spawns_and_persists_memory_scope() {
     let member = config.member_by_name("carol").expect("carol recorded");
     assert_eq!(member.memory_scope, MemoryScope::Project);
     assert_eq!(member.status, MemberStatus::Working);
+}
+
+#[tokio::test]
+async fn team_spawn_tool_names_an_unnamed_teammate_readably() {
+    let (manager, _tmp, _proc) = live_team_manager("tool-name-team", "lead-1");
+    let ws = workspace_of(&manager.team_dir);
+    let mut ctx = tool_ctx(
+        Arc::new(EventBus::new(64)),
+        ws,
+        Arc::clone(&manager) as Arc<dyn TeamManagerInterface>,
+    );
+    ctx.team_context = Some(Arc::new(codemason_agent::tool::TeamContext {
+        team_name: "tool-name-team".to_string(),
+        agent_id: "lead".to_string(),
+        is_lead: true,
+    }));
+
+    let out = spawn_tool()
+        .execute(
+            json!({
+                "team_name": "tool-name-team",
+                "agent_type": "explore",
+                "prompt": "do exactly one thing"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("spawn succeeds without a name");
+
+    let agent_id = out
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .expect("agent_id in metadata")
+        .to_string();
+    let config = load_config(&manager.team_dir);
+    let member = config.member_by_id(&agent_id).expect("member recorded");
+    let parts: Vec<&str> = member.name.split('-').collect();
+    assert_eq!(parts.len(), 3, "readable name: {}", member.name);
+    assert_eq!(
+        parts[0], "explore",
+        "prefixed by agent type: {}",
+        member.name
+    );
 }

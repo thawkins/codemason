@@ -23,9 +23,10 @@ impl Tool for TeamSpawnTool {
 
     fn description(&self) -> &'static str {
         "Spawn a teammate agent session within an existing team. REQUIRED parameters: \
-             'team_name' (string), 'teammate_name' (string, unique within the team), \
-             'agent_type' (string, e.g. 'general', 'explore'), and 'prompt' (string, scoped \
-             to a SINGLE work item). Optional: 'task_id' (string) to pre-assign a task, \
+             'team_name' (string), 'agent_type' (string, e.g. 'general', 'explore'), and \
+             'prompt' (string, scoped to a SINGLE work item). Optional: 'teammate_name' \
+             (string, unique within the team; omit it to get a readable \
+             '<agent_type>-<adjective>-<surname>' name), 'task_id' (string) to pre-assign a task, \
              'model' (provider/model format) for a model override, and 'memory' (enum \
              user/project/none) for persistent memory scope. CRITICAL: spawn ONE teammate \
              per independent work item - never assign a list of items to one teammate \
@@ -44,7 +45,7 @@ impl Tool for TeamSpawnTool {
                 },
                 "teammate_name": {
                     "type": "string",
-                    "description": "Unique name for this teammate within the team, e.g. 'security-reviewer' (required)"
+                    "description": "Optional unique name for this teammate within the team, e.g. 'security-reviewer'. Omit it to get a readable '<agent_type>-<adjective>-<surname>' name such as 'explore-focused-turing'"
                 },
                 "agent_type": {
                     "type": "string",
@@ -68,7 +69,7 @@ impl Tool for TeamSpawnTool {
                     "description": "Persistent memory scope: 'user' (global), 'project' (local), or 'none' (default). Gives the teammate a memory directory for cross-session notes."
                 }
             },
-            "required": ["team_name", "teammate_name", "agent_type", "prompt"],
+            "required": ["team_name", "agent_type", "prompt"],
             "additionalProperties": false
         })
     }
@@ -84,10 +85,11 @@ impl Tool for TeamSpawnTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required parameter: team_name"))?;
 
-        let teammate_name = input
+        let requested_name = input
             .get("teammate_name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: teammate_name"))?;
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
 
         let agent_type = input
             .get("agent_type")
@@ -102,6 +104,23 @@ impl Tool for TeamSpawnTool {
         let team_dir = crate::team::find_team_dir(&ctx.working_dir, team_name)
             .ok_or_else(|| anyhow::anyhow!("Team '{team_name}' not found"))?;
         super::team_caller::require_lead(ctx, team_name, &team_dir, self.name())?;
+
+        // An omitted name becomes a readable `<agent_type>-<adjective>-<surname>`
+        // one that no member of the team has yet.
+        let teammate_name = match requested_name {
+            Some(name) => name.to_string(),
+            None => {
+                let roster = crate::team::TeamStore::load(&team_dir)
+                    .map(|store| store.config)
+                    .ok();
+                crate::readable_names::readable_member_name(agent_type, |name| {
+                    roster
+                        .as_ref()
+                        .is_some_and(|config| config.member_by_name(name).is_some())
+                })
+            }
+        };
+        let teammate_name = teammate_name.as_str();
 
         // Guard: detect multi-item prompts that violate the "one per spawn" rule.
         // Only flag when there is strong evidence of an actual enumerated list

@@ -352,20 +352,23 @@ impl App {
             return;
         }
 
+        // Each swarm task is pre-assigned to its own teammate, so a member's
+        // subtask is the task assigned to its agent id. The list is kept so
+        // an unblocked member's prompt can carry its predecessors' results.
+        let working_dir = self.swarm_working_dir();
+        let task_list = self.load_swarm_tasks(&team_name);
+        let task_of = |agent_id: &str| swarm_task_of(task_list.as_ref(), agent_id);
+
         // Build set of completed task IDs from member status.
-        // A task ID is the suffix after "swarm-" in the teammate name.
         let completed_task_ids: std::collections::HashSet<String> = self
             .session
             .team_members
             .iter()
             .filter(|m| matches!(m.status, MemberStatus::Idle | MemberStatus::Stopped))
-            .filter_map(|m| m.name.strip_prefix("swarm-").map(|s| s.to_string()))
+            .filter_map(|m| task_of(&m.agent_id))
             .collect();
 
-        // Also check TaskStore for explicitly completed tasks. The list is kept
-        // so an unblocked member's prompt can carry its predecessors' results.
-        let working_dir = self.swarm_working_dir();
-        let task_list = self.load_swarm_tasks(&team_name);
+        // Also check TaskStore for explicitly completed tasks.
         let task_completed_ids: std::collections::HashSet<String> = task_list
             .as_ref()
             .map(|tl| tl.completed_ids())
@@ -379,7 +382,11 @@ impl App {
         // Check each blocked member's dependencies
         let mut unblocked = Vec::new();
         for (member_name, agent_id) in &blocked_members {
-            let task_id = member_name.strip_prefix("swarm-").unwrap_or(member_name);
+            let Some(task_id) = task_of(agent_id) else {
+                tracing::debug!(teammate = %member_name, "swarm member has no assigned task");
+                continue;
+            };
+            let task_id = task_id.as_str();
             // Find the task's depends_on from decomposition
             let deps = decomp_tasks
                 .iter()
@@ -784,7 +791,6 @@ async fn seed_swarm_team(
     let mut members = Vec::new();
     let mut log = Vec::new();
     for subtask in &decomposition.tasks {
-        let teammate_name = format!("swarm-{}", subtask.id);
         // Per-subtask agent type (classification fallback already applied).
         let agent_type = subtask
             .agent_type
@@ -813,9 +819,12 @@ async fn seed_swarm_team(
         // The roster read, id allocation and insert are one atomic
         // `TeamStore::update`, so a concurrent status write is not lost.
         let recorded = team::TeamStore::update(team_dir, |config| {
-            if config.member_by_name(&teammate_name).is_some() {
-                return Ok(None);
-            }
+            // A readable `<agent-type>-<adjective>-<surname>` name, unique in
+            // the team; the subtask is linked to it by assignment, not name.
+            let teammate_name =
+                codemason_agent::readable_names::readable_member_name(&agent_type, |name| {
+                    config.member_by_name(name).is_some()
+                });
             let agent_id = config.next_agent_id();
             let mut member = team::TeamMember::new(&teammate_name, &agent_id, &agent_type);
             member.spawn_prompt = Some(prompt.clone());
@@ -824,11 +833,15 @@ async fn seed_swarm_team(
             config.members.push(member.clone());
             Ok(Some(member))
         })
-        .map_err(|e| anyhow::anyhow!("recording swarm teammate '{teammate_name}': {e}"))?;
+        .map_err(|e| anyhow::anyhow!("recording swarm teammate for subtask {}: {e}", subtask.id))?;
         if let Some(member) = recorded {
-            // A task with no dependencies is given to its teammate now
-            // (dependent ones on unblock).
-            if !has_deps {
+            // A task with no dependencies is given to its teammate now. A
+            // dependent one is reserved for it (assignee set, still pending)
+            // and claimed on unblock, so the task list names whose subtask
+            // it is from the start.
+            if has_deps {
+                reserve_swarm_task(team_dir, &subtask.id, &member.agent_id);
+            } else {
                 assign_swarm_task(team_dir, &subtask.id, &member.agent_id);
             }
             members.push(member);
@@ -838,6 +851,7 @@ async fn seed_swarm_team(
         } else {
             "spawning"
         };
+        let teammate_name = members.last().map_or("-", |m| m.name.as_str());
         log.push(format!(
             "[bee] Swarm teammate: {} ({}) - {} ({} agent)",
             teammate_name, subtask.id, status_label, agent_type
@@ -853,6 +867,34 @@ async fn seed_swarm_team(
         members,
         log,
     })
+}
+
+/// Reserve dependent swarm task `task_id` for its teammate `agent_id`: the
+/// assignee is recorded while the task stays pending, so only that teammate
+/// may claim it once its dependencies complete. A failure is logged; the task
+/// is then assigned when it unblocks.
+fn reserve_swarm_task(team_dir: &std::path::Path, task_id: &str, agent_id: &str) {
+    let reserved = team::TaskStore::open(team_dir).and_then(|store| {
+        store.update_task(task_id, |task| {
+            task.assigned_to = Some(agent_id.to_string())
+        })
+    });
+    if let Err(e) = reserved {
+        tracing::warn!(task = %task_id, agent = %agent_id, error = %e,
+            "failed to reserve swarm task for its teammate");
+    }
+}
+
+/// The swarm subtask held by teammate `agent_id`: the task assigned to it.
+fn swarm_task_of(
+    task_list: Option<&codemason_agent::team::task::TaskList>,
+    agent_id: &str,
+) -> Option<String> {
+    task_list?
+        .tasks
+        .iter()
+        .find(|task| task.assigned_to.as_deref() == Some(agent_id))
+        .map(|task| task.id.clone())
 }
 
 /// Give swarm task `task_id` to its teammate `agent_id` (`pre_assign_task`:

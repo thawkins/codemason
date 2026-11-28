@@ -431,6 +431,8 @@ mod test_read_only_permission_categories;
 
 #[path = "test_plugin_bridge.rs"]
 mod test_plugin_bridge;
+#[path = "test_readable_names.rs"]
+mod test_readable_names;
 
 #[path = "test_plugin_hooks.rs"]
 mod test_plugin_hooks;

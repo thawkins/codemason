@@ -38,6 +38,7 @@ similar = { workspace = true }
 futures = { workspace = true }
 dirs = { workspace = true }
 regex = { workspace = true }
+rand = { workspace = true }
 base64 = { workspace = true }
 gcf = { workspace = true }
 rmcp = { workspace = true }
