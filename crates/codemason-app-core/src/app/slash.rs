@@ -7429,6 +7429,7 @@ than assumed.
             working_dir: working_dir.clone(),
             team_name: name.clone(),
             blueprint: blueprint.clone(),
+            context: context.clone(),
             active_model: active_model.clone(),
         };
         let launched = match codemason_agent::team::leader::launch_leader_for_team_with_seed(
@@ -16127,6 +16128,9 @@ struct TeamSeed {
     working_dir: std::path::PathBuf,
     team_name: String,
     blueprint: String,
+    /// The free text after `/team create <bp> [name]`: the work context
+    /// prepended to every seeded teammate's spawn prompt (empty for none).
+    context: String,
     active_model: Option<codemason_agent::agent::ModelRef>,
 }
 
@@ -16148,6 +16152,7 @@ impl TeamSeed {
             "project_local": true,
             "seed_only": true,
             "blueprint": self.blueprint,
+            "context": self.context,
         });
         let processor = &self.session_processor;
         let ctx = codemason_agent::tool::ToolContext {

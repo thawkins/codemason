@@ -223,3 +223,45 @@ async fn test_slash_team_create_leader_seed_spawning_nobody_fails() {
     assert!(manager.list_agents(&primary).await.is_empty());
     assert!(TeamStore::load_by_name("alpha", &ws).is_err());
 }
+
+/// The free text after `/team create <bp> <name>` reaches every seeded
+/// teammate's spawn prompt as its work context.
+#[tokio::test]
+async fn test_slash_team_create_leader_context_reaches_teammates() {
+    let ws = workspace("context_reaches_teammates");
+    let (mut app, _manager) = app_in(&ws);
+    *app.session_processor.permission_checker.write() =
+        codemason_agent::permission::PermissionChecker::new(vec![
+            codemason_config::permission::PermissionRule {
+                permission: codemason_config::permission::Permission::Custom(
+                    "team:manage".to_string(),
+                ),
+                pattern: Some("**".to_string()),
+                action: codemason_config::permission::PermissionAction::Allow,
+            },
+        ]);
+
+    app.execute_slash_command("/team create pair alpha review the parser module")
+        .await;
+
+    let store = TeamStore::load_by_name("alpha", &ws).expect("team alpha");
+    let alice = store.config.member_by_name("alice").expect("alice seeded");
+    let session = alice.session_id.clone().expect("alice's session");
+    let mut prompt = String::new();
+    for _ in 0..200 {
+        let messages = app
+            .session_processor
+            .session_manager
+            .get_messages(&session)
+            .expect("messages");
+        prompt = format!("{messages:?}");
+        if prompt.contains("Work Context") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        prompt.contains("## Work Context") && prompt.contains("review the parser module"),
+        "alice's spawn prompt carries the context: {prompt}"
+    );
+}
