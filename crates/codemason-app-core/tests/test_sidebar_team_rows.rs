@@ -144,7 +144,7 @@ fn teammate_rows(rows: &[SidebarRow]) -> usize {
 }
 
 /// Binds a manager for the team at `leader.team_dir` with a live handle for
-/// `tm-001`, as a running team has.
+/// `tm-001` and a live agent loop, as a running team has.
 fn bind_manager(app: &App, team: &str, leader: &Leader) -> Arc<TeamManager> {
     let manager = TeamManager::new(
         team,
@@ -155,6 +155,9 @@ fn bind_manager(app: &App, team: &str, leader: &Leader) -> Arc<TeamManager> {
     )
     .into_arc();
     manager.register_handle_for_test("tm-001");
+    // A running teammate has a live agent loop; `send_user_turn` refuses a member
+    // whose loop is gone. The task parks until the test's runtime drops.
+    manager.set_agent_loop_handle("tm-001", Some(tokio::spawn(std::future::pending::<()>())));
     assert!(
         app.session_processor
             .team_managers
