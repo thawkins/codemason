@@ -26,11 +26,11 @@ use super::state::App;
 /// Where [`App::handle_event`] sends one team event: the view that runs the
 /// full handler and the other views that only mirror its state change.
 /// `None` is the focused view, `Some(index)` a background view.
-pub(crate) struct TeamEventRoute {
+pub struct TeamEventRoute {
     /// The view that runs the full handler.
-    pub(crate) owner: Option<usize>,
+    pub owner: Option<usize>,
     /// The other views that track the team.
-    pub(crate) mirrors: Vec<Option<usize>>,
+    pub mirrors: Vec<Option<usize>>,
 }
 
 impl App {
