@@ -75,6 +75,7 @@ pub use self::session_view::{Attention, SessionView};
 pub use self::sessions::title_from_prompt;
 pub mod skillgen;
 mod slash;
+mod team_event_routing;
 
 /// Test hook: expose the `/mcp` display-list builder to the integration test
 /// suite (`tests/test_slash_commands.rs`) without widening the production

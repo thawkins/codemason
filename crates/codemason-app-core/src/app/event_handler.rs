@@ -2,9 +2,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use codemason_agent::team::{
-    self, Mailbox, MailboxMessage, MemberStatus, MessageType, TeamMember, TeamStore,
-};
+use codemason_agent::team::{self, Mailbox, MailboxMessage, MessageType, TeamMember, TeamStore};
 use codemason_agent::{
     agent::ModelRef,
     event::{Event, FinishReason},
@@ -631,7 +629,7 @@ impl App {
                 ref team_name,
                 ref teammate_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
                 self.on_teammate_spawned(team_name, teammate_name, agent_id);
             }
             Event::TeammateMessage {
@@ -641,7 +639,8 @@ impl App {
                 ref to,
                 ref message_type,
                 ref preview,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_message(team_name, from, to, message_type, preview);
             }
             Event::TeammateP2PMessage {
@@ -651,14 +650,16 @@ impl App {
                 ref to,
                 ref message_type,
                 ref preview,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_p2p_message(team_name, from, to, message_type, preview);
             }
             Event::TeammateIdle {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_idle(team_name, agent_id);
             }
             Event::TeammateFailed {
@@ -666,7 +667,8 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref error,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_failed(team_name, agent_id, error);
             }
             Event::TeammateStopped {
@@ -674,21 +676,24 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref cause,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_stopped(team_name, agent_id, cause);
             }
             Event::TeammateSuspended {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_suspended(team_name, agent_id);
             }
             Event::TeammateResumed {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_resumed(team_name, agent_id);
             }
             Event::TeamTaskClaimed {
@@ -696,7 +701,8 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref task_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_team_task_claimed(team_name, agent_id, task_id);
             }
             Event::TeamTaskCompleted {
@@ -704,7 +710,8 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref task_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_team_task_completed(team_name, agent_id, task_id);
             }
             // FR-044: a completion the FR-001 ownership rule refused. The
@@ -719,7 +726,7 @@ impl App {
                 ref owner,
                 ref reason,
                 ref message,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
                 self.on_team_task_completion_rejected(
                     team_name, agent_id, task_id, owner, reason, message,
                 );
@@ -727,9 +734,8 @@ impl App {
             Event::TeamCleanedUp {
                 ref session_id,
                 ref team_name,
-            } if self.is_current_session(session_id)
-                || self.is_own_team_leader(session_id, team_name) =>
-            {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_team_cleaned_up(team_name).await;
             }
             Event::ShellCwdChanged {
@@ -2371,22 +2377,6 @@ impl App {
         message_type: &str,
         preview: &str,
     ) {
-        if from != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry((team_name.to_string(), from.to_string()))
-                .or_insert((0, 0));
-            counts.0 = counts.0.saturating_add(1);
-        }
-        if to != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry((team_name.to_string(), to.to_string()))
-                .or_insert((0, 0));
-            counts.1 = counts.1.saturating_add(1);
-        }
         self.push_log_for(
             LogLevel::Info,
             format!("[msg] [{team_name}] {from} -> {to} ({message_type}): {preview}"),
@@ -2404,26 +2394,6 @@ impl App {
         message_type: &str,
         preview: &str,
     ) {
-        // Same counter rule as TeammateMessage (FR-052): increment the
-        // sender's sent count and the recipient's received count,
-        // ignoring a sender or recipient named `lead` so the lead's
-        // own columns never move.
-        if from != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry((team_name.to_string(), from.to_string()))
-                .or_insert((0, 0));
-            counts.0 = counts.0.saturating_add(1);
-        }
-        if to != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry((team_name.to_string(), to.to_string()))
-                .or_insert((0, 0));
-            counts.1 = counts.1.saturating_add(1);
-        }
         self.push_log_for(
             LogLevel::Info,
             format!("[shuffle] [{team_name}] P2P {from} -> {to} ({message_type}): {preview}"),
@@ -2434,15 +2404,6 @@ impl App {
 
     /// Handle [`Event::TeammateIdle`] for the focused session.
     fn on_teammate_idle(&mut self, team_name: &str, agent_id: &str) {
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Idle;
-        }
         // M6-T1: record progress so the watchdog does not flag this
         // teammate as hung.
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
@@ -2458,16 +2419,6 @@ impl App {
 
     /// Handle [`Event::TeammateFailed`] for the focused session.
     fn on_teammate_failed(&mut self, team_name: &str, agent_id: &str, error: &str) {
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Failed;
-            m.last_spawn_error = Some(error.to_string());
-        }
         // M6-T1: record progress so the watchdog stops tracking
         // this agent.
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
@@ -2487,18 +2438,9 @@ impl App {
     /// Handle [`Event::TeammateStopped`] for the focused session.
     fn on_teammate_stopped(&mut self, team_name: &str, agent_id: &str, cause: &str) {
         // FR-017: the stop is published by the runtime's status writer,
-        // so the row follows a shutdown acked by the teammate, one
-        // forced by the lead, and a team cleanup.
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Stopped;
-            m.current_task_id = None;
-        }
+        // so the row (updated by `SessionView::apply_team_event`) follows a
+        // shutdown acked by the teammate, one forced by the lead, and a team
+        // cleanup.
         // M6-T1: record progress so the watchdog stops tracking this
         // agent (a stopped member has no session left to fail).
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
@@ -2517,16 +2459,7 @@ impl App {
         // FR-040 plumbing: the `[stop]` click (or `/team suspend`)
         // suspends the teammate on disk and publishes this event; the
         // row must follow immediately instead of waiting for the next
-        // render-time store hydration.
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Suspended;
-        }
+        // render-time store hydration (`SessionView::apply_team_event`).
         // M6-T1: record progress so the watchdog does not flag this
         // teammate as hung.
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
@@ -2544,15 +2477,6 @@ impl App {
     fn on_teammate_resumed(&mut self, team_name: &str, agent_id: &str) {
         // The resume direction of the same control restores the row;
         // the runtime marks the member idle again on disk.
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Idle;
-        }
         // M6-T1: record progress so the watchdog does not flag this
         // teammate as hung.
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
@@ -2568,16 +2492,6 @@ impl App {
 
     /// Handle [`Event::TeamTaskClaimed`] for the focused session.
     fn on_team_task_claimed(&mut self, team_name: &str, agent_id: &str, task_id: &str) {
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Working;
-            m.current_task_id = Some(task_id.to_string());
-        }
         // M6-T1: record progress.
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
@@ -2592,15 +2506,6 @@ impl App {
 
     /// Handle [`Event::TeamTaskCompleted`] for the focused session.
     fn on_team_task_completed(&mut self, team_name: &str, agent_id: &str, task_id: &str) {
-        if self.is_active_or_unset_team(team_name)
-            && let Some(m) = self
-                .session
-                .team_members
-                .iter_mut()
-                .find(|m| m.agent_id == *agent_id)
-        {
-            m.current_task_id = None;
-        }
         // M6-T1: record progress.
         if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
@@ -2641,31 +2546,9 @@ impl App {
         // for the removed team (best effort: it may have raced the
         // removal already).
         self.stop_swarm_autocomplete(team_name).await;
-        // Another team's cleanup leaves the active team's view alone.
-        if self.is_active_or_unset_team(team_name) {
-            self.session.active_team = None;
-            self.session.team_members.clear();
-            self.session
-                .team_message_counts
-                .retain(|(team, _), _| team != team_name);
-        }
-        if self
-            .session
-            .focused_teammate
-            .as_ref()
-            .is_some_and(|(team, _)| team == team_name)
-        {
-            self.session.focused_teammate = None;
-        }
+        // The view state (active team, members, counters, focused
+        // teammate, swarm) was cleared by `SessionView::apply_team_event`.
         self.drop_team_from_pane(team_name);
-        if self
-            .session
-            .swarm_state
-            .as_ref()
-            .is_some_and(|s| s.team_name == team_name)
-        {
-            self.session.swarm_state = None;
-        }
         self.push_log_no_agent(
             LogLevel::Info,
             format!("[clr] Team '{team_name}' cleaned up"),
@@ -3554,32 +3437,7 @@ impl App {
     /// session, so the frontend that launched it must still react.
     #[must_use]
     pub fn is_own_team_leader(&self, session_id: &str, team_name: &str) -> bool {
-        if self
-            .session
-            .active_team
-            .as_ref()
-            .is_some_and(|t| t.name == team_name && t.lead_session_id == session_id)
-        {
-            return true;
-        }
-        let tracked = self
-            .session
-            .swarm_state
-            .as_ref()
-            .is_some_and(|s| s.team_name == team_name)
-            || self
-                .session_processor
-                .team_managers
-                .get(team_name)
-                .is_some_and(|m| m.lead_session_id == session_id);
-        let Some(current) = self.session.session_id.as_deref() else {
-            return false;
-        };
-        tracked
-            && matches!(
-                self.session_processor.session_manager.get_session(session_id),
-                Ok(Some(child)) if child.parent_id.as_deref() == Some(current)
-            )
+        self.view_leads_team(&self.session, session_id, team_name)
     }
 
     /// Surface OTLP metric-export failures as "Agent Notice" bubbles and act on

@@ -509,9 +509,24 @@ impl App {
         let owner = event
             .session_id()
             .and_then(|sid| self.background_owner(sid));
+        // A team event reaches every view that tracks the team: the full
+        // handler runs in one of them, the others mirror its state change
+        // (see `app/team_event_routing.rs`).
+        let route =
+            Self::team_event_ids(&event).map(|(sid, team)| self.team_event_route(owner, sid, team));
+        let (owner, mirror) = match route {
+            Some(route) if !route.mirrors.is_empty() => {
+                (route.owner, Some((route.mirrors, event.clone())))
+            }
+            Some(route) => (route.owner, None),
+            None => (owner, None),
+        };
         match owner {
             Some(index) => self.handle_background_event(index, event).await,
             None => self.handle_focused_event(event).await,
+        }
+        if let Some((mirrors, event)) = mirror {
+            self.mirror_team_event(&mirrors, &event);
         }
         if let Some(session_id) = finished_reply {
             self.auto_title(&session_id);
