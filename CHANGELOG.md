@@ -21,7 +21,7 @@ Sessions pane, where typing to it sends that agent a direct message.
 - Changed: on a stock config, `/team create` fails with a message naming the permission when a blueprint's seed steps are refused; add a `team:manage` allow rule to let blueprints seed teammates.
 - Changed: a message sent to a sub-agent whose run ended a moment earlier now says `<agent> has finished; the message was not sent` instead of the registry's reason-coded error.
 - Changed: a leader runs exactly one team (a second `team_create` is refused with `leader_has_team`), a teammate always runs with the standard role so teams never nest, and a custom team-leader agent always runs as a sub-agent and keeps the leader tool policy, with its own `permissions` appended after it. Archiving a session cancels the team leaders it spawned.
-- Upgrade note: a team created before this upgrade that is still `Active` with the primary session as its lead makes `new_agent` refuse to spawn a team leader from that session until the team is closed with `/team close <name>`.
+- Upgrade note: a team created before this upgrade that is still `Active` with the primary session as its lead makes `new_agent` refuse to spawn a team leader from that session until that team is removed from disk with `/team delete <name>` (`/team close` only closes it for the session and leaves it `Active`).
 
 ### Tests
 
