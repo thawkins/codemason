@@ -3430,16 +3430,6 @@ impl App {
         self.session.session_id.as_deref() == Some(session_id)
     }
 
-    /// Whether `session_id` is the team-leader session of `team_name`, a team
-    /// this session tracks: the leader recorded as the active team's lead,
-    /// or a child session of this session that leads the swarm team or the
-    /// team's bound manager. A leader's own `team_cleanup` reports its own
-    /// session, so the frontend that launched it must still react.
-    #[must_use]
-    pub fn is_own_team_leader(&self, session_id: &str, team_name: &str) -> bool {
-        self.view_leads_team(&self.session, session_id, team_name)
-    }
-
     /// Surface OTLP metric-export failures as "Agent Notice" bubbles and act on
     /// the auto-disable threshold.
     ///
