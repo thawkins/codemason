@@ -330,7 +330,8 @@ async fn cancel_help_and_the_empty_prefix_guard_are_unchanged() {
 
 /// Enter in a focused running sub-agent goes to that agent's inbox, even
 /// while the view is busy: it is not parked in the input queue until the run
-/// ends. (No agent loop runs here, so the inbox refuses it and says so.)
+/// ends. (No agent loop runs here, so the inbox refuses it and says so in
+/// words, not as the registry's reason-coded error, keeping the prompt.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enter_in_a_running_subagent_targets_its_inbox_not_the_queue() {
     use crate::term_events::CrosstermAppExt;
@@ -348,9 +349,9 @@ async fn enter_in_a_running_subagent_targets_its_inbox_not_the_queue() {
         .await;
 
     assert_eq!(app.input_queue_len(), 0, "the message was queued");
-    assert!(
-        app.status.contains("no running sub-agent loop"),
-        "status: {}",
-        app.status
+    assert_eq!(
+        app.status,
+        "[warn] explore has finished; the message was not sent"
     );
+    assert_eq!(app.session.input, "also check the README");
 }

@@ -1068,6 +1068,13 @@ impl App {
         image_paths: Vec<std::path::PathBuf>,
     ) {
         self.session.auto_compact_failed = false;
+        // A team leader or teammate gets a direct user turn.
+        if self.send_to_focused_team_agent(&text) {
+            if !image_paths.is_empty() {
+                self.status = format!("{} (images are not sent to team agents)", self.status);
+            }
+            return;
+        }
         // A running sub-agent is already in a turn: the message joins it.
         if self.send_to_focused_subagent(&text) {
             if !image_paths.is_empty() {

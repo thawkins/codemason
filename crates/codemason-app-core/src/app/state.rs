@@ -7,7 +7,7 @@ use crate::geometry::Area;
 use crate::styled::StyledLine;
 use anyhow::Result;
 use lru::LruCache;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -3865,6 +3865,13 @@ pub struct App {
     /// their parked views are closed by `close_finished_subagent_views`,
     /// outside any background view swap.
     pub(crate) finished_subagent_views: Vec<String>,
+    /// Team-leader sessions with a detached resume turn still starting; a
+    /// second prompt to one is held until its outcome is drained, so one
+    /// session never runs two turns at once.
+    pub(crate) leader_resumes: HashSet<String>,
+    /// Outcomes of finished resume launches, drained by `poll_timers`.
+    pub(crate) leader_resume_outcomes:
+        Arc<std::sync::Mutex<Vec<crate::app::sessions::LeaderResumeOutcome>>>,
     /// Bounded history of recently finished sub-agent tasks, newest first
     /// (spec `agentssetup` FR-021, FR-028, FR-036).
     ///
@@ -5256,6 +5263,7 @@ impl App {
         self.poll_status_expiry();
         self.poll_run_cost_banner_expiry();
         self.poll_question_expiry();
+        self.poll_leader_resumes();
     }
 
     /// How long until the next timer [`Self::poll_timers`] runs is due, so

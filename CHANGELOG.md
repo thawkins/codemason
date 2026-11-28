@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+Teams are led by team-leader sub-agents instead of the primary session, so
+several teams can run at once, and each leader and teammate is listed in the
+Sessions pane, where typing to it sends that agent a direct message.
+
+### Added
+
+- Added: a built-in `team-leader` agent and `AgentRole::TeamLeader`; a custom agent becomes a leader with `"role": "team-leader"` in its definition. A leader gets team permissions (`team:manage`, `team:communicate`, `team:tasks`, `team:read`, `team_wait`) and may not spawn plain sub-agents.
+- Added: several teams at once - one `TeamManager` per team in `SessionProcessor.team_managers` (`TeamManagers`, keyed by team name); the Teams pane shows one section per team and events route by team name.
+- Added: direct user turns - `TeamManager::send_user_turn` queues a message for a teammate (waking a parked one) and `AgentManager::resume_detached` runs one more detached turn in a finished leader's own session; a user turn ends a leader's `team_wait` early.
+- Added: Sessions pane rows for teams (`SidebarRow::TeamLeader`, `SidebarRow::Teammate`, `LeaderState`): each leader is listed as `team-leader: <team>` under the session that spawned it, collapsible with its disclosure triangle or `Left`/`Right`, with its teammates (name and status) under it. A leader whose task is gone while its team is active is greyed `(stopped)`; after cleanup its teammates go and the leader stays greyed `(done)`. The rows are rebuilt from the teams on disk after a restart, and plain sub-agent rows are no longer shown for leaders.
+- Added: a prompt typed in an open leader or teammate session goes to that agent (`send_user_turn` for a teammate; `send_to_session`, or `resume_detached` when no task runs, for a leader, with at most one resume starting per session). A refusal shows `[error] <reason>` on the status line and leaves the prompt in the input.
+
+### Changed
+
+- Changed: `/team create <blueprint> [name] [context]` and `/swarm` launch a team leader that creates, seeds, waits on, summarises and cleans up the team; the primary never leads a team. `/team close`, `/team delete` and `/team forcecleanup` cancel the team's leader.
+- Changed: only a team-leader agent may call `team_create` (`not_team_leader` otherwise, naming `new_agent agent="team-leader"`), team names are unique (an explicit taken name is refused, a generated one gets a suffix), and a leader is not bound by the background timeout while it waits in `team_wait`.
+- Changed: on a stock config, `/team create` fails with a message naming the permission when a blueprint's seed steps are refused; add a `team:manage` allow rule to let blueprints seed teammates.
+- Changed: a message sent to a sub-agent whose run ended a moment earlier now says `<agent> has finished; the message was not sent` instead of the registry's reason-coded error.
+
+### Tests
+
+- Added: `test_sidebar_team_rows` (rows nested under the parent, leader not listed as a sub-agent, custom-named leader found by role, crashed leader greyed, rows rebuilt after a restart, teammates hidden and leader kept after cleanup, collapse, opening rows, prompts to a teammate, to an exited teammate and to a finished leader) and `test_sessions_team_rows_gui` (drawing, triangle toggle, row opens the leader). `support::make_app_with_storage` builds a second app over one database.
+
 ## [1.0.186] - 2026-11-26
 
 The log, profile, tasks and memory panels are fixed tabs beside the sessions

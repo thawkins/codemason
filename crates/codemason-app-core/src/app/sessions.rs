@@ -25,6 +25,46 @@ use super::helpers::short_session_id;
 use super::session_view::{Attention, SessionView};
 use super::state::App;
 
+/// Agent a leader whose task was never seen (after a restart) resumes as.
+const DEFAULT_LEADER_AGENT: &str = "team-leader";
+
+/// A team agent a prompt can be typed to.
+enum TeamAgent {
+    /// A team leader, running as `agent_name`.
+    Leader {
+        /// The leader's agent.
+        agent_name: String,
+    },
+    /// A teammate of `team_name`.
+    Teammate {
+        /// The teammate's team.
+        team_name: String,
+        /// The teammate's agent id within the team.
+        agent_id: String,
+        /// The teammate's name.
+        name: String,
+    },
+}
+
+/// How a detached resume of a finished team leader ended.
+#[derive(Debug)]
+pub struct LeaderResumeOutcome {
+    /// The leader's session.
+    session_id: String,
+    /// The agent it was resumed as.
+    agent_name: String,
+    /// The prompt the turn was started with.
+    text: String,
+    /// `Err` with the reason when the turn could not be started.
+    result: Result<(), String>,
+}
+
+/// Whether `error` is the registry's "no running task in that session".
+fn is_task_not_found(error: &anyhow::Error) -> bool {
+    codemason_agent::tool::param_schema::reason_in(&error.to_string())
+        == Some(codemason_agent::tool::new_agent::REASON_TASK_NOT_FOUND)
+}
+
 /// Settings key holding the open session ids, focused first, then the
 /// background sessions most recently focused first (FR-13).
 const OPEN_SESSIONS_KEY: &str = "tui.sessions.open";
@@ -142,15 +182,182 @@ impl App {
             return false;
         };
         if let Err(e) = manager.send_to_session(&sid, text) {
-            self.status = format!("[warn] {e}");
+            // The task finished between the check above and the send: say
+            // so instead of showing the registry's reason-coded error.
+            self.status = if is_task_not_found(&e) {
+                format!("[warn] {agent_name} has finished; the message was not sent")
+            } else {
+                format!("[warn] {e}")
+            };
             return true;
         }
-        self.session.messages.push(Message::user_text(&sid, text));
+        self.accept_agent_prompt(&sid, text, &agent_name);
+        true
+    }
+
+    /// Shows `text` as sent to agent `name` in the focused session `sid`:
+    /// the transcript gets it, the input is cleared and the status says the
+    /// agent reads it at its next step.
+    fn accept_agent_prompt(&mut self, sid: &str, text: &str, name: &str) {
+        self.session.messages.push(Message::user_text(sid, text));
         self.add_to_history(text.to_string());
         self.session.input.clear();
         self.session.input_cursor = 0;
-        self.status = format!("sent to {agent_name}; it reads it at its next step");
+        self.status = format!("sent to {name}; it reads it at its next step");
+    }
+
+    /// The team agent whose session is `session_id`, from the Sessions
+    /// pane's team rows.
+    fn team_agent_of(&self, session_id: &str) -> Option<TeamAgent> {
+        self.sidebar.leaders.iter().find_map(|leader| {
+            if leader.session_id == session_id {
+                return Some(TeamAgent::Leader {
+                    agent_name: leader
+                        .agent_name
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_LEADER_AGENT.to_string()),
+                });
+            }
+            leader
+                .teammates
+                .iter()
+                .find(|mate| mate.session_id == session_id)
+                .map(|mate| TeamAgent::Teammate {
+                    team_name: leader.team_name.clone(),
+                    agent_id: mate.agent_id.clone(),
+                    name: mate.name.clone(),
+                })
+        })
+    }
+
+    /// Whether `session_id` is a team leader's or teammate's session, so a
+    /// prompt typed there goes to that agent and not to a new turn.
+    pub(crate) fn is_team_agent_session(&self, session_id: &str) -> bool {
+        self.team_agent_of(session_id).is_some()
+    }
+
+    /// Whether a resume turn for the leader session `session_id` is still
+    /// starting (a further prompt to it is held until it has).
+    #[must_use]
+    pub fn leader_resume_in_flight(&self, session_id: &str) -> bool {
+        self.leader_resumes.contains(session_id)
+    }
+
+    /// Sends `text` as a direct user turn to the team agent focused in
+    /// `self.session` (team-leader-agent spec, section 6): a teammate gets
+    /// it through its team's manager, a leader through its running task or,
+    /// once finished, one more detached turn in its own session. A refusal
+    /// is shown as an error and the prompt stays in the input.
+    ///
+    /// # Returns
+    ///
+    /// `false` when the focused session is not a team agent's, so the
+    /// caller tries the other routes.
+    pub(crate) fn send_to_focused_team_agent(&mut self, text: &str) -> bool {
+        let Some(sid) = self.session.session_id.clone() else {
+            return false;
+        };
+        let Some(agent) = self.team_agent_of(&sid) else {
+            return false;
+        };
+        match agent {
+            TeamAgent::Teammate {
+                team_name,
+                agent_id,
+                name,
+            } => {
+                let sent = match self.session_processor.team_managers.get(&team_name) {
+                    Some(manager) => manager.send_user_turn(&agent_id, text),
+                    None => Err(anyhow::anyhow!(
+                        "team {team_name} is not running here; teammate {name} cannot be reached"
+                    )),
+                };
+                match sent {
+                    Ok(()) => self.accept_agent_prompt(&sid, text, &name),
+                    Err(e) => self.status = format!("[error] {e}"),
+                }
+            }
+            TeamAgent::Leader { agent_name } => self.send_to_leader(&sid, &agent_name, text),
+        }
         true
+    }
+
+    /// Sends `text` to the leader in session `sid`: queued on its running
+    /// task, or, when none runs, as one detached resume turn. Only one
+    /// resume per session starts at a time.
+    fn send_to_leader(&mut self, sid: &str, agent_name: &str, text: &str) {
+        if self.leader_resumes.contains(sid) {
+            self.status = format!("[warn] {agent_name} is still starting; send again in a moment");
+            return;
+        }
+        let Some(manager) = self.session_processor.agent_manager.get().cloned() else {
+            self.status = "[error] sub-agents are not available in this session".to_string();
+            return;
+        };
+        match manager.send_to_session(sid, text) {
+            Ok(()) => self.accept_agent_prompt(sid, text, agent_name),
+            Err(e) if is_task_not_found(&e) => {
+                self.leader_resumes.insert(sid.to_string());
+                self.status = format!("starting {agent_name} with your message");
+                let outcomes = std::sync::Arc::clone(&self.leader_resume_outcomes);
+                let (session_id, agent_name, text) =
+                    (sid.to_string(), agent_name.to_string(), text.to_string());
+                tokio::spawn(async move {
+                    let result = manager
+                        .resume_detached(&session_id, &agent_name, &text)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    outcomes
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(LeaderResumeOutcome {
+                            session_id,
+                            agent_name,
+                            text,
+                            result,
+                        });
+                });
+            }
+            Err(e) => self.status = format!("[error] {e}"),
+        }
+    }
+
+    /// Applies the outcomes of finished leader resume launches: a started
+    /// turn shows the prompt in the leader's transcript and clears it from
+    /// the input; a refusal is shown as an error and leaves the input as is.
+    pub(crate) fn poll_leader_resumes(&mut self) {
+        let outcomes = std::mem::take(
+            &mut *self
+                .leader_resume_outcomes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for outcome in outcomes {
+            self.leader_resumes.remove(&outcome.session_id);
+            match outcome.result {
+                Ok(()) => {
+                    let sid = outcome.session_id.as_str();
+                    self.add_to_history(outcome.text.clone());
+                    let message = Message::user_text(sid, &outcome.text);
+                    if self.session.session_id.as_deref() == Some(sid) {
+                        self.session.messages.push(message);
+                        if self.session.input == outcome.text {
+                            self.session.input.clear();
+                            self.session.input_cursor = 0;
+                        }
+                    } else if let Some(view) = self
+                        .background
+                        .position(sid)
+                        .and_then(|index| self.background.view_mut(index))
+                    {
+                        view.messages.push(message);
+                    }
+                    self.status = format!("sent to {}", outcome.agent_name);
+                }
+                Err(e) => self.status = format!("[error] {e}"),
+            }
+        }
     }
 
     /// Swaps the focused view with the background view at `index`.
@@ -207,6 +414,26 @@ impl App {
         {
             self.handle_autofix_trigger(session_id, kind, summary, prompt);
             return;
+        }
+        // Team and sub-agent lifecycle changes the Sessions pane's team rows.
+        if matches!(
+            event,
+            Event::SubagentStart { .. }
+                | Event::SubagentComplete { .. }
+                | Event::SubagentKilled { .. }
+                | Event::SubagentCancelled { .. }
+                | Event::TeammateSpawned { .. }
+                | Event::TeammateStopped { .. }
+                | Event::TeammateIdle { .. }
+                | Event::TeammateFailed { .. }
+                | Event::TeammateSuspended { .. }
+                | Event::TeammateResumed { .. }
+                | Event::TeammateStatusChanged { .. }
+                | Event::TeamTaskClaimed { .. }
+                | Event::TeamAdopted { .. }
+                | Event::TeamCleanedUp { .. }
+        ) {
+            self.sidebar.teams_dirty = true;
         }
         // Session activity changes the sidebar's titles and ordering (NFR-03).
         if matches!(

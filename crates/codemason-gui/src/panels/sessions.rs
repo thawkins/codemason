@@ -13,7 +13,11 @@
 //! Docker or Podman container, remote system). Hovering a session shows
 //! its age, backend, branch and requests. The open session is highlighted,
 //! and while the sidebar has the keyboard the cursor row is too; sessions in
-//! the multi-selection carry an accent bar on their left edge.
+//! the multi-selection carry an accent bar on their left edge. Team leaders
+//! are drawn under their parent session with a disclosure triangle (a click
+//! on it hides or shows the teammates, a click elsewhere opens the leader),
+//! greyed in the Material disabled colour once not running; teammates under
+//! them show their status.
 //!
 //! The row icons are painted (like the disclosure triangle) rather than
 //! drawn from the icon font, whose bundled subset has no pull-request,
@@ -49,11 +53,12 @@
 //! `codemason-config` (backend kinds), `chrono` (relative ages), `egui` and
 //! [`crate::palette`].
 
+use codemason_agent::team::MemberStatus;
 use codemason_app_core::app::{App, Attention};
 use codemason_app_core::geometry::Area;
 use codemason_app_core::sessions_sidebar_state::{
-    PINNED_KEY, SidebarRow, attention_of, backend_of, build_rows, click_row, open_row_menu,
-    refresh_if_dirty, relative_age, selectable,
+    LeaderState, PINNED_KEY, SidebarRow, attention_of, backend_of, build_rows, click_row,
+    leader_label, open_row_menu, refresh_if_dirty, relative_age, selectable, toggle_leader,
 };
 use codemason_app_core::styled::ThemeColor;
 use codemason_config::ExecutionBackendKind;
@@ -65,8 +70,9 @@ use egui::{
 
 use crate::dialogs::session_menu;
 use crate::icons::{Icon, icon_label};
+use crate::material::DISABLED_CONTENT_OPACITY;
 use crate::material::menu::menu_frame;
-use crate::palette::Palette;
+use crate::palette::{Palette, rgb};
 use crate::styled_text::drawable;
 
 /// Accessible label of the session list.
@@ -549,7 +555,82 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> At
             suspended,
             ..
         } => subagent_atoms(ui, &shown(agent), &shown(task), *depth, *suspended, palette),
+        SidebarRow::TeamLeader {
+            team_name, state, ..
+        } => leader_atoms(ui, &shown(&leader_label(team_name)), *state, palette),
+        SidebarRow::Teammate { name, status, .. } => {
+            teammate_atoms(ui, &shown(name), *status, palette)
+        }
     }
+}
+
+/// The Material disabled content colour (`on_surface` at the disabled
+/// opacity): a crashed or finished team leader is drawn in it.
+fn disabled_colour(palette: &Palette) -> Color32 {
+    rgb(palette.m3.on_surface).gamma_multiply(DISABLED_CONTENT_OPACITY)
+}
+
+/// The dim hint after a team leader's label: none while it runs.
+fn leader_hint(state: LeaderState) -> &'static str {
+    match state {
+        LeaderState::Running => "",
+        LeaderState::Crashed => "(stopped)",
+        LeaderState::Done => "(done)",
+    }
+}
+
+/// A team-leader row, indented under the session that spawned it: the
+/// disclosure triangle (painted into its slot), the agent icon and
+/// `team-leader: <team>`; greyed with a hint once the leader is not
+/// running.
+fn leader_atoms(
+    ui: &egui::Ui,
+    label: &str,
+    state: LeaderState,
+    palette: &Palette,
+) -> Atoms<'static> {
+    let size = egui::TextStyle::Button.resolve(ui.style()).size;
+    let colour = match state {
+        LeaderState::Running => palette.text,
+        LeaderState::Crashed | LeaderState::Done => disabled_colour(palette),
+    };
+    let mut atoms = (
+        Atom::custom(row_indent_id(), vec2(SESSION_INDENT, size)),
+        Atom::custom(disclosure_id(), egui::Vec2::splat(size)),
+        icon_label(ui.ctx(), Icon::Agent, size, colour),
+        RichText::new(label.to_string()).color(colour),
+    )
+        .into_atoms();
+    let hint = leader_hint(state);
+    if !hint.is_empty() {
+        atoms.push_right(RichText::new(hint).color(colour));
+    }
+    atoms
+}
+
+/// A teammate row, indented under its leader: the teammate's name, then
+/// its status, dimmed.
+fn teammate_atoms(
+    ui: &egui::Ui,
+    name: &str,
+    status: MemberStatus,
+    palette: &Palette,
+) -> Atoms<'static> {
+    let size = egui::TextStyle::Button.resolve(ui.style()).size;
+    let colour = if status.is_terminal() {
+        disabled_colour(palette)
+    } else {
+        palette.text
+    };
+    (
+        Atom::custom(
+            row_indent_id(),
+            vec2(size.mul_add(2.0, SESSION_INDENT), size),
+        ),
+        RichText::new(name.to_string()).color(colour),
+        RichText::new(status.display_label()).color(palette.muted),
+    )
+        .into_atoms()
 }
 
 /// A running sub-agent row, indented under the session that spawned it:
@@ -967,6 +1048,8 @@ impl SessionsView {
         }
         self.last_cursor = focused.then_some(cursor);
         let mut clicked = None;
+        // The leader whose disclosure triangle was clicked.
+        let mut toggled_leader = None;
         let mut menu = None;
         // The session row under the pointer that has requests, and its rect.
         let mut hovered_requests = None;
@@ -994,7 +1077,10 @@ impl SessionsView {
                 }
                 let open = matches!(
                     row,
-                    SidebarRow::Session { id, .. } | SidebarRow::SubAgent { id, .. }
+                    SidebarRow::Session { id, .. }
+                        | SidebarRow::SubAgent { id, .. }
+                        | SidebarRow::TeamLeader { session_id: id, .. }
+                        | SidebarRow::Teammate { session_id: id, .. }
                         if app.session.session_id.as_deref() == Some(id)
                 );
                 let highlighted = (focused && index == cursor) || open;
@@ -1057,7 +1143,48 @@ impl SessionsView {
                         "Sub-agent {agent}: {task}\nOpen to watch it and message it"
                     ));
                 }
-                if response.clicked() {
+                let mut on_triangle = false;
+                if let SidebarRow::TeamLeader {
+                    session_id,
+                    team_name,
+                    state,
+                    collapsed,
+                } = row
+                {
+                    let colour = match state {
+                        LeaderState::Running => palette.muted,
+                        LeaderState::Crashed | LeaderState::Done => disabled_colour(palette),
+                    };
+                    let slot = response.rect(disclosure_id());
+                    if let Some(slot) = slot {
+                        paint_disclosure(ui, slot, *collapsed, colour);
+                    }
+                    ui.ctx().accesskit_node_builder(response.id, |node| {
+                        node.set_expanded(!*collapsed);
+                    });
+                    response.response.clone().on_hover_text(format!(
+                        "{} {}\nOpen to watch it and message it",
+                        leader_label(team_name),
+                        leader_hint(*state)
+                    ));
+                    // A click on the triangle (or the indent left of it)
+                    // shows or hides the teammates; anywhere else on the row
+                    // opens the leader.
+                    on_triangle = response.clicked()
+                        && slot
+                            .zip(response.interact_pointer_pos())
+                            .is_some_and(|(slot, pos)| pos.x <= slot.right() + 2.0);
+                    if on_triangle {
+                        toggled_leader = Some(session_id.clone());
+                    }
+                }
+                if let SidebarRow::Teammate { name, status, .. } = row {
+                    response.response.clone().on_hover_text(format!(
+                        "Teammate {name}: {}\nOpen to watch it and message it",
+                        status.display_label()
+                    ));
+                }
+                if response.clicked() && !on_triangle {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);
                     clicked = Some((index, ctrl));
                 }
@@ -1081,6 +1208,10 @@ impl SessionsView {
         self.show_request_popup(ui, app, hovered_requests, palette);
         if let Some((index, ctrl)) = clicked {
             click_row(app, index, ctrl);
+            ui.ctx().request_repaint();
+        }
+        if let Some(session_id) = toggled_leader {
+            toggle_leader(app, &session_id);
             ui.ctx().request_repaint();
         }
         if let Some(index) = menu {

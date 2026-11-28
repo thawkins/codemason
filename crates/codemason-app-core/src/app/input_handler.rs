@@ -1517,13 +1517,11 @@ impl App {
                     // keeps talking to the primary agent; a teammate is reached
                     // only through `/team message <name> <text>`.
                     // A running sub-agent takes the message into its current
-                    // run, so it is neither queued nor held for compaction.
-                    if self
-                        .session
-                        .session_id
-                        .as_deref()
-                        .is_some_and(|id| self.active_subagent_task(id).is_some())
-                    {
+                    // run, so it is neither queued nor held for compaction; a
+                    // team leader or teammate gets it as a direct user turn.
+                    if self.session.session_id.as_deref().is_some_and(|id| {
+                        self.active_subagent_task(id).is_some() || self.is_team_agent_session(id)
+                    }) {
                         let image_paths = std::mem::take(&mut self.session.pending_attachments);
                         self.dispatch_user_message(text, image_paths);
                         return;

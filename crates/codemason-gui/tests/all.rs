@@ -184,6 +184,8 @@ mod test_ribbon_overflow_gui;
 mod test_runtime_context;
 #[path = "test_sessions_request_popup.rs"]
 mod test_sessions_request_popup;
+#[path = "test_sessions_team_rows_gui.rs"]
+mod test_sessions_team_rows_gui;
 #[path = "test_side_panels.rs"]
 mod test_side_panels;
 #[path = "test_startup.rs"]
