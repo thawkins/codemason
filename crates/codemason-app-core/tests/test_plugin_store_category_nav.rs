@@ -44,6 +44,16 @@ fn entry(id: &str, category: Option<&str>) -> StoreEntry {
 /// row through the case-insensitive match), sorted as `ALL`, `Utility`, `Web`.
 fn open() -> App {
     let mut app = support::make_app();
+    // `make_app` takes `cwd_path` from the process cwd (the crate dir under
+    // nextest), and the install/installed-set paths resolve `.codemason/plugins`
+    // from it. Pin it to the git-ignored scratch tree so a run never writes into
+    // the repository.
+    let cwd = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/temp/test_plugin_store_category_nav")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&cwd).expect("scratch cwd");
+    app.cwd = cwd.display().to_string();
+    app.cwd_path = cwd;
     app.open_plugin_store(StoreKind::Codex, "", false);
     app.plugin_store
         .as_mut()
