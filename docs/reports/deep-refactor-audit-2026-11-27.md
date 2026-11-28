@@ -181,7 +181,7 @@ Re-derive function lengths by brace counting from the `fn` line, for example `aw
 | AG-09 | The dead `pending_manager` branch in `team_create.rs`. | `test_team_store_extra.rs:133` |
 | AG-21 | The `next_task_id` snapshot API, which only tests call. | `test_team_manager_runtime.rs:461` |
 | TL-21 | Three `ToolRegistry` types used only as a list. | test_lib_registry, test_lib_surface, test_vcs_registry_coverage, doctest |
-| CO-23 | Split `storage::migrate`. | `test_warm_index_scan.rs:39` source anchor |
+| CO-23 | Split `storage::migrate`. | **Superseded** by batch 17 (`ce49e83`): split without a test edit; the helpers sit outside the pinned window |
 
 ---
 
