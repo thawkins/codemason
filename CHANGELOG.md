@@ -19,6 +19,7 @@ Sessions pane, where typing to it sends that agent a direct message.
 - Changed: `/team create <blueprint> [name] [context]` and `/swarm` launch a team leader that creates, seeds, waits on, summarises and cleans up the team; the primary never leads a team. `/team close`, `/team delete` and `/team forcecleanup` cancel the team's leader.
 - Changed: only a team-leader agent may call `team_create` (`not_team_leader` otherwise, naming `new_agent agent="team-leader"`), team names are unique (an explicit taken name is refused, a generated one gets a suffix), and a leader is not bound by the background timeout while it waits in `team_wait`.
 - Changed: on a stock config, `/team create` fails with a message naming the permission when a blueprint's seed steps are refused; add a `team:manage` allow rule to let blueprints seed teammates.
+- Changed: `/swarm`'s `Swarm Result` is written by the swarm's team leader, not by a separate synthesis call in the frontend. The leader waits until no subtask can make progress (a failed or cancelled subtask, and any subtask blocked only on one, counts as finished), synthesises from the completed results, names the subtasks that failed or never ran, then cleans up the team. `/swarm cancel` stops the leader.
 - Changed: a message sent to a sub-agent whose run ended a moment earlier now says `<agent> has finished; the message was not sent` instead of the registry's reason-coded error.
 - Changed: a leader runs exactly one team (a second `team_create` is refused with `leader_has_team`), a teammate always runs with the standard role so teams never nest, and a custom team-leader agent always runs as a sub-agent and keeps the leader tool policy, with its own `permissions` appended after it. Archiving a session cancels the team leaders it spawned.
 - Upgrade note: a team created before this upgrade that is still `Active` with the primary session as its lead makes `new_agent` refuse to spawn a team leader from that session until that team is removed from disk with `/team delete <name>` (`/team close` only closes it for the session and leaves it `Active`).
@@ -26,6 +27,8 @@ Sessions pane, where typing to it sends that agent a direct message.
 ### Tests
 
 - Added: `test_sidebar_team_rows` (rows nested under the parent, leader not listed as a sub-agent, custom-named leader found by role, crashed leader greyed, rows rebuilt after a restart, teammates hidden and leader kept after cleanup, collapse, opening rows, prompts to a teammate, to an exited teammate, to an ended teammate and to a finished leader, finished leader listed and custom-named leader resumed as itself after a restart) and `test_sessions_team_rows_gui` (drawing, triangle toggle, row opens the leader). `support::make_app_with_storage` builds a second app over one database.
+- Fixed: tests in `codemason-agent`, `codemason-app-core`, `codemason-gui`, `codemason-plugins` and `codemason-tools-vcs` no longer write a first-run `codemason.json`, a code index or a plugins folder into git-ignored `.codemason/` directories inside the crates; each now runs from, or seeds its config in, a `target/temp` scratch project.
+- Fixed: `test_dialogs_more::test_context_menu_rows_are_material_items_with_their_icons_and_state` pins the clipboard, so it no longer depends on the host clipboard.
 
 ## [1.0.186] - 2026-11-26
 

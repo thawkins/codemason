@@ -2,6 +2,19 @@
 
 **Version:** 1.0.185
 
+> **Team-leader agents and concurrent teams (unreleased).** No crate is added
+> or removed. A per-team `TeamManagers` registry replaces the single
+> `TeamManagerSlot`, a built-in `team-leader` agent (`AgentRole::TeamLeader`)
+> creates, runs and summarises one team, `team_create` is leader-only, and the
+> Sessions pane lists leaders and teammates under their primary. Over `main`
+> the crates gain **15** source files, **5,572** lines, **12** test files and
+> **75** test attributes (219 files changed, 7,979 insertions, 1,729 deletions
+> across the branch). Tests in the agent, app-core, gui, plugins and tools-vcs
+> crates no longer write into git-ignored `.codemason/` folders in the
+> repository. `cargo nextest run --workspace` runs **16,545**, all passing in
+> 319 s with 16 skipped; `cargo fmt --check` and
+> `cargo clippy --workspace --all-targets -- -D warnings` are clean.
+
 > **Material contrast, verb-labelled confirmations (1.0.185).** No crate is
 > added or removed. `codemason-gui` gains 6 files and 5,192 lines over the
 > 1.0.181 measurement (the Material dialog migration and this release's
