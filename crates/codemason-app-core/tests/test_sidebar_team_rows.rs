@@ -230,14 +230,7 @@ async fn test_sidebar_team_rows_leader_not_listed_as_subagent() {
 #[tokio::test]
 async fn test_sidebar_team_rows_running_leader_found_by_role_before_its_team() {
     let ws = workspace("by_role");
-    let agents = ws.join(".codemason/agents");
-    std::fs::create_dir_all(&agents).expect("agents dir");
-    std::fs::write(
-        agents.join("review-boss.md"),
-        "---\n{\"name\":\"review-boss\",\"description\":\"Leads reviews\",\
-         \"role\":\"team-leader\"}\n---\nLead the review team.\n",
-    )
-    .expect("write agent");
+    install_custom_leader(&ws);
     let (mut app, primary) = app_with_primary(&ws);
     let leader = app
         .session_processor
@@ -469,7 +462,7 @@ async fn test_sidebar_team_rows_prompt_to_finished_leader_resumes_once() {
     let ws = workspace("resume");
     let (mut app, primary) = app_with_primary(&ws);
     let a = add_leader(&mut app, &ws, &primary, "alpha", &[]);
-    let _agents = support::attach_leader_runtime(&mut app);
+    let agents = support::attach_leader_runtime(&mut app);
     // `attach_leader_runtime` made a new primary; the leader keeps its own.
     let rows = fresh_rows(&mut app);
     let at = rows
@@ -487,27 +480,149 @@ async fn test_sidebar_team_rows_prompt_to_finished_leader_resumes_once() {
     assert!(app.leader_resume_in_flight(&a.session));
     submit(&mut app, "again?").await;
     assert_eq!(
+        app.status,
+        "[warn] team-leader is still starting; send again in a moment"
+    );
+    assert_eq!(
         app.session.input, "again?",
         "a held prompt stays in the input"
     );
-    assert!(
-        !app.status.contains("reason_code"),
-        "status: {}",
-        app.status
-    );
 
-    // Once the launch has finished, the next poll releases the session.
+    drain_resumes(&mut app, &a.session).await;
+    assert_eq!(
+        app.status, "sent to team-leader",
+        "one launch, which started"
+    );
+    let runs: Vec<String> = agents
+        .tasks_snapshot()
+        .await
+        .into_iter()
+        .filter(|t| t.child_session_id == a.session)
+        .map(|t| t.agent_name)
+        .collect();
+    assert_eq!(
+        runs,
+        ["team-leader"],
+        "exactly one turn in the leader's session"
+    );
+}
+
+/// Polls until no resume for `session` is in flight, then a little longer
+/// so a second, late launch would be seen too.
+async fn drain_resumes(app: &mut App, session: &str) {
     for _ in 0..200 {
         app.poll_timers();
-        if !app.leader_resume_in_flight(&a.session) {
+        if !app.leader_resume_in_flight(session) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert!(!app.leader_resume_in_flight(&a.session));
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        app.poll_timers();
+    }
+    assert!(!app.leader_resume_in_flight(session));
+}
+
+/// Writes custom agent `review-boss` with the team-leader role into `ws`.
+fn install_custom_leader(ws: &Path) {
+    let agents = ws.join(".codemason/agents");
+    std::fs::create_dir_all(&agents).expect("agents dir");
+    std::fs::write(
+        agents.join("review-boss.md"),
+        "---\n{\"name\":\"review-boss\",\"description\":\"Leads reviews\",\
+         \"role\":\"team-leader\"}\n---\nLead the review team.\n",
+    )
+    .expect("write agent");
+}
+
+#[tokio::test]
+async fn test_sidebar_team_rows_done_leader_listed_after_restart() {
+    let ws = workspace("done_restart");
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &["rev-1"]);
+    app.active_tasks
+        .push(running_task(&primary, &a.session, "team-leader"));
+    let _ = fresh_rows(&mut app);
+    // The leader cleaned up (its directory is gone) and finished.
+    std::fs::remove_dir_all(&a.team_dir).expect("remove team dir");
+    app.active_tasks.clear();
+    let _ = fresh_rows(&mut app);
+
+    let mut fresh = support::make_app_with_storage(Arc::clone(&app.storage));
+    drop(app);
+    pin_to(&mut fresh, &ws);
+    let rows = fresh_rows(&mut fresh);
     assert!(
-        app.status.starts_with("sent to team-leader") || app.status.starts_with("[error]"),
-        "status: {}",
-        app.status
+        matches!(
+            leader_row(&rows, &a.session),
+            Some(SidebarRow::TeamLeader { state: LeaderState::Done, team_name, .. })
+                if team_name == "alpha"
+        ),
+        "rows: {rows:?}"
     );
+    assert_eq!(teammate_rows(&rows), 0, "rows: {rows:?}");
+}
+
+#[tokio::test]
+async fn test_sidebar_team_rows_custom_leader_resumes_as_itself_after_restart() {
+    let ws = workspace("custom_resume");
+    install_custom_leader(&ws);
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &[]);
+    app.active_tasks
+        .push(running_task(&primary, &a.session, "review-boss"));
+    let _ = fresh_rows(&mut app);
+
+    // Restart: the leader's task is gone, its team still Active (crashed).
+    let mut fresh = support::make_app_with_storage(Arc::clone(&app.storage));
+    drop(app);
+    pin_to(&mut fresh, &ws);
+    let agents = support::attach_leader_runtime(&mut fresh);
+    let rows = fresh_rows(&mut fresh);
+    let at = rows
+        .iter()
+        .position(|r| {
+            matches!(r, SidebarRow::TeamLeader { session_id, state: LeaderState::Crashed, .. }
+                if *session_id == a.session)
+        })
+        .expect("crashed leader row");
+    click_row(&mut fresh, at, false);
+
+    submit(&mut fresh, "status?").await;
+    drain_resumes(&mut fresh, &a.session).await;
+    let runs: Vec<String> = agents
+        .tasks_snapshot()
+        .await
+        .into_iter()
+        .filter(|t| t.child_session_id == a.session)
+        .map(|t| t.agent_name)
+        .collect();
+    assert_eq!(runs, ["review-boss"], "status: {}", fresh.status);
+}
+
+#[tokio::test]
+async fn test_sidebar_team_rows_prompt_to_ended_teammate_refused() {
+    let ws = workspace("ended_mate");
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &["rev-1"]);
+    let rows = fresh_rows(&mut app);
+    let at = rows
+        .iter()
+        .position(|r| matches!(r, SidebarRow::Teammate { .. }))
+        .expect("teammate row");
+    click_row(&mut app, at, false);
+    // The team is cleaned up while the teammate's session stays open.
+    std::fs::remove_dir_all(&a.team_dir).expect("remove team dir");
+    let _ = fresh_rows(&mut app);
+    assert_eq!(
+        app.session.session_id.as_deref(),
+        Some(a.teammates[0].as_str())
+    );
+
+    submit(&mut app, "go").await;
+
+    assert_eq!(app.status, "[error] this teammate's team has ended");
+    assert_eq!(app.session.input, "go");
+    assert!(!app.session.is_processing, "no turn was started");
 }

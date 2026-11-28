@@ -1129,15 +1129,16 @@ v codemason
   `Left`/`Right` on it) to hide or show its teammates. A leader whose run
   has stopped while its team is still active is drawn greyed with
   `(stopped)`; once its team is cleaned up its teammates go and the leader
-  stays, greyed with `(done)`, until its parent session is archived.
+  stays, greyed with `(done)`, until its parent session is archived or
+  deleted, also after codemason restarts.
 - A teammate row shows the teammate's name and its status.
 - Click a leader or teammate row (or press `Enter` on it) to open that
   agent's session and watch its output live. A prompt typed there goes to
   that agent as a direct user turn, not to your primary session: a busy
   agent reads it at its next step, a finished leader runs one more turn in
   its own session (its reply stays there). If the agent cannot take it
-  (for example the teammate has exited), the status line shows the error
-  and your text stays in the input.
+  (for example the teammate has exited, or its team has ended), the status
+  line shows the error and your text stays in the input.
 
 Rest the pointer on a row with requests to open its request list beside
 it, newest first. Each entry shows the title, then the state, repository

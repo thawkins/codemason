@@ -44,6 +44,8 @@ enum TeamAgent {
         /// The teammate's name.
         name: String,
     },
+    /// A teammate session whose team is no longer listed (cleaned up).
+    EndedTeammate,
 }
 
 /// How a detached resume of a finished team leader ended.
@@ -57,6 +59,26 @@ pub struct LeaderResumeOutcome {
     text: String,
     /// `Err` with the reason when the turn could not be started.
     result: Result<(), String>,
+}
+
+/// Pushes its outcome into the shared list when dropped, so a resume task
+/// that panics or is cancelled still releases its session.
+struct ResumeGuard {
+    /// Where outcomes are drained from by `App::poll_leader_resumes`.
+    outcomes: std::sync::Arc<std::sync::Mutex<Vec<LeaderResumeOutcome>>>,
+    /// The outcome so far; an `Err` until the launch returns.
+    outcome: Option<LeaderResumeOutcome>,
+}
+
+impl Drop for ResumeGuard {
+    fn drop(&mut self) {
+        if let Some(outcome) = self.outcome.take() {
+            self.outcomes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(outcome);
+        }
+    }
 }
 
 /// Whether `error` is the registry's "no running task in that session".
@@ -207,8 +229,23 @@ impl App {
     }
 
     /// The team agent whose session is `session_id`, from the Sessions
-    /// pane's team rows.
+    /// pane's team rows; a teammate session no listed team has (its team
+    /// has ended) is [`TeamAgent::EndedTeammate`].
     fn team_agent_of(&self, session_id: &str) -> Option<TeamAgent> {
+        let listed = self.listed_team_agent(session_id);
+        if listed.is_some() {
+            return listed;
+        }
+        matches!(
+            self.storage.session_kind(session_id),
+            Ok(Some(codemason_storage::SessionKind::Teammate))
+        )
+        .then_some(TeamAgent::EndedTeammate)
+    }
+
+    /// The leader or teammate of a listed team whose session is
+    /// `session_id`.
+    fn listed_team_agent(&self, session_id: &str) -> Option<TeamAgent> {
         self.sidebar.leaders.iter().find_map(|leader| {
             if leader.session_id == session_id {
                 return Some(TeamAgent::Leader {
@@ -278,6 +315,9 @@ impl App {
                 }
             }
             TeamAgent::Leader { agent_name } => self.send_to_leader(&sid, &agent_name, text),
+            TeamAgent::EndedTeammate => {
+                self.status = "[error] this teammate's team has ended".to_string();
+            }
         }
         true
     }
@@ -303,20 +343,25 @@ impl App {
                 let (session_id, agent_name, text) =
                     (sid.to_string(), agent_name.to_string(), text.to_string());
                 tokio::spawn(async move {
-                    let result = manager
-                        .resume_detached(&session_id, &agent_name, &text)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    outcomes
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push(LeaderResumeOutcome {
+                    // Reports an outcome on every exit, a panic included,
+                    // so the session is never left held.
+                    let mut guard = ResumeGuard {
+                        outcomes,
+                        outcome: Some(LeaderResumeOutcome {
                             session_id,
                             agent_name,
                             text,
-                            result,
-                        });
+                            result: Err("the turn stopped before it started".to_string()),
+                        }),
+                    };
+                    let Some(pending) = guard.outcome.as_mut() else {
+                        return;
+                    };
+                    pending.result = manager
+                        .resume_detached(&pending.session_id, &pending.agent_name, &pending.text)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
                 });
             }
             Err(e) => self.status = format!("[error] {e}"),

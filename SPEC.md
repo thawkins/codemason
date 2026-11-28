@@ -4227,17 +4227,24 @@ session (team-leader-agent design):
   `LeaderState` of `Running`, `Crashed` - task gone, team still `Active` -
   or `Done` - team cleaned up) under the session that spawned it, and its
   team's members as `SidebarRow::Teammate` rows (name and status) under it.
-  Leaders are found by their agent's role and by the `lead_session_id` of
-  `Active` teams on disk, so the rows are rebuilt after a restart; plain
+  Leaders are found by their agent's role, by the `lead_session_id` of
+  `Active` teams on disk, and from the `team.leaders` settings key, which
+  records each leader seen (session id -> agent name and team name), so
+  both crashed and finished leaders are listed again after a restart; plain
   sub-agent rows are not shown for leaders. Teammate rows leave once the
-  team is no longer `Active`; the leader row stays until its parent
-  session leaves the sidebar.
+  team is no longer `Active`; the leader row (and its record) stays until
+  its parent session leaves the sidebar (archived or deleted). The team's
+  on-disk format is unchanged.
 - Opening a leader or teammate row focuses its session. A prompt typed
   there is a direct user turn: a teammate gets it through
   `TeamManager::send_user_turn`; a leader through
   `AgentManager::send_to_session`, or, when no task runs in its session
-  (`task_not_found`), one detached `AgentManager::resume_detached` turn,
-  at most one starting per session at a time. A refusal is shown on the
+  (`task_not_found`), one detached `AgentManager::resume_detached` turn
+  under the leader's recorded agent (the built-in `team-leader` when none
+  is recorded), at most one starting per session at a time (a second
+  prompt meanwhile is held with `[warn] <agent> is still starting`). A
+  prompt in a teammate session whose team has ended is refused with
+  `[error] this teammate's team has ended`. A refusal is shown on the
   status line as `[error] <reason>` and the prompt stays in the input.
 
 ### 14.3 Team Tools

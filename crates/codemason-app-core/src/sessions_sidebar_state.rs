@@ -34,7 +34,7 @@
 //! selected session opens a menu acting on the whole selection, and `Esc`
 //! clears it. Projects keep a manual order once one is moved up or down.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crate::geometry::Area;
@@ -966,6 +966,23 @@ fn refresh_teams(app: &mut App) {
     let active = active_teams(app);
     resolve_leader_agents(app);
     let mut leaders = std::mem::take(&mut app.sidebar.leaders);
+    let known = load_known_leaders(&app.storage);
+    // Leaders recorded before a restart, finished or not.
+    for (session_id, record) in &known {
+        if leaders.iter().any(|l| &l.session_id == session_id) {
+            continue;
+        }
+        if let Some(parent_id) = parent_of(app, session_id) {
+            leaders.push(SidebarLeader {
+                session_id: session_id.clone(),
+                parent_id,
+                agent_name: Some(record.agent_name.clone()),
+                team_name: record.team_name.clone(),
+                team_active: false,
+                teammates: Vec::new(),
+            });
+        }
+    }
     for task in &app.active_tasks {
         let is_leader = app
             .sidebar
@@ -998,14 +1015,7 @@ fn refresh_teams(app: &mut App) {
         if leaders.iter().any(|l| l.session_id == team.lead_session_id) {
             continue;
         }
-        let parent = match app.storage.get_session(&team.lead_session_id) {
-            Ok(row) => row.and_then(|row| row.parent_id),
-            Err(e) => {
-                tracing::warn!(error = %e, "session sidebar: team leader session not read");
-                None
-            }
-        };
-        if let Some(parent_id) = parent {
+        if let Some(parent_id) = parent_of(app, &team.lead_session_id) {
             leaders.push(SidebarLeader {
                 session_id: team.lead_session_id.clone(),
                 parent_id,
@@ -1055,7 +1065,75 @@ fn refresh_teams(app: &mut App) {
         (a.team_name.as_str(), a.session_id.as_str())
             .cmp(&(b.team_name.as_str(), b.session_id.as_str()))
     });
+    let recorded: BTreeMap<String, KnownLeader> = leaders
+        .iter()
+        .filter_map(|l| {
+            Some((
+                l.session_id.clone(),
+                KnownLeader {
+                    agent_name: l.agent_name.clone()?,
+                    team_name: l.team_name.clone(),
+                },
+            ))
+        })
+        .collect();
+    if recorded != known {
+        save_known_leaders(&app.storage, &recorded);
+    }
     app.sidebar.leaders = leaders;
+}
+
+/// Settings key holding the team leaders the sidebar has seen, so a
+/// finished leader stays listed (and resumes as its own agent) after a
+/// restart.
+const KNOWN_LEADERS_KEY: &str = "team.leaders";
+
+/// A team leader recorded under [`KNOWN_LEADERS_KEY`], keyed by its session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct KnownLeader {
+    /// The agent the leader runs as.
+    agent_name: String,
+    /// The leader's team; empty when it never created one.
+    #[serde(default)]
+    team_name: String,
+}
+
+/// The recorded leaders; none when nothing is stored or it is unreadable.
+fn load_known_leaders(storage: &Storage) -> BTreeMap<String, KnownLeader> {
+    match storage.get_setting(KNOWN_LEADERS_KEY) {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "ignoring malformed recorded team leaders");
+            BTreeMap::new()
+        }),
+        Ok(None) => BTreeMap::new(),
+        Err(e) => {
+            tracing::warn!(error = %e, "recorded team leaders not read");
+            BTreeMap::new()
+        }
+    }
+}
+
+/// Records `leaders`; a failure is logged only.
+fn save_known_leaders(storage: &Storage, leaders: &BTreeMap<String, KnownLeader>) {
+    match serde_json::to_string(leaders) {
+        Ok(json) => {
+            if let Err(e) = storage.set_setting(KNOWN_LEADERS_KEY, &json) {
+                tracing::warn!(error = %e, "recorded team leaders not saved");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "recorded team leaders not encoded"),
+    }
+}
+
+/// The parent of session `session_id`, from storage.
+fn parent_of(app: &App, session_id: &str) -> Option<String> {
+    match app.storage.get_session(session_id) {
+        Ok(row) => row.and_then(|row| row.parent_id),
+        Err(e) => {
+            tracing::warn!(error = %e, "session sidebar: team leader session not read");
+            None
+        }
+    }
 }
 
 /// Compact age of an RFC 3339 timestamp: `now`, `5m`, `3h`, `4d` or `2w`.
@@ -1725,11 +1803,21 @@ pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
                 session_id,
                 collapsed,
                 ..
-            }) if *collapsed != (key.key == Key::Left) => {
-                let session_id = session_id.clone();
-                toggle_leader(app, &session_id);
+            }) => {
+                if *collapsed != (key.key == Key::Left) {
+                    let session_id = session_id.clone();
+                    toggle_leader(app, &session_id);
+                }
             }
-            _ => {}
+            Some(
+                SidebarRow::NewSession
+                | SidebarRow::Spacer
+                | SidebarRow::Search
+                | SidebarRow::Session { .. }
+                | SidebarRow::SubAgent { .. }
+                | SidebarRow::Teammate { .. },
+            )
+            | None => {}
         },
         Key::Char('/') => start_filter(app),
         // On a project heading: `n` starts a session in that project, `b`
