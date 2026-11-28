@@ -104,8 +104,13 @@ async fn test_team_user_turns_exited_teammate_refused() {
 #[tokio::test]
 async fn test_team_user_turns_member_without_live_loop_refused() {
     let (manager, _tmp, _bus) = team_manager("ut-d", "lead-sess", true);
-    // Non-terminal status, a registered handle, but no loop task to run the turn.
+    // Non-terminal status, a registered handle, but its loop task returned.
     set_member(&manager.team_dir, MemberStatus::Idle);
+    let finished = tokio::spawn(async {});
+    while !finished.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    manager.set_agent_loop_handle("tm-001", Some(finished));
     assert!(!manager.has_live_agent_loop("tm-001"));
 
     let err = manager
@@ -118,6 +123,22 @@ async fn test_team_user_turns_member_without_live_loop_refused() {
             TeammateNextTurn::Run(_)
         ),
         "the refused turn must not be queued"
+    );
+}
+
+/// In the spawn window the handle exists but its loop is not recorded yet:
+/// the user is told to retry, not that the teammate exited.
+#[tokio::test]
+async fn test_team_user_turns_starting_teammate_asks_to_retry() {
+    let (manager, _tmp, _bus) = team_manager("ut-e", "lead-sess", true);
+    set_member(&manager.team_dir, MemberStatus::Working);
+
+    let err = manager
+        .send_user_turn("tm-001", "there yet?")
+        .expect_err("a starting teammate cannot take a turn yet");
+    assert_eq!(
+        err.to_string(),
+        "teammate alice is still starting; try again in a moment"
     );
 }
 

@@ -1545,7 +1545,8 @@ impl TeamManager {
     /// # Errors
     /// Fails when the member is unknown, has no runtime handle or live agent loop,
     /// or has exited (`Stopped`, `Failed` or shutting down): `teammate <name> has
-    /// exited`.
+    /// exited`; and, in the spawn window before its loop is recorded, with
+    /// `teammate <name> is still starting; try again in a moment`.
     pub fn send_user_turn(&self, agent_id: &str, text: &str) -> Result<()> {
         let store = TeamStore::load(&self.team_dir)?;
         let member = store.config.member_by_id(agent_id).ok_or_else(|| {
@@ -1561,14 +1562,19 @@ impl TeamManager {
         let name = member.name.clone();
         drop(store);
 
-        // A non-terminal roster row whose loop task has returned (or never
-        // started) would accept the turn and never run it: refuse visibly.
-        if !self.has_live_agent_loop(agent_id) {
-            anyhow::bail!("teammate {name} has exited");
-        }
         let Some(handle) = self.handles.get(agent_id) else {
             anyhow::bail!("teammate {name} has exited");
         };
+        // In the spawn window the handle exists but its loop task is not
+        // recorded yet: the teammate is starting, not gone.
+        let Some(join) = handle.agent_handle.as_ref() else {
+            anyhow::bail!("teammate {name} is still starting; try again in a moment");
+        };
+        // A non-terminal roster row whose loop task has returned would accept
+        // the turn and never run it: refuse visibly.
+        if join.is_finished() {
+            anyhow::bail!("teammate {name} has exited");
+        }
         if parked {
             // Same recovery as `resume_teammate`: restart polling, then move to
             // `Idle` through the single status writer.
