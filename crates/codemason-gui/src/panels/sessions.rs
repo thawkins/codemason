@@ -558,9 +558,12 @@ fn row_text(ui: &egui::Ui, app: &App, row: &SidebarRow, palette: &Palette) -> At
         SidebarRow::TeamLeader {
             team_name, state, ..
         } => leader_atoms(ui, &shown(&leader_label(team_name)), *state, palette),
-        SidebarRow::Teammate { name, status, .. } => {
-            teammate_atoms(ui, &shown(name), *status, palette)
-        }
+        SidebarRow::Teammate {
+            name,
+            status,
+            session_id,
+            ..
+        } => teammate_atoms(ui, &shown(name), *status, session_id.is_some(), palette),
     }
 }
 
@@ -614,10 +617,13 @@ fn teammate_atoms(
     ui: &egui::Ui,
     name: &str,
     status: MemberStatus,
+    started: bool,
     palette: &Palette,
 ) -> Atoms<'static> {
     let size = egui::TextStyle::Button.resolve(ui.style()).size;
-    let colour = if status.is_terminal() {
+    // A teammate with no session yet (a swarm subtask waiting on its
+    // dependencies) is a dimmed placeholder, as is one that has ended.
+    let colour = if !started || status.is_terminal() {
         disabled_colour(palette)
     } else {
         palette.text
@@ -631,6 +637,32 @@ fn teammate_atoms(
         RichText::new(status.display_label()).color(palette.muted),
     )
         .into_atoms()
+}
+
+/// The tooltip of a teammate row: its name and status, then what the row
+/// does. A blocked teammate says it is blocked and why; one with no session
+/// yet says it cannot be opened until it starts.
+///
+/// # Arguments
+/// * `name` - the teammate's name.
+/// * `status` - the teammate's lifecycle state.
+/// * `unstarted` - whether the teammate has no session yet.
+///
+/// # Returns
+/// The tooltip text.
+#[must_use]
+pub fn teammate_tooltip(name: &str, status: MemberStatus, unstarted: bool) -> String {
+    let state = if matches!(status, MemberStatus::Blocked) {
+        "Blocked: waiting for the subtasks it depends on to finish".to_string()
+    } else {
+        format!("Status: {}", status.display_label())
+    };
+    let hint = if unstarted {
+        "Not started yet, so it cannot be opened; it starts when it is unblocked"
+    } else {
+        "Open to watch it and message it"
+    };
+    format!("Teammate {name}\n{state}\n{hint}")
 }
 
 /// A running sub-agent row, indented under the session that spawned it:
@@ -1080,7 +1112,10 @@ impl SessionsView {
                     SidebarRow::Session { id, .. }
                         | SidebarRow::SubAgent { id, .. }
                         | SidebarRow::TeamLeader { session_id: id, .. }
-                        | SidebarRow::Teammate { session_id: id, .. }
+                        | SidebarRow::Teammate {
+                            session_id: Some(id),
+                            ..
+                        }
                         if app.session.session_id.as_deref() == Some(id)
                 );
                 let highlighted = (focused && index == cursor) || open;
@@ -1178,20 +1213,29 @@ impl SessionsView {
                         toggled_leader = Some(session_id.clone());
                     }
                 }
+                // A teammate with no session yet cannot be opened: it ignores
+                // clicks and its context menu until it starts.
+                let unstarted = matches!(
+                    row,
+                    SidebarRow::Teammate {
+                        session_id: None,
+                        ..
+                    }
+                );
                 if let SidebarRow::Teammate { name, status, .. } = row {
-                    response.response.clone().on_hover_text(format!(
-                        "Teammate {name}: {}\nOpen to watch it and message it",
-                        status.display_label()
-                    ));
+                    response
+                        .response
+                        .clone()
+                        .on_hover_text(teammate_tooltip(name, *status, unstarted));
                 }
-                if response.clicked() && !on_triangle {
+                if response.clicked() && !on_triangle && !unstarted {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);
                     clicked = Some((index, ctrl));
                 }
                 if index == cursor {
                     session_menu::note_cursor_row(ui.ctx(), response.rect);
                 }
-                if response.secondary_clicked() {
+                if response.secondary_clicked() && !unstarted {
                     if let Some(pos) = response.interact_pointer_pos() {
                         session_menu::note_pointer(ui.ctx(), pos);
                     }

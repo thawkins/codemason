@@ -188,8 +188,9 @@ pub struct SidebarLeader {
 /// A teammate of a listed leader's team.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarTeammate {
-    /// The teammate's session id.
-    pub session_id: String,
+    /// The teammate's session id; `None` until it has started (a swarm subtask
+    /// waiting on its dependencies is `Blocked` and has no session yet).
+    pub session_id: Option<String>,
     /// The teammate's agent id within its team (`tm-001`).
     pub agent_id: String,
     /// The teammate's name.
@@ -394,8 +395,8 @@ pub enum SidebarRow {
     /// A teammate, nested under its team's leader. Activating it focuses its
     /// session, whose prompt then sends the teammate a direct user turn.
     Teammate {
-        /// The teammate's session id.
-        session_id: String,
+        /// The teammate's session id; `None` until it has started.
+        session_id: Option<String>,
         /// The teammate's team.
         team_name: String,
         /// The teammate's agent id within the team.
@@ -1043,13 +1044,11 @@ fn refresh_teams(app: &mut App) {
                 leader.teammates = team
                     .members
                     .iter()
-                    .filter_map(|member| {
-                        Some(SidebarTeammate {
-                            session_id: member.session_id.clone()?,
-                            agent_id: member.agent_id.clone(),
-                            name: member.name.clone(),
-                            status: member.status,
-                        })
+                    .map(|member| SidebarTeammate {
+                        session_id: member.session_id.clone(),
+                        agent_id: member.agent_id.clone(),
+                        name: member.name.clone(),
+                        status: member.status,
                     })
                     .collect();
             }
@@ -1321,12 +1320,21 @@ fn activate_row(app: &mut App, index: usize) {
             SidebarRow::Session { id, .. }
             | SidebarRow::SubAgent { id, .. }
             | SidebarRow::TeamLeader { session_id: id, .. }
-            | SidebarRow::Teammate { session_id: id, .. },
+            | SidebarRow::Teammate {
+                session_id: Some(id),
+                ..
+            },
         ) => {
             let result = app.switch_to_session(id);
             report(app, result);
             app.sidebar.focused = false;
         }
+        // A teammate that has not started (a swarm subtask waiting on its
+        // dependencies) is a dimmed placeholder with no session: it does
+        // nothing until its session exists and it becomes a full row.
+        Some(SidebarRow::Teammate {
+            session_id: None, ..
+        }) => {}
         None => {}
     }
 }

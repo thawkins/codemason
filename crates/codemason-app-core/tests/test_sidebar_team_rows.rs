@@ -664,3 +664,104 @@ async fn test_sidebar_team_rows_records_kept_until_sessions_load() {
         .expect("leaders still recorded");
     assert!(after.contains(&a.session), "recorded: {after}");
 }
+
+/// Adds a member that has not started yet (no session), as a swarm subtask
+/// waiting on its dependencies is: `Blocked` until its predecessors finish.
+fn add_unstarted_member(leader: &Leader, name: &str, agent_id: &str) {
+    let mut store = TeamStore::load(&leader.team_dir).expect("load team");
+    let mut member = TeamMember::new(name, agent_id, "general");
+    member.status = MemberStatus::Blocked;
+    store.config.members.push(member);
+    store.save().expect("save team");
+}
+
+#[tokio::test]
+async fn test_sidebar_team_rows_lists_not_yet_started_member() {
+    let ws = workspace("unstarted");
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &["swarm-s1"]);
+    add_unstarted_member(&a, "swarm-s3", "tm-003");
+    app.active_tasks
+        .push(running_task(&primary, &a.session, "team-leader"));
+
+    let rows = fresh_rows(&mut app);
+    let blocked = rows
+        .iter()
+        .find(|r| matches!(r, SidebarRow::Teammate { name, .. } if name == "swarm-s3"));
+    assert!(
+        matches!(
+            blocked,
+            Some(SidebarRow::Teammate {
+                session_id: None,
+                status: MemberStatus::Blocked,
+                ..
+            })
+        ),
+        "rows: {rows:?}"
+    );
+    assert_eq!(teammate_rows(&rows), 2);
+}
+
+#[tokio::test]
+async fn test_sidebar_team_rows_not_yet_started_member_does_not_open() {
+    let ws = workspace("unstarted_open");
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &["swarm-s1"]);
+    add_unstarted_member(&a, "swarm-s3", "tm-003");
+    app.active_tasks
+        .push(running_task(&primary, &a.session, "team-leader"));
+
+    let rows = fresh_rows(&mut app);
+    let at = rows
+        .iter()
+        .position(|r| matches!(r, SidebarRow::Teammate { name, .. } if name == "swarm-s3"))
+        .expect("swarm-s3 row");
+    let status_before = app.status.clone();
+    click_row(&mut app, at, false);
+
+    assert_eq!(app.session.session_id.as_deref(), Some(primary.as_str()));
+    assert_eq!(app.status, status_before, "an unstarted row is inert");
+}
+
+#[tokio::test]
+async fn test_sidebar_team_rows_unstarted_member_becomes_full_row_once_started() {
+    let ws = workspace("unstarted_started");
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &["swarm-s1"]);
+    add_unstarted_member(&a, "swarm-s3", "tm-003");
+    app.active_tasks
+        .push(running_task(&primary, &a.session, "team-leader"));
+    let _ = fresh_rows(&mut app);
+
+    // Its predecessors finished: the swarm starts it in a session of its own.
+    let session = app
+        .session_processor
+        .session_manager
+        .create_child_session(ws.to_path_buf(), &a.session, SessionKind::Teammate)
+        .expect("teammate session")
+        .id;
+    let mut store = TeamStore::load(&a.team_dir).expect("load team");
+    let member = store
+        .config
+        .members
+        .iter_mut()
+        .find(|m| m.name == "swarm-s3")
+        .expect("swarm-s3");
+    member.session_id = Some(session.clone());
+    member.status = MemberStatus::Working;
+    store.save().expect("save team");
+    app.sidebar.teams_dirty = true;
+
+    let rows = fresh_rows(&mut app);
+    let at = rows
+        .iter()
+        .position(|r| matches!(r, SidebarRow::Teammate { name, .. } if name == "swarm-s3"))
+        .expect("swarm-s3 row");
+    assert!(
+        matches!(&rows[at], SidebarRow::Teammate { session_id: Some(id), status: MemberStatus::Working, .. } if *id == session),
+        "row: {:?}",
+        rows[at]
+    );
+    click_row(&mut app, at, false);
+    assert_eq!(app.session.session_id.as_deref(), Some(session.as_str()));
+}

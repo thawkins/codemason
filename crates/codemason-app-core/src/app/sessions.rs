@@ -258,7 +258,7 @@ impl App {
             leader
                 .teammates
                 .iter()
-                .find(|mate| mate.session_id == session_id)
+                .find(|mate| mate.session_id.as_deref() == Some(session_id))
                 .map(|mate| TeamAgent::Teammate {
                     team_name: leader.team_name.clone(),
                     agent_id: mate.agent_id.clone(),
