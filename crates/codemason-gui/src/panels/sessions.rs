@@ -646,12 +646,19 @@ fn teammate_atoms(
 /// # Arguments
 /// * `name` - the teammate's name.
 /// * `status` - the teammate's lifecycle state.
+/// * `waiting_for` - the teammates its task waits on; shown as a
+///   `Waiting for:` line when not empty.
 /// * `unstarted` - whether the teammate has no session yet.
 ///
 /// # Returns
 /// The tooltip text.
 #[must_use]
-pub fn teammate_tooltip(name: &str, status: MemberStatus, unstarted: bool) -> String {
+pub fn teammate_tooltip(
+    name: &str,
+    status: MemberStatus,
+    waiting_for: &[String],
+    unstarted: bool,
+) -> String {
     let state = if matches!(status, MemberStatus::Blocked) {
         "Blocked: waiting for the subtasks it depends on to finish".to_string()
     } else {
@@ -662,7 +669,12 @@ pub fn teammate_tooltip(name: &str, status: MemberStatus, unstarted: bool) -> St
     } else {
         "Open to watch it and message it"
     };
-    format!("Teammate {name}\n{state}\n{hint}")
+    let waits = if waiting_for.is_empty() {
+        String::new()
+    } else {
+        format!("\nWaiting for: {}", waiting_for.join(", "))
+    };
+    format!("Teammate {name}\n{state}{waits}\n{hint}")
 }
 
 /// A running sub-agent row, indented under the session that spawned it:
@@ -1222,11 +1234,19 @@ impl SessionsView {
                         ..
                     }
                 );
-                if let SidebarRow::Teammate { name, status, .. } = row {
-                    response
-                        .response
-                        .clone()
-                        .on_hover_text(teammate_tooltip(name, *status, unstarted));
+                if let SidebarRow::Teammate {
+                    name,
+                    status,
+                    waiting_for,
+                    ..
+                } = row
+                {
+                    response.response.clone().on_hover_text(teammate_tooltip(
+                        name,
+                        *status,
+                        waiting_for,
+                        unstarted,
+                    ));
                 }
                 if response.clicked() && !on_triangle && !unstarted {
                     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);

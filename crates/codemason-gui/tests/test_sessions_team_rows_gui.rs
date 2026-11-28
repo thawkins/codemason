@@ -140,16 +140,26 @@ fn test_sessions_team_rows_gui_triangle_toggles_and_row_opens() {
 
 #[test]
 fn test_sessions_team_rows_gui_blocked_tooltip_says_blocked() {
-    let tip =
-        codemason_gui::panels::sessions::teammate_tooltip("swarm-s3", MemberStatus::Blocked, true);
+    let tip = codemason_gui::panels::sessions::teammate_tooltip(
+        "swarm-s3",
+        MemberStatus::Blocked,
+        &["swarm-s1".to_string(), "swarm-s2".to_string()],
+        true,
+    );
+    assert!(tip.contains("Waiting for: swarm-s1, swarm-s2"), "{tip}");
     assert!(
         tip.contains("Blocked: waiting for the subtasks it depends on to finish"),
         "{tip}"
     );
     assert!(tip.contains("cannot be opened"), "{tip}");
 
-    let working =
-        codemason_gui::panels::sessions::teammate_tooltip("swarm-s1", MemberStatus::Working, false);
+    let working = codemason_gui::panels::sessions::teammate_tooltip(
+        "swarm-s1",
+        MemberStatus::Working,
+        &[],
+        false,
+    );
+    assert!(!working.contains("Waiting for"), "{working}");
     assert!(working.contains("Status: working"), "{working}");
     assert!(working.contains("Open to watch it"), "{working}");
 }

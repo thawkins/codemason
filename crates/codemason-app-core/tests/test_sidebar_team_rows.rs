@@ -765,3 +765,54 @@ async fn test_sidebar_team_rows_unstarted_member_becomes_full_row_once_started()
     click_row(&mut app, at, false);
     assert_eq!(app.session.session_id.as_deref(), Some(session.as_str()));
 }
+
+/// A team of `members` (`(name, agent_id)`) for `waiting_for_names`.
+fn team_of(members: &[(&str, &str)]) -> codemason_agent::team::TeamConfig {
+    let mut team = codemason_agent::team::TeamConfig::new("alpha", "lead");
+    for (name, id) in members {
+        team.members.push(TeamMember::new(*name, *id, "general"));
+    }
+    team
+}
+
+/// A task `id` assigned to `agent`, depending on `deps`, in `status`.
+fn task(
+    id: &str,
+    agent: &str,
+    deps: &[&str],
+    status: codemason_agent::team::TaskStatus,
+) -> codemason_agent::team::Task {
+    let mut t = codemason_agent::team::Task::new(id, id);
+    t.assigned_to = Some(agent.to_string());
+    t.depends_on = deps.iter().map(|d| (*d).to_string()).collect();
+    t.status = status;
+    t
+}
+
+#[test]
+fn test_sidebar_team_rows_waiting_for_lists_unfinished_predecessors() {
+    use codemason_agent::team::TaskStatus;
+    use codemason_app_core::sessions_sidebar_state::waiting_for_names;
+    let team = team_of(&[
+        ("swarm-s1", "tm-001"),
+        ("swarm-s2", "tm-002"),
+        ("swarm-s3", "tm-003"),
+    ]);
+    let tasks = vec![
+        task("s1", "tm-001", &[], TaskStatus::Completed),
+        task("s2", "tm-002", &[], TaskStatus::InProgress),
+        task("s3", "tm-003", &["s1", "s2"], TaskStatus::Pending),
+    ];
+    assert_eq!(waiting_for_names(&team, &tasks, "tm-003"), vec!["swarm-s2"]);
+    assert_eq!(
+        waiting_for_names(&team, &tasks, "tm-002"),
+        Vec::<String>::new()
+    );
+
+    // A predecessor with no assignee is named by its task id.
+    let tasks = vec![
+        codemason_agent::team::Task::new("s9", "s9"),
+        task("s3", "tm-003", &["s9"], TaskStatus::Pending),
+    ];
+    assert_eq!(waiting_for_names(&team, &tasks, "tm-003"), vec!["task s9"]);
+}

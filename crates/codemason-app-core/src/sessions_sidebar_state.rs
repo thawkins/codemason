@@ -39,7 +39,7 @@ use std::path::Path;
 
 use crate::geometry::Area;
 use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
-use codemason_agent::team::{MemberStatus, TeamConfig, TeamStatus, TeamStore};
+use codemason_agent::team::{MemberStatus, Task, TaskStore, TeamConfig, TeamStatus, TeamStore};
 use codemason_config::ExecutionBackendKind;
 use codemason_storage::{
     DiffStats, ProjectSessions, RequestKey, SessionCheckout, SessionRequest, SidebarSection,
@@ -197,6 +197,9 @@ pub struct SidebarTeammate {
     pub name: String,
     /// The teammate's lifecycle state.
     pub status: MemberStatus,
+    /// The teammates (or unassigned tasks) whose unfinished work this
+    /// teammate's task depends on; empty when it waits on nothing.
+    pub waiting_for: Vec<String>,
 }
 
 /// What a team-leader row shows about its leader.
@@ -405,6 +408,8 @@ pub enum SidebarRow {
         name: String,
         /// The teammate's lifecycle state.
         status: MemberStatus,
+        /// The teammates its task is waiting on (see [`waiting_for_names`]).
+        waiting_for: Vec<String>,
     },
 }
 
@@ -901,6 +906,7 @@ fn push_team_rows(rows: &mut Vec<SidebarRow>, app: &App, parent: &str) {
             agent_id: mate.agent_id.clone(),
             name: mate.name.clone(),
             status: mate.status,
+            waiting_for: mate.waiting_for.clone(),
         }));
     }
 }
@@ -921,7 +927,7 @@ pub fn toggle_leader(app: &mut App, session_id: &str) {
 
 /// The `Active` teams visible from the launch project, plus those bound to
 /// a live manager wherever they live.
-fn active_teams(app: &App) -> Vec<TeamConfig> {
+fn active_teams(app: &App) -> Vec<(TeamConfig, Vec<Task>)> {
     let mut dirs: Vec<std::path::PathBuf> = TeamStore::list_teams(&app.cwd_path)
         .into_iter()
         .map(|(_, dir, _)| dir)
@@ -933,14 +939,67 @@ fn active_teams(app: &App) -> Vec<TeamConfig> {
     }
     dirs.iter()
         .filter_map(|dir| match TeamStore::load(dir) {
-            Ok(store) => Some(store.config),
+            Ok(store) => Some((dir, store.config)),
             Err(e) => {
                 tracing::debug!(dir = %dir.display(), error = %e, "session sidebar: team not read");
                 None
             }
         })
-        .filter(|team| team.status == TeamStatus::Active)
+        .filter(|(_, team)| team.status == TeamStatus::Active)
+        .map(|(dir, team)| {
+            // The task list names what each teammate waits on; a team without
+            // one (or an unreadable one) simply shows no waits.
+            let tasks = TaskStore::open(dir)
+                .and_then(|store| store.read())
+                .map(|list| list.tasks)
+                .unwrap_or_else(|e| {
+                    tracing::debug!(dir = %dir.display(), error = %e, "session sidebar: tasks not read");
+                    Vec::new()
+                });
+            (team, tasks)
+        })
         .collect()
+}
+
+/// The teammates whose unfinished tasks the task of `agent_id` depends on,
+/// as the "Waiting for:" line of a blocked teammate's tooltip shows them.
+///
+/// Each predecessor that is neither completed nor cancelled is named by its
+/// assignee's teammate name, or `task <id>` when no teammate holds it.
+/// Names are listed once each, in dependency order.
+///
+/// # Arguments
+/// * `team` - the team, for mapping agent ids to teammate names.
+/// * `tasks` - the team's task list.
+/// * `agent_id` - the teammate whose waits are wanted.
+///
+/// # Returns
+/// The names it is waiting on; empty when it waits on nothing.
+#[must_use]
+pub fn waiting_for_names(team: &TeamConfig, tasks: &[Task], agent_id: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let own = tasks
+        .iter()
+        .filter(|task| task.assigned_to.as_deref() == Some(agent_id) && !task.status.is_terminal());
+    for task in own {
+        for dep in &task.depends_on {
+            let Some(pred) = tasks.iter().find(|t| &t.id == dep) else {
+                continue;
+            };
+            if pred.status.is_terminal() {
+                continue;
+            }
+            let name = pred
+                .assigned_to
+                .as_deref()
+                .and_then(|id| team.members.iter().find(|m| m.agent_id == id))
+                .map_or_else(|| format!("task {}", pred.id), |m| m.name.clone());
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// Records in [`SidebarState::leader_agents`] whether each running task's
@@ -999,7 +1058,7 @@ fn refresh_teams(app: &mut App) {
             .unwrap_or(false)
             || active
                 .iter()
-                .any(|team| team.lead_session_id == task.child_session_id);
+                .any(|(team, _)| team.lead_session_id == task.child_session_id);
         if !is_leader {
             continue;
         }
@@ -1018,7 +1077,7 @@ fn refresh_teams(app: &mut App) {
             }),
         }
     }
-    for team in &active {
+    for (team, _) in &active {
         if leaders.iter().any(|l| l.session_id == team.lead_session_id) {
             continue;
         }
@@ -1036,9 +1095,9 @@ fn refresh_teams(app: &mut App) {
     for leader in &mut leaders {
         match active
             .iter()
-            .find(|team| team.lead_session_id == leader.session_id)
+            .find(|(team, _)| team.lead_session_id == leader.session_id)
         {
-            Some(team) => {
+            Some((team, tasks)) => {
                 leader.team_name = team.name.clone();
                 leader.team_active = true;
                 leader.teammates = team
@@ -1049,6 +1108,7 @@ fn refresh_teams(app: &mut App) {
                         agent_id: member.agent_id.clone(),
                         name: member.name.clone(),
                         status: member.status,
+                        waiting_for: waiting_for_names(team, tasks, &member.agent_id),
                     })
                     .collect();
             }
