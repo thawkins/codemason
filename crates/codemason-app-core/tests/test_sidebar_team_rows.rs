@@ -629,3 +629,38 @@ async fn test_sidebar_team_rows_prompt_to_ended_teammate_refused() {
     assert_eq!(app.session.input, "go");
     assert!(!app.session.is_processing, "no turn was started");
 }
+
+/// A team refresh before the session list has loaded must not prune the
+/// recorded leaders: none of their parents is listed yet only because
+/// nothing is.
+#[tokio::test]
+async fn test_sidebar_team_rows_records_kept_until_sessions_load() {
+    let ws = workspace("records_kept");
+    let (mut app, primary) = app_with_primary(&ws);
+    let a = add_leader(&mut app, &ws, &primary, "alpha", &["rev-1"]);
+    app.active_tasks
+        .push(running_task(&primary, &a.session, "team-leader"));
+    let _ = fresh_rows(&mut app);
+    let recorded = app
+        .storage
+        .get_setting("team.leaders")
+        .expect("read")
+        .expect("leaders recorded");
+    assert!(recorded.contains(&a.session), "recorded: {recorded}");
+
+    // A fresh App over the same database whose session list has not loaded
+    // (or failed to load): only the team rows refresh.
+    let mut fresh = support::make_app_with_storage(Arc::clone(&app.storage));
+    drop(app);
+    pin_to(&mut fresh, &ws);
+    fresh.sidebar.dirty = false;
+    fresh.sidebar.teams_dirty = true;
+    refresh_if_dirty(&mut fresh);
+
+    let after = fresh
+        .storage
+        .get_setting("team.leaders")
+        .expect("read")
+        .expect("leaders still recorded");
+    assert!(after.contains(&a.session), "recorded: {after}");
+}

@@ -150,6 +150,10 @@ pub struct SidebarState {
     /// rebuilt before the next use: set by team and sub-agent events, which
     /// do not need the rest of the cache reloaded.
     pub teams_dirty: bool,
+    /// Whether the session list ([`SidebarState::groups`]) has loaded at
+    /// least once. Until it has, no recorded team leader is pruned for a
+    /// parent that is missing from it.
+    pub sessions_loaded: bool,
     /// Cached team-leader sessions, each with its team's teammates, in
     /// display order (team-leader-agent spec, section 5). A leader stays
     /// listed after its team is cleaned up, so the user can keep talking to
@@ -243,6 +247,7 @@ impl Default for SidebarState {
             launch_log: None,
             focused_title: None,
             teams_dirty: true,
+            sessions_loaded: false,
             leaders: Vec::new(),
             leader_agents: HashMap::new(),
             collapsed_leaders: HashSet::new(),
@@ -503,6 +508,7 @@ fn refresh_storage_if_dirty(app: &mut App) {
                 app.sidebar.selected.retain(|id| live.contains(id.as_str()));
             }
             app.sidebar.groups = groups;
+            app.sidebar.sessions_loaded = true;
             app.sidebar.pinned = pinned;
             app.sidebar.checkouts = checkouts;
             app.sidebar.unread = unread;
@@ -1053,7 +1059,13 @@ fn refresh_teams(app: &mut App) {
             }
         }
     }
-    // A leader whose parent has left the sidebar (archived, deleted) goes.
+    // A leader whose parent has left the sidebar (archived, deleted) goes;
+    // before the session list has loaded nothing is known to have left, so
+    // nothing is pruned and the records are left as they are.
+    if !app.sidebar.sessions_loaded {
+        app.sidebar.leaders = leaders;
+        return;
+    }
     let listed: HashSet<&str> = app
         .sidebar
         .groups
