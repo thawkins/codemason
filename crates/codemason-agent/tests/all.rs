@@ -638,6 +638,8 @@ mod test_team_registry;
 mod test_team_store_atomic_update;
 #[path = "test_team_teammate_wake.rs"]
 mod test_team_teammate_wake;
+#[path = "test_team_user_turns.rs"]
+mod test_team_user_turns;
 
 #[path = "test_team_store_extra.rs"]
 mod test_team_store_extra;

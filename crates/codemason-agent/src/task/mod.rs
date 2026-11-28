@@ -858,6 +858,7 @@ impl AgentManager {
             working_dir,
             false,
             time_bound_secs,
+            None,
             |_| std::future::ready(Ok(())),
         )
         .await
@@ -900,6 +901,7 @@ impl AgentManager {
             working_dir,
             false,
             time_bound_secs,
+            None,
             setup,
         )
         .await
@@ -928,9 +930,67 @@ impl AgentManager {
             working_dir,
             true,
             time_bound_secs,
+            None,
             |_| std::future::ready(Ok(())),
         )
         .await
+    }
+
+    /// Run one more turn in an existing, finished child session as a detached
+    /// background task.
+    ///
+    /// Used to keep talking to a team leader after its run ended: the turn
+    /// runs under `agent_name` in `child_session_id` (no new session), and
+    /// follows the detached contract - the result is never injected into the
+    /// parent session and the task is excluded from `list_agents` /
+    /// `wait_agents`. The parent is the one recorded on the child session. The
+    /// background concurrency cap is not applied: the session already exists
+    /// and the user, not a model, started the turn.
+    ///
+    /// # Arguments
+    /// * `child_session_id` - the existing child session to run in.
+    /// * `agent_name` - the agent to run (e.g. `team-leader`).
+    /// * `text` - the user's message, used as the turn's prompt.
+    ///
+    /// # Returns
+    /// The id of the new detached task.
+    ///
+    /// # Errors
+    /// Fails when the session is unknown or has no parent, when a task is
+    /// already running in it (use [`Self::send_to_session`] instead), or when
+    /// the turn cannot be launched.
+    pub async fn resume_detached(
+        &self,
+        child_session_id: &str,
+        agent_name: &str,
+        text: &str,
+    ) -> anyhow::Result<String> {
+        if self.suspend_flags.contains_key(child_session_id) {
+            anyhow::bail!("a sub-agent task is already running in '{child_session_id}'");
+        }
+        let session = self
+            .processor
+            .session_manager
+            .get_session(child_session_id)?
+            .ok_or_else(|| anyhow::anyhow!("session '{child_session_id}' not found"))?;
+        let parent = session
+            .parent_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("session '{child_session_id}' has no parent"))?;
+        let entry = self
+            .spawn_background_mode(
+                &parent,
+                agent_name,
+                text,
+                None,
+                &session.directory,
+                true,
+                None,
+                Some(child_session_id.to_string()),
+                |_| std::future::ready(Ok(())),
+            )
+            .await?;
+        Ok(entry.id)
     }
 
     /// Shared implementation for [`spawn_background`] / [`spawn_detached`] /
@@ -947,18 +1007,19 @@ impl AgentManager {
         working_dir: &std::path::Path,
         detached: bool,
         time_bound_secs: Option<u64>,
+        existing_child: Option<String>,
         setup: F,
     ) -> anyhow::Result<TaskEntry>
     where
         F: FnOnce(String) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
-        // Check concurrency limit. The occupancy comes from the same
+        // Check concurrency limit (a resume of an existing session is exempt). The occupancy comes from the same
         // `limit_report` that `list_agents` reports, so a refusal and a listing
         // can never disagree (FR-011, FR-029).
         let report = self.limit_report().await;
 
-        if report.headroom == 0 {
+        if existing_child.is_none() && report.headroom == 0 {
             // FR-010: the refusal is branchable, so it carries a stable
             // machine-readable reason (`limit_reached`) that `new_agent` lifts
             // into the tool error a caller actually sees.
@@ -990,14 +1051,23 @@ impl AgentManager {
         // e.g., "explore-a1b2c3d4" instead of full UUID
         let task_id = make_task_id(agent_name);
 
-        // Create isolated session
-        let child_session = self.processor.session_manager.create_child_session(
-            working_dir.to_path_buf(),
-            parent_session_id,
-            codemason_storage::SessionKind::Subagent,
-        )?;
+        // Create isolated session, or reuse the existing one for a resume.
+        let child_session = if let Some(existing) = existing_child.as_deref() {
+            self.processor
+                .session_manager
+                .get_session(existing)?
+                .ok_or_else(|| anyhow::anyhow!("session '{existing}' not found"))?
+        } else {
+            self.processor.session_manager.create_child_session(
+                working_dir.to_path_buf(),
+                parent_session_id,
+                codemason_storage::SessionKind::Subagent,
+            )?
+        };
         let child_sid = child_session.id.clone();
-        if let Err(e) = setup(child_sid.clone()).await {
+        if existing_child.is_none()
+            && let Err(e) = setup(child_sid.clone()).await
+        {
             if let Err(del) = self.processor.session_manager.delete_session(&child_sid) {
                 tracing::warn!(session = %child_sid, error = %del,
                     "failed to delete the child session of a refused spawn");
@@ -1432,11 +1502,15 @@ impl AgentManager {
     ///
     /// # Errors
     ///
-    /// Fails when no sub-agent loop is running in that session (none was
-    /// spawned there, it has finished, or its backend has no agent loop).
+    /// Fails with reason `task_not_found` when no sub-agent loop is running in
+    /// that session (none was spawned there, it has finished, or its backend
+    /// has no agent loop); the caller may then use [`Self::resume_detached`].
     pub fn send_to_session(&self, child_session_id: &str, text: &str) -> anyhow::Result<()> {
         let Some(mut queued) = self.inboxes.get_mut(child_session_id) else {
-            anyhow::bail!("no running sub-agent loop accepts messages in '{child_session_id}'");
+            return Err(crate::tool::param_schema::reason_error(
+                crate::tool::new_agent::REASON_TASK_NOT_FOUND,
+                format!("no running sub-agent loop accepts messages in '{child_session_id}'"),
+            ));
         };
         queued.messages.push(text.to_string());
         queued.notify.notify_one();

@@ -15,7 +15,7 @@
 //!   \- shutdown_teammate()-> writes shutdown_request mailbox message, marks Stopped
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -611,6 +611,9 @@ struct TeammateHandle {
     /// M6-T1: last time progress was observed for this teammate (idle / failure /
     /// task completion). Used by the watchdog to detect hung agents.
     last_progress: Arc<std::sync::Mutex<std::time::Instant>>,
+    /// Messages the user typed straight to this teammate, oldest first. They
+    /// run before any mailbox or task work ([`TeamManager::send_user_turn`]).
+    user_turns: parking_lot::Mutex<VecDeque<String>>,
     /// R-19: Handle to the teammate agent-loop task so it can be force-aborted
     /// on `shutdown_teammate` / `Drop`.
     agent_handle: Option<tokio::task::JoinHandle<()>>,
@@ -1457,6 +1460,12 @@ impl TeamManager {
         if member.status.is_terminal() {
             return TeammateNextTurn::Exit;
         }
+        // A message the user typed to this teammate outranks everything else.
+        if let Some(handle) = self.handles.get(agent_id)
+            && let Some(text) = handle.user_turns.lock().pop_front()
+        {
+            return TeammateNextTurn::Run(format!("The user sent you a message: {text}"));
+        }
         if member.status == MemberStatus::Working
             && let Some(task_id) = member.current_task_id.as_deref()
         {
@@ -1488,6 +1497,51 @@ impl TeamManager {
              them.",
             self.team_name
         ))
+    }
+
+    /// Queue a message the user typed straight to teammate `agent_id` and wake
+    /// its agent loop.
+    ///
+    /// The message runs as the teammate's next turn, ahead of mailbox and task
+    /// work ([`Self::next_teammate_turn`]). A parked (`Suspended` or `Blocked`)
+    /// teammate is resumed to `Idle` first, exactly as
+    /// [`Self::resume_teammate`] does.
+    ///
+    /// # Arguments
+    /// * `agent_id` - the teammate to talk to.
+    /// * `text` - the user's message.
+    ///
+    /// # Errors
+    /// Fails when the member is unknown, has no runtime handle, or has exited
+    /// (`Stopped`, `Failed` or shutting down): `teammate <name> has exited`.
+    pub fn send_user_turn(&self, agent_id: &str, text: &str) -> Result<()> {
+        let store = TeamStore::load(&self.team_dir)?;
+        let member = store.config.member_by_id(agent_id).ok_or_else(|| {
+            anyhow::anyhow!("team '{}' has no teammate '{agent_id}'", self.team_name)
+        })?;
+        if member.status.is_terminal() || member.status == MemberStatus::ShuttingDown {
+            anyhow::bail!("teammate {} has exited", member.name);
+        }
+        let parked = matches!(
+            member.status,
+            MemberStatus::Suspended | MemberStatus::Blocked
+        );
+        let name = member.name.clone();
+        drop(store);
+
+        let Some(handle) = self.handles.get(agent_id) else {
+            anyhow::bail!("teammate {name} has exited");
+        };
+        if parked {
+            // Same recovery as `resume_teammate`: restart polling, then move to
+            // `Idle` through the single status writer.
+            handle.poll_cancel.store(false, Ordering::Relaxed);
+            handle.notify.notify_one();
+            self.set_member_status(agent_id, MemberStatus::Idle, TransitionCause::Resumed)?;
+        }
+        handle.user_turns.lock().push_back(text.to_string());
+        handle.wake.notify_one();
+        Ok(())
     }
 
     /// Whether `agent_id` has an agent-loop task that has not finished.
@@ -1558,6 +1612,7 @@ impl TeamManager {
                 notify: Arc::new(Notify::new()),
                 wake: Arc::new(Notify::new()),
                 last_progress: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+                user_turns: parking_lot::Mutex::new(VecDeque::new()),
                 agent_handle: None,
                 poll_handle: None,
             },
@@ -2318,6 +2373,7 @@ impl TeamManager {
                 notify: Arc::clone(&notify),
                 wake: Arc::clone(&wake),
                 last_progress: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+                user_turns: parking_lot::Mutex::new(VecDeque::new()),
                 agent_handle: None,
                 poll_handle: None,
             },
