@@ -126,7 +126,19 @@ fn with_isolated_env<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
         ("GITLAB_URL", None),
         ("GITLAB_USERNAME", None),
     ]);
+    seed_global_config(&home.path().join(".config"));
     f(&home.path().to_path_buf())
+}
+
+/// Give the isolated config home an empty global `codemason.json`. With no
+/// global and no project config, `Config::load()` (read by the GitLab
+/// layers) treats the run as a first run and writes a default
+/// `.codemason/codemason.json` into the process cwd - the crate directory
+/// under nextest, i.e. into the repository (AGENTS.md "Test Layout").
+fn seed_global_config(config_home: &std::path::Path) {
+    let dir = config_home.join("codemason");
+    std::fs::create_dir_all(&dir).expect("global config dir");
+    std::fs::write(dir.join("codemason.json"), "{}").expect("global config");
 }
 
 #[test]

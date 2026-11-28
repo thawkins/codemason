@@ -72,7 +72,7 @@ async fn focused_input_is_not_routed_to_the_teammate_mailbox() {
 
     let mut app = app_with_team();
     crate::without_host_providers(&mut app);
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-001".to_string()));
     // With the popup open `Enter` is the open-overlay key (FR-038); the send
     // behaviour applies once the window is closed again.
     app.show_teams_window = false;
@@ -99,7 +99,10 @@ async fn focused_input_is_not_routed_to_the_teammate_mailbox() {
     );
 
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "the submission keeps the focus (FR-058)"
     );

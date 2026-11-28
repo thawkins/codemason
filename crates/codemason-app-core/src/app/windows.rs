@@ -314,33 +314,45 @@ impl App {
                     self.cancel_bg_task(&task_id);
                 }
             }
-            RowAction::SuspendTeammate { agent_id, .. } => {
+            RowAction::SuspendTeammate {
+                team_name,
+                agent_id,
+                ..
+            } => {
                 // Suspend only when the member is actually live and not
                 // already suspended - the re-check mirrors the stale-row
                 // rule (FR-069).
-                let status = member_status_of(self, &agent_id);
+                let status = member_status_of(self, &team_name, &agent_id);
                 if let Some(status) = status
                     && status != MemberStatus::Suspended
                     && !is_terminal_member_status(status)
                 {
-                    self.dispatch_suspend_teammate(&agent_id);
+                    self.dispatch_suspend_teammate(&team_name, &agent_id);
                 }
             }
-            RowAction::ShutdownTeammate { agent_id, .. } => {
-                let status = member_status_of(self, &agent_id);
+            RowAction::ShutdownTeammate {
+                team_name,
+                agent_id,
+                ..
+            } => {
+                let status = member_status_of(self, &team_name, &agent_id);
                 if let Some(status) = status
                     && !is_terminal_member_status(status)
                 {
-                    self.dispatch_shutdown_teammate(&agent_id);
+                    self.dispatch_shutdown_teammate(&team_name, &agent_id);
                 }
             }
-            RowAction::ResumeTeammate { agent_id, .. } => {
+            RowAction::ResumeTeammate {
+                team_name,
+                agent_id,
+                ..
+            } => {
                 // Resume only a member that is still parked: if the row moved
                 // on (the dependency cleared itself, or the member stopped)
                 // between open and answer, the answer mutates nothing - the
                 // same stale-row rule the other arms follow (FR-069).
-                if member_status_of(self, &agent_id) == Some(MemberStatus::Blocked) {
-                    self.dispatch_resume_teammate(&agent_id);
+                if member_status_of(self, &team_name, &agent_id) == Some(MemberStatus::Blocked) {
+                    self.dispatch_resume_teammate(&team_name, &agent_id);
                 }
             }
             RowAction::DeleteSession { session_id, .. } => {
@@ -363,12 +375,8 @@ impl App {
 
 /// The status of the team member `agent_id`, `None` when the list no longer
 /// carries it (FR-069 stale-row rule).
-fn member_status_of(app: &App, agent_id: &str) -> Option<MemberStatus> {
-    app.session
-        .team_members
-        .iter()
-        .find(|m| m.agent_id == agent_id)
-        .map(|m| m.status)
+fn member_status_of(app: &App, team_name: &str, agent_id: &str) -> Option<MemberStatus> {
+    app.team_member(team_name, agent_id).map(|m| m.status)
 }
 
 /// Whether `status` is terminal, in which case no suspend or shutdown can be
@@ -644,7 +652,7 @@ impl App {
                 "teams: cursor -> {}",
                 self.teams_teammate_agent_ids
                     .get(next)
-                    .cloned()
+                    .map(|(_, agent)| agent.clone())
                     .unwrap_or_default()
             );
         }
@@ -669,7 +677,7 @@ impl App {
                 "teams: cursor -> {}",
                 self.teams_teammate_agent_ids
                     .get(next)
-                    .cloned()
+                    .map(|(_, agent)| agent.clone())
                     .unwrap_or_default()
             );
         }
@@ -703,7 +711,7 @@ impl App {
     }
 
     /// Mouse click-to-select for the Teams window: move the cursor onto the
-    /// painted row `abs_row` (0 = header, 1 = lead, then the member rows - the
+    /// painted row `abs_row` (0 = team title, 1 = header, 2 = lead, then the member rows - the
     /// renderer's `teams_row_agent_ids` indexing).
     ///
     /// Same contract as [`App::agents_cursor_from_click`]: the click only
@@ -727,7 +735,7 @@ impl App {
             "teams: cursor -> {}",
             self.teams_teammate_agent_ids
                 .get(ordinal)
-                .cloned()
+                .map(|(_, agent)| agent.clone())
                 .unwrap_or_default()
         );
         true
@@ -738,16 +746,12 @@ impl App {
     /// teammate destroys its in-flight turn, so the confirm dialog arms
     /// (FR-040's direction split preserved on the keyboard).
     pub fn teams_cursor_toggle_stop_resume(&mut self) {
-        let agent_id = self
+        let key = self
             .teams_cursor_teammate
             .and_then(|c| self.teams_teammate_agent_ids.get(c).cloned());
-        let Some(member) = agent_id.as_deref().and_then(|id| {
-            self.session
-                .team_members
-                .iter()
-                .find(|m| m.agent_id == id)
-                .cloned()
-        }) else {
+        let Some((team_name, member)) =
+            key.and_then(|(team, id)| self.team_member(&team, &id).map(|member| (team, member)))
+        else {
             self.status = "teams: selected row is gone".to_string();
             return;
         };
@@ -759,9 +763,10 @@ impl App {
             codemason_agent::team::MemberStatus::Suspended
                 | codemason_agent::team::MemberStatus::Blocked
         ) {
-            self.dispatch_resume_teammate(&member.agent_id);
+            self.dispatch_resume_teammate(&team_name, &member.agent_id);
         } else {
             self.open_row_action(crate::app::RowAction::SuspendTeammate {
+                team_name,
                 agent_id: member.agent_id,
                 name: member.name,
             });
@@ -777,27 +782,25 @@ impl App {
     /// `Suspended` already has on `Space`, and the dialog title names the
     /// member and the action so the operator is not asked a generic question.
     pub fn teams_cursor_shutdown(&mut self) {
-        let agent_id = self
+        let key = self
             .teams_cursor_teammate
             .and_then(|c| self.teams_teammate_agent_ids.get(c).cloned());
-        let Some(member) = agent_id.as_deref().and_then(|id| {
-            self.session
-                .team_members
-                .iter()
-                .find(|m| m.agent_id == id)
-                .cloned()
-        }) else {
+        let Some((team_name, member)) =
+            key.and_then(|(team, id)| self.team_member(&team, &id).map(|member| (team, member)))
+        else {
             self.status = "teams: selected row is gone".to_string();
             return;
         };
         if member.status == codemason_agent::team::MemberStatus::Blocked {
             self.open_row_action(crate::app::RowAction::ResumeTeammate {
+                team_name,
                 agent_id: member.agent_id,
                 name: member.name,
             });
             return;
         }
         self.open_row_action(crate::app::RowAction::ShutdownTeammate {
+            team_name,
             agent_id: member.agent_id,
             name: member.name,
         });
@@ -808,13 +811,13 @@ impl App {
     /// drove (FR-038). The lead is not a cursor row, so no key path can
     /// target it (FR-067).
     pub fn teams_cursor_focus(&mut self) {
-        let agent_id = self
+        let key = self
             .teams_cursor_teammate
             .and_then(|c| self.teams_teammate_agent_ids.get(c).cloned());
-        let Some(agent_id) = agent_id else {
+        let Some((team_name, agent_id)) = key else {
             self.status = "teams: selected row is gone".to_string();
             return;
         };
-        self.focus_teammate_by_id(&agent_id);
+        self.focus_teammate_in(&team_name, &agent_id);
     }
 }

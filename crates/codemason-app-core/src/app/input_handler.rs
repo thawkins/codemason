@@ -1511,19 +1511,18 @@ impl App {
                     self.dispatch_bang_command(text);
                 }
                 InputAction::SendMessage(text) => {
-                    // FR-058 (amended): teammate focus no longer redirects the
-                    // input box. Enter always addresses the lead session, so a
-                    // focused teammate's output view can be read while the user
-                    // keeps talking to the primary agent; a teammate is reached
-                    // only through `/team message <name> <text>`.
+                    // FR-058 (amended): teammate focus in the Teams pane does
+                    // not redirect the input box. Enter addresses the focused
+                    // session: opening a leader or teammate row in the Sessions
+                    // pane makes that agent the target (below), and
+                    // `/team message <name> <text>` reaches a teammate from
+                    // anywhere.
                     // A running sub-agent takes the message into its current
-                    // run, so it is neither queued nor held for compaction.
-                    if self
-                        .session
-                        .session_id
-                        .as_deref()
-                        .is_some_and(|id| self.active_subagent_task(id).is_some())
-                    {
+                    // run, so it is neither queued nor held for compaction; a
+                    // team leader or teammate gets it as a direct user turn.
+                    if self.session.session_id.as_deref().is_some_and(|id| {
+                        self.active_subagent_task(id).is_some() || self.is_team_agent_session(id)
+                    }) {
                         let image_paths = std::mem::take(&mut self.session.pending_attachments);
                         self.dispatch_user_message(text, image_paths);
                         return;

@@ -89,23 +89,29 @@ predecessor that recorded no result is marked
 silently omitted, and the teammate is told to pass its own `result` so its
 dependents receive it in turn.
 
-A swarm team runs with `auto_claim_tasks` off and pre-assigns each task to its
-own teammate (a ready task at spawn, a dependent one at unblock). An idle
+A swarm team runs with `auto_claim_tasks` off and gives each task to its own
+teammate: a ready task is assigned at spawn, and a dependent one is reserved for
+its teammate (assigned but still pending) and claimed when it unblocks. An idle
 teammate therefore never takes another subtask with only a task id - it always
 has that task's description and dependency results.
 
-### The swarm synthesises one answer
+Each swarm teammate gets a readable name prefixed by its agent type,
+`<agent_type>-<adjective>-<surname>` (for example `explore-focused-turing`).
+In the Sessions pane a teammate that is still waiting on its dependencies is
+listed dimmed and cannot be opened until it starts; its tooltip says it is
+blocked and lists the teammates it is waiting for.
 
-When every subtask has finished and at least one completed, the swarm combines
-the results into a single answer with one LLM call on the session's selected
-model (`SYNTHESIS_SYSTEM_PROMPT`). It receives the goal plus each task's status
-and result, and its answer is shown in the chat as **Swarm Result**. The
-per-task status table is still shown above it.
+### The swarm's team leader synthesises one answer
 
-- With no model selected, the swarm ends with the status table only.
-- A failed synthesis call - including a provider stream error - is reported as
-  **Swarm Error** / **Synthesis Failed** rather than passing a partial answer
-  off as success.
+A swarm team is led by a `team-leader` sub-agent of your session. The leader
+waits until no subtask can make further progress (it never re-assigns tasks or
+shuts teammates down; blocked teammates start as their dependencies finish, and
+a subtask blocked only on failed or cancelled ones counts as finished), then
+combines the completed results, naming what failed or never ran, into a single answer following `SYNTHESIS_SYSTEM_PROMPT`,
+calls `team_cleanup`, and returns the answer to your session like any
+background `new_agent` result. The swarm view shows the per-task status table
+when the subtasks are done. `/swarm cancel` closes the team and cancels its
+leader.
 
 ## Notes
 

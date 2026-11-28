@@ -41,6 +41,8 @@ fn make_ctx(
         config: None,
         bg_service: None,
         cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
+        user_input_pending: None,
         permission_checker: None,
         tool_registry: ToolContext::default_tool_registry(),
         read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),

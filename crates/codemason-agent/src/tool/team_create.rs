@@ -72,6 +72,59 @@ async fn dispatch_seed_tool(
     }
 }
 
+/// Stable reason code for a `team_create` call from a non-leader agent.
+pub const REASON_NOT_TEAM_LEADER: &str = "not_team_leader";
+
+/// Stable reason code for a `team_create` call from a session that already
+/// runs a team.
+pub const REASON_LEADER_HAS_TEAM: &str = "leader_has_team";
+
+/// Stable reason code for a `seed_only` call whose blueprint seeding was
+/// refused or failed.
+pub const REASON_SEED_FAILED: &str = "seed_failed";
+
+/// Decide a `seed_only` call's outcome: a team leader must not start on a
+/// half-seeded team, so any refused or failed seed entry, or a non-empty
+/// `spawn-prompts.json` that left the team with no members, is an error
+/// listing each reason (tool, permission category) and the fix.
+///
+/// # Errors
+///
+/// A [`REASON_SEED_FAILED`] error when seeding was incomplete.
+fn seed_only_result(
+    blueprint: &str,
+    task_failures: &[String],
+    failed_spawns: &[serde_json::Value],
+    wants_teammates: bool,
+    members: usize,
+) -> Result<()> {
+    let mut reasons: Vec<String> = task_failures.to_vec();
+    reasons.extend(failed_spawns.iter().map(|f| {
+        format!(
+            "spawn tool '{}' for teammate '{}': {}",
+            f.get("tool").and_then(|v| v.as_str()).unwrap_or("?"),
+            f.get("teammate_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?"),
+            f.get("error").and_then(|v| v.as_str()).unwrap_or("?"),
+        )
+    }));
+    if wants_teammates && members == 0 && reasons.is_empty() {
+        reasons.push("spawn-prompts.json lists teammates but none was spawned".to_string());
+    }
+    if reasons.is_empty() {
+        return Ok(());
+    }
+    Err(super::param_schema::reason_error(
+        REASON_SEED_FAILED,
+        format!(
+            "blueprint '{blueprint}' could not be seeded: {}. Allow the permission each \
+             refused tool names (for example an allow rule for `team:manage`) and retry.",
+            reasons.join("; ")
+        ),
+    ))
+}
+
 /// Creates a new team directory and initial config.
 pub struct TeamCreateTool;
 
@@ -82,7 +135,8 @@ impl Tool for TeamCreateTool {
     }
 
     fn description(&self) -> &'static str {
-        "Create a new named agent team. ALWAYS pass 'context' with the user's \
+        "Create a new named agent team. Only a team-leader agent may call this \
+             (spawn one with new_agent agent=\"team-leader\"); team names are unique. ALWAYS pass 'context' with the user's \
              specific request (e.g. which directory/files to review, what task to \
              perform, where to write output). If a blueprint is provided, all teammates \
              defined in the blueprint's spawn-prompts.json are spawned automatically - \
@@ -115,7 +169,7 @@ impl Tool for TeamCreateTool {
                 },
                 "seed_only": {
                     "type": "boolean",
-                    "description": "Apply the blueprint to an existing team instead of creating one. The team must already exist; the call never re-creates its directory. Used by `/team create`, which has created the team before seeding. Default: false"
+                    "description": "Apply the blueprint to an existing team instead of creating one. The team must already exist and the calling session must be that team's lead session; the call never re-creates its directory. Used by `/team create`, which has created the team before seeding. Default: false"
                 }
             },
             "required": [
@@ -130,6 +184,32 @@ impl Tool for TeamCreateTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        // Creation is reserved for a team-leader agent. `seed_only` skips this
+        // check but is instead restricted to the team's own lead session (see
+        // `open_team_store`), because the flag is model-visible input.
+        let seed_only = input
+            .get("seed_only")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !seed_only && ctx.agent_role != crate::agent::AgentRole::TeamLeader {
+            return Err(super::param_schema::reason_error(
+                REASON_NOT_TEAM_LEADER,
+                "team_create may only be called by a team-leader agent. Spawn one with \
+                 new_agent agent=\"team-leader\" background=true and pass the blueprint and \
+                 context in its task.",
+            ));
+        }
+
+        // A leader runs exactly one team (spec section 2): a session that
+        // already leads an Active team may not create a second one.
+        if !seed_only && ctx.team_context.is_some() {
+            return Err(super::param_schema::reason_error(
+                REASON_LEADER_HAS_TEAM,
+                "this session already runs a team; a leader runs exactly one team. \
+                 Finish it with team_cleanup before creating another.",
+            ));
+        }
+
         // Blueprint is mandatory now. Validate presence.
         let bp = input
             .get("blueprint")
@@ -139,25 +219,22 @@ impl Tool for TeamCreateTool {
             .map(ToString::to_string)
             .ok_or_else(|| anyhow::anyhow!("'blueprint' parameter is required"))?;
 
-        // Determine team name: use provided name or generate from blueprint + timestamp
-        let name = input
+        // Explicit name (None when generating one).
+        let explicit_name = input
             .get("name")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map_or_else(
-                || {
-                    // SEC-codemason-team-002: the blueprint name is path-adjacent
-                    // too, so the generated team name is slugified rather than
-                    // interpolated raw.
-                    format!(
-                        "{}-{}",
-                        crate::team::slugify_team_name(&bp),
-                        Utc::now().format("%Y%m%d-%H-%M-%S")
-                    )
-                },
-                ToString::to_string,
-            );
+            .map(ToString::to_string);
+        // SEC-codemason-team-002: the blueprint name is path-adjacent too, so
+        // the generated base name is slugified rather than interpolated raw.
+        let base_name = explicit_name.clone().unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                crate::team::slugify_team_name(&bp),
+                Utc::now().format("%Y%m%d-%H-%M-%S")
+            )
+        });
 
         let project_local = input
             .get("project_local")
@@ -181,12 +258,14 @@ impl Tool for TeamCreateTool {
         // fail with ENOTEMPTY (CI flake in
         // `test_slash_arms_deep::team_clear_removes_ta` and
         // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
-        let seed_only = input
-            .get("seed_only")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
 
-        let mut store = open_team_store(&name, ctx, project_local, seed_only)?;
+        let (name, mut store) = open_team_store(
+            &base_name,
+            explicit_name.is_some(),
+            ctx,
+            project_local,
+            seed_only,
+        )?;
 
         // M8-T2: collect per-prompt blueprint spawn failures so the lead is
         // told which teammates failed to spawn instead of only seeing them
@@ -205,9 +284,22 @@ impl Tool for TeamCreateTool {
                 let _ = std::fs::copy(&readme, &dest);
             }
 
-            run_task_seed(&bdir, &store, &name, ctx).await;
+            let task_failures = run_task_seed(&bdir, &store, &name, ctx).await;
             failed_spawns =
                 run_spawn_prompts(&bdir, &mut store, &name, ctx, work_context.as_deref()).await;
+            if seed_only {
+                let wants_teammates = read_json_array(&bdir.join("spawn-prompts.json"))
+                    .is_some_and(|items| !items.is_empty());
+                let members = TeamStore::load_by_name(&name, &ctx.working_dir)
+                    .map_or(store.config.members.len(), |s| s.config.members.len());
+                seed_only_result(
+                    &bp,
+                    &task_failures,
+                    &failed_spawns,
+                    wants_teammates,
+                    members,
+                )?;
+            }
         }
 
         // Reload store to get the final member list after blueprint seeding.
@@ -232,14 +324,7 @@ impl Tool for TeamCreateTool {
                 .custom("lead_session_id", &ctx.session_id)
                 .custom("project_local", project_local)
                 .custom("members_spawned", final_store.config.members.len())
-                .custom(
-                    "auto_named",
-                    input
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .map(str::trim)
-                        .is_none_or(str::is_empty),
-                )
+                .custom("auto_named", explicit_name.is_none())
                 // M8-T2: include the per-prompt spawn failure list in metadata
                 // so programmatic consumers (HTTP API, tests) can detect
                 // partial blueprint seeding without parsing the text output.
@@ -250,44 +335,58 @@ impl Tool for TeamCreateTool {
     }
 }
 
-/// Open the team store `team_create` seeds: the existing team for `seed_only`,
-/// otherwise a newly created one, falling back to the existing team (or a
-/// config-less team directory) when the name is already taken.
+/// Open the team store `team_create` seeds, returning the final team name.
+///
+/// `seed_only` loads the existing team and requires the calling session to be
+/// that team's lead session. Otherwise the team is created with an atomic
+/// create-directory-exclusive (see `TeamStore::create`), so concurrent creates
+/// cannot both win. A generated name that collides gets `-2`, `-3`, ... until
+/// it is free (bounded); an explicit name whose team directory already exists
+/// in any state is refused.
 ///
 /// # Errors
 ///
-/// Returns an error when the team cannot be created or loaded.
+/// Returns an error when the team cannot be created or loaded, when an
+/// explicit name is already taken, or when `seed_only` is requested by a
+/// session other than the team's lead.
 fn open_team_store(
     name: &str,
+    explicit: bool,
     ctx: &ToolContext,
     project_local: bool,
     seed_only: bool,
-) -> Result<TeamStore> {
+) -> Result<(String, TeamStore)> {
     if seed_only {
-        return TeamStore::load_by_name(name, &ctx.working_dir);
-    }
-    match TeamStore::create(name, &ctx.session_id, &ctx.working_dir, project_local) {
-        Ok(store) => Ok(store),
-        Err(e) if e.to_string().contains("already exists") => {
-            // Team already exists; try to load it and continue so that blueprint
-            // seeding can run against an existing team when requested.
-            match TeamStore::load_by_name(name, &ctx.working_dir) {
-                Ok(existing_store) => Ok(existing_store),
-                Err(load_err)
-                    if load_err.to_string().contains("read")
-                        && load_err.to_string().contains("config.json") =>
-                {
-                    TeamStore::initialize_existing_without_config(
-                        name,
-                        &ctx.session_id,
-                        &ctx.working_dir,
-                    )
-                }
-                Err(load_err) => Err(load_err),
-            }
+        let store = TeamStore::load_by_name(name, &ctx.working_dir)?;
+        if store.config.lead_session_id != ctx.session_id {
+            return Err(super::param_schema::reason_error(
+                REASON_NOT_TEAM_LEADER,
+                format!("only team '{name}' lead session may seed it with a blueprint."),
+            ));
         }
-        Err(e) => Err(e),
+        return Ok((name.to_string(), store));
     }
+    /// Upper bound on generated-name suffix attempts.
+    const MAX_ATTEMPTS: u32 = 1000;
+    let mut candidate = name.to_string();
+    for attempt in 2..=MAX_ATTEMPTS + 1 {
+        match TeamStore::create(&candidate, &ctx.session_id, &ctx.working_dir, project_local) {
+            Ok(store) => return Ok((candidate, store)),
+            Err(e) if e.to_string().contains("already exists") => {
+                if explicit {
+                    return Err(anyhow::anyhow!(
+                        "team '{candidate}' already exists; choose a different name or run \
+                         `/team cleanup` to remove it"
+                    ));
+                }
+                candidate = format!("{name}-{attempt}");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(anyhow::anyhow!(
+        "could not find a free team name based on '{name}' after {MAX_ATTEMPTS} attempts"
+    ))
 }
 
 /// Locate the blueprint directory for `bp`, closest wins:
@@ -330,12 +429,19 @@ fn find_blueprint_dir(working_dir: &std::path::Path, bp: &str) -> Option<std::pa
 /// Run the blueprint's `task-seed.json`, if present: each entry naming a
 /// `tool` is dispatched through the permission gate with `team_name` forced to
 /// `name`; an entry with a `title` and no tool becomes a task directly.
-/// Failures are logged and never abort team creation.
-async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ctx: &ToolContext) {
+/// Failures are logged and returned, one line per refused or failed seed
+/// tool; only a `seed_only` call turns them into an error.
+async fn run_task_seed(
+    bdir: &std::path::Path,
+    store: &TeamStore,
+    name: &str,
+    ctx: &ToolContext,
+) -> Vec<String> {
+    let mut failures = Vec::new();
     // If task-seed.json exists, parse and execute each seed
     let seed = bdir.join("task-seed.json");
     let Some(items) = read_json_array(&seed) else {
-        return;
+        return failures;
     };
     let registry = crate::tool::create_default_registry();
     for item in &items {
@@ -379,6 +485,7 @@ async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ct
                     }
                     Err(e) => {
                         tracing::error!(tool = %tool_name, error = %e, arg_keys = %arg_keys, "Seed tool execution failed");
+                        failures.push(format!("task-seed tool '{tool_name}': {e}"));
                     }
                 }
             }
@@ -387,6 +494,7 @@ async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ct
             seed_task(obj, store, name).await;
         }
     }
+    failures
 }
 
 /// Parse `path` as a JSON array, or `None` when it is missing, unreadable or

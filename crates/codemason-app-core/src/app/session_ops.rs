@@ -1068,6 +1068,13 @@ impl App {
         image_paths: Vec<std::path::PathBuf>,
     ) {
         self.session.auto_compact_failed = false;
+        // A team leader or teammate gets a direct user turn.
+        if self.send_to_focused_team_agent(&text) {
+            if !image_paths.is_empty() {
+                self.status = format!("{} (images are not sent to team agents)", self.status);
+            }
+            return;
+        }
         // A running sub-agent is already in a turn: the message joins it.
         if self.send_to_focused_subagent(&text) {
             if !image_paths.is_empty() {
@@ -5023,7 +5030,18 @@ impl App {
     /// target; not part of the crate's public API surface.
     #[doc(hidden)]
     pub fn refresh_team_member_session_ids(&mut self) {
-        let Some(team_name) = self.session.active_team.as_ref().map(|t| t.name.clone()) else {
+        // The Teams pane lists every bound team, so each team's counters are
+        // recounted from its own mailboxes, not only the active team's.
+        let active = self.session.active_team.as_ref().map(|t| t.name.clone());
+        for manager in self.session_processor.team_managers.all() {
+            if active.as_deref() == Some(manager.team_name.as_str()) {
+                continue;
+            }
+            if let Ok(store) = TeamStore::load(&manager.team_dir) {
+                self.recount_team_messages(&store);
+            }
+        }
+        let Some(team_name) = active else {
             return;
         };
         let working_dir = self.cwd_path.clone();
@@ -5071,7 +5089,7 @@ impl App {
         self.recount_team_messages(&store);
     }
 
-    /// Recount `team_message_counts` from the team's mailbox files.
+    /// Recount `team_message_counts` of the team from its mailbox files.
     ///
     /// `sent` is the number of messages a member wrote and `recv` the number it
     /// was sent, both taken over the whole on-disk mailbox set rather than from
@@ -5129,7 +5147,7 @@ impl App {
             let slot = self
                 .session
                 .team_message_counts
-                .entry(agent_id)
+                .entry((store.config.name.clone(), agent_id))
                 .or_insert((0, 0));
             slot.0 = slot.0.max(sent);
             slot.1 = slot.1.max(recv);

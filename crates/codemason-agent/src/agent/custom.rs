@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::agent::oasf::{CODEMASON_MODULE_TYPE, CodemasonAgentPayload, OasfAgentRecord};
-use crate::agent::{AgentInfo, AgentMode, ModelRef};
+use crate::agent::{AgentInfo, AgentMode, AgentRole, ModelRef};
 use crate::permission::{Permission, PermissionAction, PermissionRule};
 use crate::skill::plugin_store_dirs;
 use codemason_plugins::scanned_plugin_agent_files;
@@ -320,6 +320,8 @@ struct ProfileFrontmatter {
     thinking: Option<ThinkingConfig>,
     /// Permission rules - same schema as OASF `codemason/agent/v1`.
     permissions: Option<Vec<crate::agent::oasf::CodemasonPermissionRule>>,
+    /// Functional role: `"standard"` (default) or `"team-leader"`.
+    role: Option<crate::agent::AgentRole>,
     /// Skill names to preload.
     #[serde(default)]
     skills: Vec<String>,
@@ -376,6 +378,7 @@ fn load_agent_profile(path: &Path, is_project_local: bool) -> Result<CustomAgent
         model: fm.model,
         skills: fm.skills,
         permissions: fm.permissions,
+        role: fm.role,
         hidden: fm.hidden,
         memory: fm.memory,
         thinking: fm.thinking,
@@ -534,9 +537,24 @@ pub fn record_to_agent_info(
         return Err("max_steps must be greater than 0".to_string());
     }
 
+    let role = payload.role.unwrap_or_default();
+    // A team leader only runs as a background sub-agent of the primary
+    // (team-leader-agent spec, section 3): a `primary` or `all` mode would
+    // let the primary itself run as a leader and call `team_create`.
+    let mode = match (role, mode) {
+        (AgentRole::TeamLeader, AgentMode::Primary | AgentMode::All) => {
+            tracing::warn!(
+                agent = %record.name,
+                "custom team-leader agent declared a primary mode; it runs as a sub-agent"
+            );
+            AgentMode::Subagent
+        }
+        (AgentRole::TeamLeader | AgentRole::Standard, mode) => mode,
+    };
+
     // -- Parse permissions --------------------------------------------------
-    let permission = if let Some(ref rules) = payload.permissions {
-        rules
+    let custom_rules = if let Some(ref rules) = payload.permissions {
+        let parsed = rules
             .iter()
             .map(|r| {
                 let action = match r.action.as_str() {
@@ -555,9 +573,24 @@ pub fn record_to_agent_info(
                     action,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?
+            .collect::<Result<Vec<_>, String>>()?;
+        Some(parsed)
     } else {
-        crate::agent::default_permissions()
+        None
+    };
+    // A leader always gets the leader tool policy; its own rules are appended
+    // after it, so (last match wins) they narrow or extend it. `new_agent`
+    // stays refused for a leader whatever its rules say: the tool checks the
+    // role itself.
+    let permission = match (role, custom_rules) {
+        (AgentRole::TeamLeader, Some(custom)) => {
+            let mut rules = crate::agent::team_leader_permissions();
+            rules.extend(custom);
+            rules
+        }
+        (AgentRole::TeamLeader, None) => crate::agent::team_leader_permissions(),
+        (AgentRole::Standard, Some(custom)) => custom,
+        (AgentRole::Standard, None) => crate::agent::default_permissions(),
     };
 
     // -- Parse provider options ---------------------------------------------
@@ -603,6 +636,7 @@ pub fn record_to_agent_info(
         model_pinned,
         allowed_tools: None,
         stall_timeout_secs: None,
+        role,
     };
 
     Ok(Arc::new(agent_info))

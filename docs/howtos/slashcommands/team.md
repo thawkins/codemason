@@ -21,7 +21,7 @@ separate `/teams` command surface.
 /team help
 /team status
 /team show [name]
-/team create <blueprint> [name]
+/team create <blueprint> [name] [context]
 /team close
 /team delete <name>
 /team blueprint [name]
@@ -43,7 +43,7 @@ separate `/teams` command surface.
 | `help` | Prints the help table. |
 | `status` | Team and task status summary for the active team. |
 | `show [name]` | Shows team details; an optional team name may be given. |
-| `create <blueprint> [name]` | Creates a team from a blueprint. Without `[name]` the team is auto-named `<blueprint>-<YYYYMMDD-HH-MM-SS>` using the current UTC time. |
+| `create <blueprint> [name] [context]` | Launches a `team-leader` sub-agent that creates and leads a team from a blueprint; your session is never the lead, and the leader reports a summary back when the team is done. Text after `[name]` is passed to the leader as context. Without `[name]` the team is auto-named `<blueprint>-<YYYYMMDD-HH-MM-SS>` using the current UTC time. |
 | `close` | Closes the active team in this session (does not delete it on disk). |
 | `delete <name>` | Deletes the named team from disk (also clears the active state if it is the active team). |
 | `blueprint [name]` | Shows or selects the team blueprint. |

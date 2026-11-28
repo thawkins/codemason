@@ -184,6 +184,8 @@ mod test_ribbon_overflow_gui;
 mod test_runtime_context;
 #[path = "test_sessions_request_popup.rs"]
 mod test_sessions_request_popup;
+#[path = "test_sessions_team_rows_gui.rs"]
+mod test_sessions_team_rows_gui;
 #[path = "test_side_panels.rs"]
 mod test_side_panels;
 #[path = "test_startup.rs"]
@@ -317,6 +319,8 @@ mod test_slash_commands_gui;
 mod test_swarm_gui;
 #[path = "test_tasks_panel_gui.rs"]
 mod test_tasks_panel_gui;
+#[path = "test_teams_multi_gui.rs"]
+mod test_teams_multi_gui;
 #[path = "test_teams_tui_gui.rs"]
 mod test_teams_tui_gui;
 #[path = "test_teams_window_frame_gui.rs"]

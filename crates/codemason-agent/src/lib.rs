@@ -69,6 +69,8 @@ pub mod bang_command;
 /// Background shell task service (M3).
 pub mod background;
 
+/// Readable random names for git branches and team members.
+pub mod readable_names;
 /// Shared adapter that wires the agent tool registry into the research
 /// system's web/local gatherers.
 pub mod research_adapter;

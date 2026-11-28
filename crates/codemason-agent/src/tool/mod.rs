@@ -486,6 +486,8 @@ pub(crate) async fn set_member_status_through_manager(
 ///     read_timestamps: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
 ///     cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
 ///     permission_checker: None,
+///     agent_role: codemason_agent::agent::AgentRole::Standard,
+///     user_input_pending: None,
 ///     allowed_roots: Vec::new(),
 ///     canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
 ///     tool_registry: ToolContext::default_tool_registry(),
@@ -567,6 +569,16 @@ pub struct ToolContext {
     /// never execute nested tools); a nested call then fails closed on an
     /// `Ask` verdict instead of silently running.
     pub permission_checker: Option<Arc<parking_lot::RwLock<crate::permission::PermissionChecker>>>,
+    /// Role of the agent running this tool call. `team_create` (unless
+    /// `seed_only`) requires [`crate::agent::AgentRole::TeamLeader`], and
+    /// `new_agent` refuses a `TeamLeader`; callers without a running agent
+    /// pass [`crate::agent::AgentRole::Standard`].
+    pub agent_role: crate::agent::AgentRole,
+    /// Signalled when a user message lands in this sub-agent session's
+    /// inbox. `team_wait` selects on it so a leader's blocked wait yields to
+    /// the message; `None` for sessions without an inbox (the primary agent,
+    /// tests, adapters).
+    pub user_input_pending: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl ToolContext {

@@ -202,7 +202,7 @@ fn test_t019_renders_leave_the_repository_working_tree_untouched() {
         member("tm-001", "reviewer", MemberStatus::Working),
         member("tm-002", "tester", MemberStatus::Stopped),
     ];
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some((String::new(), "tm-001".to_string()));
     add_custom_agent(&mut app, "rust-coder");
     app.active_tasks = vec![
         task(

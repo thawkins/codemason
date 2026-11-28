@@ -73,16 +73,49 @@ impl Drop for EnvGuard {
     }
 }
 
-/// Redirects `XDG_CONFIG_HOME` to an empty temp dir and clears the two config
-/// override env vars, so `run_dry_run` observes no ambient configuration.
+/// Moves the process cwd into a scratch dir under `target/temp` and restores it
+/// on drop.
+///
+/// With no global or project config on disk, `Config::load()` writes a default
+/// `.codemason/codemason.json` into the process cwd, which under nextest is the
+/// crate directory. Pinning the cwd keeps that first-run write out of the
+/// repository.
+struct CwdGuard {
+    prev: PathBuf,
+}
+
+impl CwdGuard {
+    fn enter() -> Self {
+        let prev = std::env::current_dir().expect("cwd");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/temp/dry-run-extra-cwd")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&dir).expect("scratch cwd");
+        std::env::set_current_dir(&dir).expect("enter scratch cwd");
+        Self { prev }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        // Best effort: the previous cwd always exists unless the test removed it.
+        if let Err(e) = std::env::set_current_dir(&self.prev) {
+            eprintln!("could not restore cwd {}: {e}", self.prev.display());
+        }
+    }
+}
+
+/// Redirects `XDG_CONFIG_HOME` to an empty temp dir, clears the two config
+/// override env vars and pins the cwd to a scratch dir, so `run_dry_run`
+/// observes no ambient configuration and writes nothing into the repository.
 ///
 /// The returned `TempDir` and guards must stay bound for the test's duration.
-fn isolate() -> (TempDir, EnvGuard, EnvGuard, EnvGuard) {
+fn isolate() -> (TempDir, EnvGuard, EnvGuard, EnvGuard, CwdGuard) {
     let xdg = TempDir::new().expect("temp dir");
     let g1 = EnvGuard::set("XDG_CONFIG_HOME", xdg.path());
     let g2 = EnvGuard::remove("CODEMASON_CONFIG");
     let g3 = EnvGuard::remove("CODEMASON_CONFIG_CONTENT");
-    (xdg, g1, g2, g3)
+    (xdg, g1, g2, g3, CwdGuard::enter())
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +225,7 @@ fn spawn_http_responder(status_line: &'static str) -> std::net::SocketAddr {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_config_section_defaults_when_no_config_found() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let work = TempDir::new().expect("work dir");
 
     let (report, exit) =
@@ -212,7 +245,7 @@ async fn test_config_section_defaults_when_no_config_found() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_config_explicit_invalid_json_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = dir.path().join("codemason.json");
     std::fs::write(&path, "{ not valid json").expect("write bad config");
@@ -233,7 +266,7 @@ async fn test_config_explicit_invalid_json_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_config_explicit_missing_file_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = dir.path().join("does-not-exist.json");
 
@@ -305,7 +338,7 @@ async fn test_global_config_invalid_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_project_config_loaded() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let work = TempDir::new().expect("work");
     let project_dir = work.path().join(".codemason");
     std::fs::create_dir_all(&project_dir).expect("mkdir project");
@@ -326,7 +359,7 @@ async fn test_project_config_loaded() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_project_config_invalid_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let work = TempDir::new().expect("work");
     let project_dir = work.path().join(".codemason");
     std::fs::create_dir_all(&project_dir).expect("mkdir project");
@@ -351,7 +384,7 @@ async fn test_project_config_with_a_retired_alias_spelling_is_blocked() {
     // FR-031 (T-042): the readiness report parses the same files the real
     // loader reads, so a `tools.aliases` entry naming a retired codemason tool
     // spelling blocks the config section here exactly as it stops the real load.
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let work = TempDir::new().expect("work");
     let project_dir = work.path().join(".codemason");
     std::fs::create_dir_all(&project_dir).expect("mkdir project");
@@ -385,7 +418,7 @@ async fn test_project_config_with_an_unregistered_alias_target_still_loads() {
     // The other half of FR-031: an alias target this build does not register is
     // not a load error, because a plugin or MCP tool may be bridged after the
     // configuration was read. The readiness report must agree with the loader.
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let work = TempDir::new().expect("work");
     let project_dir = work.path().join(".codemason");
     std::fs::create_dir_all(&project_dir).expect("mkdir project");
@@ -410,7 +443,7 @@ async fn test_project_config_with_an_unregistered_alias_target_still_loads() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_env_config_path_loaded() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let env_path = dir.path().join("env-config.json");
     std::fs::write(&env_path, "{}").expect("write env config");
@@ -431,7 +464,7 @@ async fn test_env_config_path_loaded() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_env_config_path_invalid_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let env_path = dir.path().join("env-config.json");
     std::fs::write(&env_path, "{ bad env").expect("write env config");
@@ -454,7 +487,7 @@ async fn test_env_config_path_invalid_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_env_config_content_inline_loaded() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let _cc = EnvGuard::set("CODEMASON_CONFIG_CONTENT", "{}");
     let work = TempDir::new().expect("work");
 
@@ -470,7 +503,7 @@ async fn test_env_config_content_inline_loaded() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_env_config_content_invalid_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let _cc = EnvGuard::set("CODEMASON_CONFIG_CONTENT", "{ not json");
     let work = TempDir::new().expect("work");
 
@@ -492,7 +525,7 @@ async fn test_env_config_content_invalid_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_provider_model_override_applied() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(&dir, &json!({"provider": {"anthropic": {"env": []}}}));
     let mut ins = inputs(dir.path().to_path_buf(), Some(path));
@@ -513,7 +546,7 @@ async fn test_provider_model_override_applied() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_provider_model_override_invalid_format_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(&dir, &json!({"provider": {"anthropic": {"env": []}}}));
     let mut ins = inputs(dir.path().to_path_buf(), Some(path));
@@ -532,7 +565,7 @@ async fn test_provider_model_override_invalid_format_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_provider_no_model_resolvable_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let work = TempDir::new().expect("work");
     let mut ins = inputs(work.path().to_path_buf(), None);
     // An empty provider registry means `resolve_default_model` finds nothing.
@@ -553,7 +586,7 @@ async fn test_provider_no_model_resolvable_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_provider_all_env_present_ready() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(
         &dir,
@@ -579,7 +612,7 @@ async fn test_provider_all_env_present_ready() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_provider_missing_env_warning() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(
         &dir,
@@ -607,7 +640,7 @@ async fn test_provider_missing_env_warning() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_skills_dir_is_file_warning() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let not_a_dir = dir.path().join("skills-file");
     std::fs::write(&not_a_dir, "not a directory").expect("write file");
@@ -640,7 +673,7 @@ async fn test_skills_dir_is_file_warning() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_tools_unknown_category_warning() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(&dir, &json!({"provider": {"anthropic": {"env": []}}}));
 
@@ -666,7 +699,7 @@ async fn test_tools_unknown_category_warning() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_mcp_disabled_server_ready() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(
         &dir,
@@ -690,7 +723,7 @@ async fn test_mcp_disabled_server_ready() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_mcp_stdio_spawn_success_ready() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(
         &dir,
@@ -714,7 +747,7 @@ async fn test_mcp_stdio_spawn_success_ready() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_mcp_stdio_spawn_failure_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     let path = write_json(
         &dir,
@@ -738,7 +771,7 @@ async fn test_mcp_stdio_spawn_failure_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_mcp_invalid_config_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let dir = TempDir::new().expect("dir");
     // A stdio server with no command fails `validate_mcp_config`.
     let path = write_json(
@@ -763,7 +796,7 @@ async fn test_mcp_invalid_config_blocked() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_mcp_http_reachable_ready() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let addr = spawn_http_responder("200 OK");
     let dir = TempDir::new().expect("dir");
     let path = write_json(
@@ -792,7 +825,7 @@ async fn test_mcp_http_reachable_ready() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_mcp_http_error_status_blocked() {
-    let (_xdg, _g1, _g2, _g3) = isolate();
+    let (_xdg, _g1, _g2, _g3, _cwd) = isolate();
     let addr = spawn_http_responder("500 Internal Server Error");
     let dir = TempDir::new().expect("dir");
     let path = write_json(

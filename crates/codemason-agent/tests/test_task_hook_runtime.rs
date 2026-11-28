@@ -330,6 +330,8 @@ async fn the_completion_tool_fires_the_hook_once() {
         config: None,
         bg_service: None,
         cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
+        user_input_pending: None,
         permission_checker: None,
         read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
             std::collections::HashMap::new(),

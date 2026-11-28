@@ -533,10 +533,9 @@ pub struct SessionProcessor {
     /// Optional agent manager for sub-agent spawning (F13/F14).
     /// Uses `OnceLock` to break the circular dependency with `AgentManager`.
     pub agent_manager: std::sync::OnceLock<Arc<crate::task::AgentManager>>,
-    /// The team runtime this session processor is bound to, if any. A
-    /// rebindable slot (not a `OnceLock`) so a later team gets its own
-    /// manager once the bound team is gone.
-    pub team_manager: crate::team::TeamManagerSlot,
+    /// The team runtimes this session processor drives, one per team name,
+    /// so several teams can run at once.
+    pub team_managers: crate::team::TeamManagers,
     /// M8-T1: cache for `resolve_team_context_for_session`. Maps session id
     /// -> `(TeamContext, Instant)` with a 5-second TTL. Invalidated on team
     /// create/join/leave. Avoids scanning every team directory on every
@@ -831,24 +830,15 @@ impl SessionProcessor {
         let Some(tc) = team_context.filter(|tc| tc.is_lead) else {
             return;
         };
-        if let Some(bound) = self.team_manager.get() {
-            // Team context resolves only `Active` teams, so a manager already
-            // driving this session's team is live: nothing to do, no disk read.
-            if bound.team_name == tc.team_name {
-                return;
-            }
-            // A live manager of another team is kept. One processor serves
-            // many sessions in `serve` mode; replacing it whenever a session
-            // leading a different team ran a step would flip the binding back
-            // and forth and strand each team's running teammates. That team's
-            // `team_spawn` is refused by the manager until it is gone.
-            if bound.team_is_live() {
-                return;
-            }
-            // Its team was closed, deleted or cleaned up: unbind it, unless
-            // another session already rebound the slot meanwhile.
-            tracing::info!(team = %bound.team_name, "unbinding the TeamManager of a team that is gone");
-            self.team_manager.clear_if(&bound);
+        // Drop managers whose team was closed, deleted or cleaned up. Live
+        // managers of other teams are never touched.
+        for gone in self.team_managers.prune_stale() {
+            tracing::info!(team = %gone.team_name, "unbinding the TeamManager of a team that is gone");
+        }
+        // Team context resolves only `Active` teams, so a manager already
+        // bound for this session's team is live: nothing to do, no disk read.
+        if self.team_managers.get(&tc.team_name).is_some() {
+            return;
         }
         let Some(agent_manager) = self.agent_manager.get() else {
             return;
@@ -865,9 +855,9 @@ impl SessionProcessor {
         );
         manager.active_model = Some(model.clone());
         let manager = manager.into_arc();
-        // `set` binds only into an empty slot, so a manager another session
-        // bound in the meantime wins and this one is dropped unused.
-        if self.team_manager.set(Arc::clone(&manager)).is_ok() {
+        // `bind` refuses a live manager for the same team, so one another
+        // session bound in the meantime wins and this one is dropped unused.
+        if self.team_managers.bind(Arc::clone(&manager)).is_ok() {
             tracing::info!(team = %tc.team_name, "TeamManager bound for the lead session");
             Arc::clone(&manager).reconcile_spawning_members();
             manager.start_watchdog();
@@ -3308,9 +3298,10 @@ impl SessionProcessor {
                     active_model: Some(turn.model_ref.clone()),
                     provider_registry: Some(Arc::clone(&self.provider_registry)),
                     team_context: turn.team_context.clone(),
-                    team_manager: self
-                        .team_manager
-                        .get()
+                    team_manager: turn
+                        .team_context
+                        .as_deref()
+                        .and_then(|tc| self.team_managers.get(&tc.team_name))
                         .map(|tm| tm as Arc<dyn crate::tool::TeamManagerInterface>),
                     code_index: self.code_index_for(&turn.working_dir),
                     bg_service: self.bg_service.get().cloned(),
@@ -3319,6 +3310,11 @@ impl SessionProcessor {
                     config: Some(std::sync::Arc::clone(&turn.session_config)),
                     allowed_roots,
                     cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+                    agent_role: agent.role,
+                    user_input_pending: self
+                        .agent_manager
+                        .get()
+                        .and_then(|m| m.inbox_notify(session_id)),
                     // SEC-codemason-team-001: blueprint seed files must run through
                     // the same permission decision as ordinary tool calls.
                     permission_checker: Some(self.permission_checker.clone()),

@@ -227,27 +227,25 @@ fn layout_teams_window_paints_the_lead_and_teammates() {
     stopped.status = MemberStatus::Stopped;
     app.session.team_members.push(stopped);
 
-    app.session.focused_teammate = Some("tm-001".to_string());
+    app.session.focused_teammate = Some(("alpha".to_string(), "tm-001".to_string()));
     app.session
         .team_message_counts
-        .insert("tm-001".to_string(), (3, 2));
+        .insert(("alpha".to_string(), "tm-001".to_string()), (3, 2));
 
     render_effects(&mut app, 160, 44);
     // The renderer publishes the cursor row maps instead of the retired
-    // hit-rect vectors: one key per painted row (header, lead, three
+    // hit-rect vectors: one key per painted row (title, header, lead, three
     // teammates) and the teammate slice for the keyboard cursor (hit-rect
     // rework). A stopped member still carries its key - Space/Del on it
     // resolve (and are refused) through the member status. `tester` is
     // suspended, so the FR-028 parked-member hint row is painted too and
     // carries its own empty key.
-    assert_eq!(app.teams_row_agent_ids.len(), 6);
+    assert_eq!(app.teams_row_agent_ids.len(), 7);
     assert_eq!(
         app.teams_teammate_agent_ids,
-        vec![
-            "tm-001".to_string(),
-            "tm-002".to_string(),
-            "tm-003".to_string(),
-        ]
+        ["tm-001", "tm-002", "tm-003"]
+            .map(|id| ("alpha".to_string(), id.to_string()))
+            .to_vec()
     );
 }
 

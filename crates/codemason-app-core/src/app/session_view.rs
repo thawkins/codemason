@@ -314,7 +314,7 @@ pub struct SessionView {
     /// Current members of the active team (updated from events).
     pub team_members: Vec<TeamMember>,
     /// Per-teammate message counters: `agent_id -> (sent, received)`.
-    pub team_message_counts: HashMap<String, (u32, u32)>,
+    pub team_message_counts: HashMap<(String, String), (u32, u32)>,
     // -- Teams panel caches (FR-003, FR-009) ---------------------------------
     /// Cached per-agent task counts `(claimed, completed)` for the teams
     /// panel.  Updated by `TeamTaskClaimed` / `TeamTaskCompleted` events
@@ -325,18 +325,15 @@ pub struct SessionView {
     /// loads from disk once, then clears it so subsequent frames use the
     /// in-memory cache only.
     pub team_task_counts_dirty: bool,
-    /// Currently focused teammate (agent_id). When set, the status
-    /// bar shows a focus indicator and the input box routes messages
-    /// to this teammate's mailbox instead of the lead session.
-    pub focused_teammate: Option<String>,
+    /// Currently focused teammate as `(team_name, agent_id)`. When set, the
+    /// status bar shows a focus indicator and the input box routes messages
+    /// to this teammate's mailbox instead of the lead session. The team name
+    /// is part of the key because agent ids repeat across teams.
+    pub focused_teammate: Option<(String, String)>,
     /// Active swarm state (if a /swarm is running).
     pub swarm_state: Option<SwarmState>,
     /// Pending result from an async `/swarm` LLM decomposition call.
     pub swarm_result: Arc<std::sync::Mutex<Option<Result<String, String>>>>,
-    /// Pending answer from the async `/swarm` synthesis call that combines a
-    /// finished swarm's task results, tagged with the swarm's team name so
-    /// `App::poll_pending_swarm` drops an answer whose swarm is gone.
-    pub swarm_synthesis_result: Arc<std::sync::Mutex<Option<(String, Result<String, String>)>>>,
     /// When swarm unblock was last polled (debounces filesystem I/O).
     pub swarm_unblock_last_poll: std::time::Instant,
     /// When swarm completion was last polled (debounces filesystem I/O).
@@ -345,9 +342,6 @@ pub struct SessionView {
     /// frontend's thread (`App::poll_swarm_completion`); `Some` is the
     /// in-flight flag.
     pub(super) swarm_autocomplete: Option<crate::app::swarm::SwarmAutoComplete>,
-    /// The finished swarm's synthesis call while it runs; dropping or
-    /// stopping it (swarm cancel, team close) aborts the call.
-    pub(super) swarm_synthesis: Option<crate::app::swarm::SwarmAutoComplete>,
     /// Session ID of the currently selected agent in the agents panel.
     /// When set, messages and logs are filtered to show only from this session.
     /// When `None`, shows primary session messages/logs.
@@ -494,11 +488,9 @@ impl SessionView {
             focused_teammate: None,
             swarm_state: None,
             swarm_result: Arc::new(std::sync::Mutex::new(None)),
-            swarm_synthesis_result: Arc::new(std::sync::Mutex::new(None)),
             swarm_unblock_last_poll: std::time::Instant::now(),
             swarm_completion_last_poll: std::time::Instant::now(),
             swarm_autocomplete: None,
-            swarm_synthesis: None,
             selected_agent_session_id: None,
             pending_forcecleanup: None,
             unread: false,

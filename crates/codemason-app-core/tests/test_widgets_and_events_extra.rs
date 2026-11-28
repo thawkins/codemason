@@ -1303,7 +1303,10 @@ async fn event_teammate_message_tracks_counts() {
     })
     .await;
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-001".to_string()))
+            .copied(),
         Some((1, 0))
     );
 
@@ -1317,11 +1320,17 @@ async fn event_teammate_message_tracks_counts() {
     })
     .await;
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-001".to_string()))
+            .copied(),
         Some((2, 0))
     );
     assert_eq!(
-        app.session.team_message_counts.get("tm-002").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-002".to_string()))
+            .copied(),
         Some((0, 1))
     );
 }
@@ -1342,11 +1351,16 @@ async fn event_message_counters_ignore_lead() {
     })
     .await;
     assert!(
-        !app.session.team_message_counts.contains_key("lead"),
+        !app.session
+            .team_message_counts
+            .contains_key(&("alpha".to_string(), "lead".to_string())),
         "a lead sender must not gain a sent counter"
     );
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-001".to_string()))
+            .copied(),
         Some((0, 1))
     );
 
@@ -1360,10 +1374,17 @@ async fn event_message_counters_ignore_lead() {
     })
     .await;
     assert_eq!(
-        app.session.team_message_counts.get("tm-001").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-001".to_string()))
+            .copied(),
         Some((1, 1))
     );
-    assert!(!app.session.team_message_counts.contains_key("lead"));
+    assert!(
+        !app.session
+            .team_message_counts
+            .contains_key(&("alpha".to_string(), "lead".to_string()))
+    );
 
     app.handle_event(Event::TeammateP2PMessage {
         session_id: "sess-1".to_string(),
@@ -1375,11 +1396,16 @@ async fn event_message_counters_ignore_lead() {
     })
     .await;
     assert!(
-        !app.session.team_message_counts.contains_key("lead"),
+        !app.session
+            .team_message_counts
+            .contains_key(&("alpha".to_string(), "lead".to_string())),
         "a lead P2P sender must not gain a sent counter"
     );
     assert_eq!(
-        app.session.team_message_counts.get("tm-002").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-002".to_string()))
+            .copied(),
         Some((0, 1))
     );
 
@@ -1393,10 +1419,17 @@ async fn event_message_counters_ignore_lead() {
     })
     .await;
     assert_eq!(
-        app.session.team_message_counts.get("tm-002").copied(),
+        app.session
+            .team_message_counts
+            .get(&("alpha".to_string(), "tm-002".to_string()))
+            .copied(),
         Some((1, 1))
     );
-    assert!(!app.session.team_message_counts.contains_key("lead"));
+    assert!(
+        !app.session
+            .team_message_counts
+            .contains_key(&("alpha".to_string(), "lead".to_string()))
+    );
 }
 
 #[tokio::test]

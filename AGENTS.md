@@ -213,19 +213,24 @@ filters, the binary-wide `global_env_lock`, nextest test groups) live in
 
 When asked to use a team or when a task benefits from parallel reviewers / workers:
 
-1. **Create the team**: Use `team_create` with an appropriate `blueprint` (e.g. `code-review`).
-   **Always pass `context`** — the user's specific request details: which directories/files to
-   target, what task to perform, and where to write output. This context is prepended to every
-   teammate's spawn prompt so they know exactly what to work on.
-2. **Wait for results**: Call `team_wait` after creation. This blocks until every teammate becomes idle. **Do NOT use `wait_agents` for teammates — `wait_agents` only tracks `new_agent` sub-agents.**
-3. **Read results**: Use `team_status` or read the team's output files to collect teammate findings.
-4. **Do not duplicate work**: Do not independently read files or do analysis that a teammate is already doing. Wait for them first.
+1. **Spawn a team leader**: The primary agent never creates teams itself (`team_create`
+   refuses a non-leader). Use `new_agent agent="team-leader" background=true` with a task
+   that names the `blueprint` (e.g. `code-review`) and the full context: which
+   directories/files to target, what task to perform, and where to write output. The leader
+   creates the team, passes that context to every teammate, runs `team_wait`, follows up and
+   returns a summary. Several leaders can run at once, one team each.
+2. **Wait for results**: Call `wait_agents` for the leader tasks. Each leader's summary
+   arrives like any background `new_agent` result. (`team_wait` is the leader's tool, not
+   the primary's.)
+3. **Read results**: Use the leader's summary, or read the team's output files.
+4. **Do not duplicate work**: Do not independently read files or do analysis that a team is already doing. Wait for the leader first.
 
 ```
-team_create blueprint="code-review" context="Review the crates/codemason-server directory for security, test coverage, and performance issues. Write findings to docs/COMPLIANCE.md"
-team_wait                          ← REQUIRED: blocks until all idle
-team_status                        ← read what they found
+new_agent agent="team-leader" background=true task="Use blueprint code-review. Context: Review the crates/codemason-server directory for security, test coverage, and performance issues. Write findings to docs/COMPLIANCE.md"
+wait_agents                        <- REQUIRED: blocks until the leader returns its summary
 ```
+
+`/team create <blueprint> [name] [context]` and `/swarm` launch a team leader the same way.
 
 ## GUI Design: Material First
 

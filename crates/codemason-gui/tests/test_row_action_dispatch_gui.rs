@@ -277,7 +277,7 @@ fn bind_team_manager(app: &mut App, status: MemberStatus) -> PathBuf {
         app.session_processor.clone(),
         app.event_bus.clone(),
     ));
-    let _ = app.session_processor.team_manager.set(manager);
+    let _ = app.session_processor.team_managers.bind(manager);
     store.dir
 }
 
