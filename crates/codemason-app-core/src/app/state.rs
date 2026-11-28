@@ -3870,7 +3870,7 @@ pub struct App {
     /// session never runs two turns at once.
     pub(crate) leader_resumes: HashSet<String>,
     /// Outcomes of finished resume launches, drained by `poll_timers`.
-    pub(crate) leader_resume_outcomes:
+    pub(super) leader_resume_outcomes:
         Arc<std::sync::Mutex<Vec<crate::app::sessions::LeaderResumeOutcome>>>,
     /// Bounded history of recently finished sub-agent tasks, newest first
     /// (spec `agentssetup` FR-021, FR-028, FR-036).

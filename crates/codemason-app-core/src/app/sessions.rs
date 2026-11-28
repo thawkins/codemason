@@ -50,7 +50,7 @@ enum TeamAgent {
 
 /// How a detached resume of a finished team leader ended.
 #[derive(Debug)]
-pub struct LeaderResumeOutcome {
+pub(super) struct LeaderResumeOutcome {
     /// The leader's session.
     session_id: String,
     /// The agent it was resumed as.

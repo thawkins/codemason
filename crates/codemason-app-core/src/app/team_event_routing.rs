@@ -26,7 +26,7 @@ use super::state::App;
 /// Where [`App::handle_event`] sends one team event: the view that runs the
 /// full handler and the other views that only mirror its state change.
 /// `None` is the focused view, `Some(index)` a background view.
-pub struct TeamEventRoute {
+pub(super) struct TeamEventRoute {
     /// The view that runs the full handler.
     pub owner: Option<usize>,
     /// The other views that track the team.
@@ -162,7 +162,7 @@ impl App {
     /// event when it tracks the team; otherwise the first tracking view
     /// (focused first) runs the full handler. Every other tracking view
     /// mirrors the state change.
-    pub(crate) fn team_event_route(
+    pub(super) fn team_event_route(
         &self,
         owner: Option<usize>,
         session_id: &str,
