@@ -32,6 +32,8 @@ fn team_app() -> (
     let (guard, env, temp) = enter_project(r#"{ "defaultAgent": "general" }"#);
     std::fs::create_dir_all(temp.path().join(".codemason/teams")).expect("create teams dir");
     std::fs::create_dir_all(temp.path().join(".codemason")).expect("create .codemason");
+    support::install_test_blueprint(temp.path(), "bp1", &[]);
+    support::install_test_blueprint(temp.path(), "demo-blueprint", &[]);
     let app = app_with_leader_runtime();
     (guard, env, temp, app)
 }

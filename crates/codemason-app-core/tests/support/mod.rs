@@ -272,3 +272,25 @@ pub fn attach_leader_runtime(app: &mut App) -> Arc<codemason_agent::task::AgentM
         .cloned()
         .unwrap_or(manager)
 }
+
+/// Install a project-local team blueprint `name` under `root` (which must be
+/// a scratch project, never the repository). Each entry of `teammates` is a
+/// teammate the blueprint spawns (`general` agent); an empty slice makes a
+/// blueprint that seeds nothing.
+#[allow(dead_code)]
+pub fn install_test_blueprint(root: &std::path::Path, name: &str, teammates: &[&str]) {
+    let dir = root.join(".codemason/blueprints/teams").join(name);
+    std::fs::create_dir_all(&dir).expect("create blueprint dir");
+    std::fs::write(dir.join("README.md"), "A test blueprint.").expect("write blueprint readme");
+    if !teammates.is_empty() {
+        let prompts: Vec<serde_json::Value> = teammates
+            .iter()
+            .map(|t| serde_json::json!({"tool": "team_spawn", "teammate_name": t, "agent_type": "general", "prompt": "go"}))
+            .collect();
+        std::fs::write(
+            dir.join("spawn-prompts.json"),
+            serde_json::to_string(&prompts).expect("blueprint json"),
+        )
+        .expect("write spawn prompts");
+    }
+}

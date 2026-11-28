@@ -7372,6 +7372,22 @@ than assumed.
 
         let working_dir = self.cwd_path.clone();
         let sid = self.session.session_id.clone().unwrap_or_default();
+        // Seeding runs before the leader starts, so a blueprint that is not
+        // installed is refused before any leader or team exists.
+        let blueprint_installed = blueprints::list_installed_blueprints(&working_dir)
+            .iter()
+            .any(|installed| installed.name == blueprint);
+        if !blueprint_installed {
+            self.status = format!(
+                "Failed to create team: blueprint '{blueprint}' is not installed \
+                 (see /team blueprint)"
+            );
+            self.push_log_no_agent(
+                LogLevel::Error,
+                format!("team create failed: blueprint '{blueprint}' is not installed"),
+            );
+            return std::ops::ControlFlow::Continue(());
+        }
         // The primary is never a team lead: a `team-leader` sub-agent of this
         // session creates and leads the team, and reports back here.
         let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
@@ -7400,24 +7416,52 @@ than assumed.
         };
         let leader_task =
             codemason_agent::team::leader::leader_task_for_existing_team(&name, &leader_context);
-        let launched = codemason_agent::team::leader::launch_leader_for_team(
+        // The blueprint seed runs inside the launch, after the team exists
+        // and before the leader's first step, so the leader's first
+        // `team_wait` already sees its teammates. It is issued with
+        // `seed_only` as the leader's session (the only session allowed to
+        // seed): it applies the blueprint to the existing team and never
+        // re-creates a directory a concurrent `/team clear` removed.
+        let seed = TeamSeed {
+            session_processor: Arc::clone(&self.session_processor),
+            event_bus: self.event_bus.clone(),
+            storage: self.storage.clone(),
+            working_dir: working_dir.clone(),
+            team_name: name.clone(),
+            blueprint: blueprint.clone(),
+            active_model: active_model.clone(),
+        };
+        let launched = match codemason_agent::team::leader::launch_leader_for_team_with_seed(
             &agent_manager,
             &sid,
             &working_dir,
             &name,
             &leader_task,
-            active_model.clone(),
+            active_model,
+            |leader| seed.run(leader),
         )
         .await
-        .and_then(|launch| {
-            TeamStore::load_by_name(&launch.team_name, &working_dir).map(|store| (launch, store))
-        });
+        {
+            Ok(launch) => match TeamStore::load_by_name(&launch.team_name, &working_dir) {
+                Ok(store) => Ok((launch, store)),
+                Err(e) => {
+                    // Never leave a leader running for a team this command
+                    // cannot show.
+                    codemason_agent::team::leader::cancel_leader_for_session(
+                        &agent_manager,
+                        &launch.leader_session_id,
+                    )
+                    .await;
+                    Err(e)
+                }
+            },
+            Err(e) => Err(e),
+        };
         match launched {
             Ok((launch, store)) => {
                 let name = store.config.name.clone();
-                let leader_sid = launch.leader_session_id.clone();
+                self.session.team_members = store.config.members.clone();
                 self.session.active_team = Some(store.config);
-                self.session.team_members.clear();
                 self.session
                     .team_message_counts
                     .retain(|(team, _), _| team != &name);
@@ -7434,118 +7478,10 @@ than assumed.
                     name, launch.task_id
                 ));
                 self.status = format!("team: {}", name);
-
-                // If the blueprint is installed, invoke the
-                // `team_create` tool to apply its seeding.
-                //
-                // `/team create` has already created the team
-                // above, so the seeding call is issued with
-                // `seed_only`: it applies the blueprint to the
-                // existing team instead of re-creating it. A
-                // re-creating call that ran after the team
-                // directory was removed (a `/team clear` or
-                // `/team forcecleanup` racing this detached
-                // thread) resurrected the tree, so the removal
-                // failed with ENOTEMPTY or the directory came
-                // back (CI flake in
-                // `test_slash_arms_deep::team_clear_removes_ta`
-                // and
-                // `test_slash_teams_deep::forcecleanup_confirm_removes_team`).
-                // A blueprint that is not installed has nothing
-                // to seed, so the thread is not started at all.
-                let bp = blueprint.clone();
-                let blueprint_installed = blueprints::list_installed_blueprints(&working_dir)
-                    .iter()
-                    .any(|installed| installed.name == bp);
-                if !bp.is_empty() && blueprint_installed {
-                    let session_processor = self.session_processor.clone();
-                    let event_bus = self.event_bus.clone();
-                    let storage = self.storage.clone();
-                    let working_dir_clone = working_dir.clone();
-                    // The seed runs as the leader: `seed_only` is allowed only
-                    // for the team's lead session.
-                    let sid_clone = leader_sid;
-                    let name_clone = name.clone();
-                    let active_model_clone = active_model;
-                    std::thread::spawn(move || {
-                        // Create a small runtime for seeding if there is no existing Tokio runtime
-                        let rt = match tokio::runtime::Runtime::new() {
-                            Ok(rt) => rt,
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to create tokio runtime for team seed: {e}"
-                                );
-                                return;
-                            }
-                        };
-                        rt.block_on(async move {
-                            let registry = codemason_agent::tool::create_default_registry();
-                            if let Some(tool) = registry.get("team_create") {
-                                let input = serde_json::json!({
-                                    "name": name_clone,
-                                    "project_local": true,
-                                    "seed_only": true,
-                                    "blueprint": bp,
-                                });
-                                let ctx = codemason_agent::tool::ToolContext {
-                                    session_id: sid_clone.clone(),
-                                    working_dir: working_dir_clone.clone(),
-                                    event_bus: event_bus.clone(),
-                                    storage: Some(storage.clone()),
-                                    agent_manager: None,
-                                    active_model: active_model_clone,
-                                    provider_registry: Some(Arc::clone(
-                                        &session_processor.provider_registry,
-                                    )),
-                                    team_context: None,
-                                    team_manager: session_processor
-                                        .team_managers
-                                        .get(&name_clone)
-                                        .map(|tm| {
-                                            tm as Arc<
-                                                dyn codemason_agent::tool::TeamManagerInterface,
-                                            >
-                                        }),
-                                    code_index: None,
-                                    bg_service: None,
-                                    spec_manager: session_processor.spec_manager.get().cloned(),
-                                    active_spec_id: session_processor
-                                        .active_spec
-                                        .read()
-                                        .await
-                                        .clone(),
-                                    config: Some(Arc::new(
-                                        codemason_agent::Config::load_for(&working_dir_clone)
-                                            .unwrap_or_default(),
-                                    )),
-                                    allowed_roots: vec![working_dir_clone.clone()],
-                                    cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
-                                    // SEC-codemason-team-001: hand the nested team_create
-                                    // call the session's checker so a blueprint seed
-                                    // cannot execute tools without approval.
-                                    agent_role: codemason_agent::agent::AgentRole::Standard,
-                                    user_input_pending: None,
-                                    permission_checker: Some(
-                                        session_processor.permission_checker.clone(),
-                                    ),
-                                    tool_registry:
-                                        codemason_agent::tool::ToolContext::default_tool_registry(),
-                                    read_timestamps: session_processor.read_timestamps.clone(),
-                                    canonical_cache: Arc::new(
-                                        codemason_tools_core::CanonicalPathCache::new(),
-                                    ),
-                                };
-                                if let Err(e) = tool.execute(input, &ctx).await {
-                                    tracing::error!("team create tool failed: {e}");
-                                }
-                            }
-                        });
-                    });
-                }
             }
             Err(e) => {
-                self.status = format!("Failed to create team: {}", e);
-                self.push_log_no_agent(LogLevel::Error, format!("team create failed: {}", e));
+                self.status = format!("Failed to create team: {e:#}");
+                self.push_log_no_agent(LogLevel::Error, format!("team create failed: {e:#}"));
             }
         }
         std::ops::ControlFlow::Continue(())
@@ -7695,6 +7631,30 @@ than assumed.
         std::ops::ControlFlow::Continue(())
     }
 
+    /// Cancel the running team-leader task that leads `team_name`, found by
+    /// the team's recorded `lead_session_id`, so closing or removing a team
+    /// never leaves its leader running. A team that cannot be loaded, or a
+    /// processor without an agent manager, has no leader to cancel.
+    async fn cancel_team_leader(&mut self, team_name: &str) {
+        let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
+            return;
+        };
+        let Ok(store) = TeamStore::load_by_name(team_name, &self.cwd_path) else {
+            return;
+        };
+        if codemason_agent::team::leader::cancel_leader_for_session(
+            &agent_manager,
+            &store.config.lead_session_id,
+        )
+        .await
+        {
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("[team] Team '{team_name}': its team leader was cancelled"),
+            );
+        }
+    }
+
     /// Run the `/team close` sub-command.
     async fn team_close(&mut self) {
         if let Some(team) = self.session.active_team.as_ref() {
@@ -7702,6 +7662,7 @@ than assumed.
             // Closing cancels the team's swarm: stop its
             // finalising job first.
             self.stop_swarm_autocomplete(&team_name).await;
+            self.cancel_team_leader(&team_name).await;
             self.session.active_team = None;
             self.session.team_members.clear();
             self.session
@@ -7804,6 +7765,7 @@ than assumed.
         // Nothing of a finalising job may write into the
         // directory while it is removed (ENOTEMPTY).
         self.stop_swarm_autocomplete(&name_owned).await;
+        self.cancel_team_leader(&name_owned).await;
         match TeamStore::load_by_name(rest, &working_dir) {
             Ok(store) => match std::fs::remove_dir_all(&store.dir) {
                 Ok(_) => {
@@ -8213,6 +8175,7 @@ than assumed.
             // Nothing of a finalising job may write into the
             // directory while it is removed (ENOTEMPTY).
             self.stop_swarm_autocomplete(&team_name).await;
+            self.cancel_team_leader(&team_name).await;
             match TeamStore::load_by_name(&team_name, &working_dir) {
                 Ok(mut store) => {
                     // Attempt shutdown of active teammate sessions first.
@@ -16153,4 +16116,71 @@ fn handle_skill_command(app: &mut App, args: &str) {
 /// Parse a spec ID from a command argument.
 fn parse_spec_id(spec_id: &str) -> Option<codemason_specs::spec::SpecId> {
     codemason_specs::spec::SpecId::new(spec_id)
+}
+
+/// What `/team create` needs to seed a blueprint into a team from inside
+/// the team leader's launch (see `launch_leader_for_team_with_seed`).
+struct TeamSeed {
+    session_processor: Arc<codemason_agent::session::processor::SessionProcessor>,
+    event_bus: Arc<codemason_agent::event::EventBus>,
+    storage: Arc<codemason_agent::storage::Storage>,
+    working_dir: std::path::PathBuf,
+    team_name: String,
+    blueprint: String,
+    active_model: Option<codemason_agent::agent::ModelRef>,
+}
+
+impl TeamSeed {
+    /// Apply the blueprint to the existing team with the `team_create` tool
+    /// (`seed_only: true`), as the leader's session and through the team's
+    /// bound manager.
+    ///
+    /// # Errors
+    ///
+    /// When the tool is missing or the seeding call fails.
+    async fn run(self, leader: codemason_agent::team::leader::LeaderSeed) -> anyhow::Result<()> {
+        let registry = codemason_agent::tool::create_default_registry();
+        let tool = registry
+            .get("team_create")
+            .ok_or_else(|| anyhow::anyhow!("the team_create tool is not registered"))?;
+        let input = serde_json::json!({
+            "name": self.team_name,
+            "project_local": true,
+            "seed_only": true,
+            "blueprint": self.blueprint,
+        });
+        let processor = &self.session_processor;
+        let ctx = codemason_agent::tool::ToolContext {
+            session_id: leader.leader_session_id.clone(),
+            working_dir: self.working_dir.clone(),
+            event_bus: self.event_bus.clone(),
+            storage: Some(self.storage.clone()),
+            agent_manager: None,
+            active_model: self.active_model.clone(),
+            provider_registry: Some(Arc::clone(&processor.provider_registry)),
+            team_context: None,
+            team_manager: Some(
+                leader.manager as Arc<dyn codemason_agent::tool::TeamManagerInterface>,
+            ),
+            code_index: None,
+            bg_service: None,
+            spec_manager: processor.spec_manager.get().cloned(),
+            active_spec_id: processor.active_spec.read().await.clone(),
+            config: Some(Arc::new(
+                codemason_agent::Config::load_for(&self.working_dir).unwrap_or_default(),
+            )),
+            allowed_roots: vec![self.working_dir.clone()],
+            cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+            // SEC-codemason-team-001: hand the nested team_create call the
+            // session's checker so a blueprint seed cannot execute tools
+            // without approval.
+            agent_role: codemason_agent::agent::AgentRole::Standard,
+            user_input_pending: None,
+            permission_checker: Some(processor.permission_checker.clone()),
+            tool_registry: codemason_agent::tool::ToolContext::default_tool_registry(),
+            read_timestamps: processor.read_timestamps.clone(),
+            canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
+        };
+        tool.execute(input, &ctx).await.map(|_| ())
+    }
 }

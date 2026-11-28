@@ -238,14 +238,17 @@ The `context` parameter is critical — it tells every auto-spawned teammate **e
 
 If the team already exists, `team_create` gracefully recovers and re-applies the blueprint.
 
-The GUI's `/team create` launches the team leader (`launch_leader_for_team`), which
-creates the team with the leader's session as lead before the leader's first step, and
-then seeds the blueprint with `seed_only: true` as the leader's session. `seed_only`
+The GUI's `/team create` first refuses a blueprint that is not installed, before anything
+is created. It then launches the team leader (`launch_leader_for_team_with_seed`): the team
+is created with the leader's session as lead, and the blueprint is seeded with
+`seed_only: true` as the leader's session, all before the leader's first step, so the
+leader's first `team_wait` already sees its teammates. A seeding error fails the launch:
+the team and the leader session are removed and no leader task is left. `seed_only`
 applies the blueprint to the existing team and never creates (or re-creates) its
-directory, and it is accepted only from the team's lead session. That keeps a seeding
-call from resurrecting a team directory that a concurrent `/team clear` or
-`/team forcecleanup` has just removed. The leader is told the team already exists, so it
-skips `team_create` and goes straight to `team_wait`.
+directory, and it is accepted only from the team's lead session. The leader is told the
+team already exists, so it skips `team_create`, goes straight to `team_wait`, and calls
+`team_cleanup` once it has its summary. `/team close`, `/team delete` and
+`/team forcecleanup` cancel the team's running leader.
 
 ### 6.2 Wait for teammates
 
@@ -831,8 +834,8 @@ creates an ephemeral team, and orchestrates parallel execution.
 1. The swarm analyses your prompt using the selected LLM model.
 2. It breaks the goal into independent subtasks with dependency edges.
 3. It launches a `team-leader` sub-agent, which leads an ephemeral team created
-   for it, and spawns teammates for each subtask. Your session is never the
-   team's lead; the leader waits on the teammates and reports a summary back.
+   for it; the tasks and one teammate per subtask are seeded before the leader
+   starts. Your session is never the team's lead.
 4. Teammates work in parallel on tasks that are ready. The swarm team runs with
    `auto_claim_tasks` **off** and pre-assigns each task to its own teammate (a
    ready task at spawn, a dependent one when it unblocks), so an idle teammate
@@ -840,12 +843,14 @@ creates an ephemeral team, and orchestrates parallel execution.
 5. A blocked subtask is spawned once its dependencies complete, with a
    `Results from dependencies` section carrying up to 4 KiB of each
    predecessor's `team_task_complete` result.
-6. When every subtask has finished, the selected model synthesises one answer
-   from the goal and each task's status and result, shown as "Swarm Result".
-   A failed call is reported as "Synthesis Failed" instead of passing a partial
-   answer off as success.
+6. The leader is a passive supervisor: it never re-assigns tasks or shuts
+   teammates down, and keeps calling `team_wait` until every subtask is done.
+   It then synthesises one answer from the goal and each task's result
+   (`SYNTHESIS_SYSTEM_PROMPT` guidance), calls `team_cleanup`, and returns the
+   answer to your session like any background `new_agent` result. The swarm
+   view reports the per-task tally only.
 7. You monitor progress via `/swarm status` and can cancel with
-   `/swarm cancel`; a cancel aborts an in-flight synthesis call.
+   `/swarm cancel`, which closes the team and cancels its leader.
 
 ### Example
 

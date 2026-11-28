@@ -198,3 +198,53 @@ async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
     app.stop_swarm_autocomplete(&state.team_name).await;
     std::fs::remove_dir_all(&dir).expect("clean scratch dir");
 }
+
+/// `/swarm cancel` cancels the swarm's running team leader.
+#[tokio::test]
+async fn test_swarm_cancel_stops_the_leader() {
+    let dir = scratch("cancel-leader");
+    let mut app = support::make_app();
+    app.cwd_path = dir.clone();
+    app.session.directory = dir.clone();
+    let manager = support::attach_leader_runtime(&mut app);
+    let primary = app.session.session_id.clone().expect("primary");
+    let store = TeamStore::create(TEAM, "swarm-leader-sess", &dir, true).expect("team");
+    app.session.active_team = Some(store.config.clone());
+    app.session.swarm_state = Some(SwarmState {
+        team_name: TEAM.to_string(),
+        prompt: "Harden auth".to_string(),
+        decomposition: SwarmDecomposition { tasks: Vec::new() },
+        spawned: true,
+        completed: false,
+        default_agent_type: None,
+    });
+    let leader = codemason_agent::task::TaskEntry {
+        id: "team-leader-swarm".to_string(),
+        parent_session_id: primary,
+        child_session_id: "swarm-leader-sess".to_string(),
+        agent_name: "team-leader".to_string(),
+        task_prompt: "lead the swarm".to_string(),
+        background: true,
+        detached: false,
+        status: codemason_agent::task::TaskStatus::Running,
+        result: None,
+        error: None,
+        created_at: chrono::Utc::now(),
+        completed_at: None,
+        reported: false,
+        waiter_count: 0,
+        output_file: None,
+        report_status: codemason_agent::task::ReportStatus::default(),
+        time_bound_secs: None,
+    };
+    let flag = manager.insert_task_for_test(leader);
+
+    app.execute_slash_command("/swarm cancel").await;
+
+    assert_eq!(app.status, "swarm: cancelled");
+    assert!(
+        flag.load(std::sync::atomic::Ordering::Relaxed),
+        "cancelling the swarm cancels its leader"
+    );
+    std::fs::remove_dir_all(&dir).expect("clean scratch dir");
+}

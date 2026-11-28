@@ -510,6 +510,7 @@ async fn test_team_create_sets_active_team() {
     // Create the .codemason directory so project-local teams can be stored.
     std::fs::create_dir_all(tmp.path().join(".codemason/teams")).unwrap();
 
+    support::install_test_blueprint(tmp.path(), "bp1", &[]);
     let mut app = support::make_app();
     support::attach_leader_runtime(&mut app);
 

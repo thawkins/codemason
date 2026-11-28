@@ -59,6 +59,7 @@ fn isolated_app() -> Harness {
 fn team_app() -> Harness {
     let (guard, env, temp) = enter_project(r#"{ "defaultAgent": "general" }"#);
     std::fs::create_dir_all(temp.path().join(".codemason/teams")).expect("create teams dir");
+    support::install_test_blueprint(temp.path(), "bp1", &[]);
     let app = app_with_leader_runtime();
     (guard, env, temp, app)
 }

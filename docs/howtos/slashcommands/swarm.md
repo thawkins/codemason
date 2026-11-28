@@ -94,18 +94,16 @@ own teammate (a ready task at spawn, a dependent one at unblock). An idle
 teammate therefore never takes another subtask with only a task id - it always
 has that task's description and dependency results.
 
-### The swarm synthesises one answer
+### The swarm's team leader synthesises one answer
 
-When every subtask has finished and at least one completed, the swarm combines
-the results into a single answer with one LLM call on the session's selected
-model (`SYNTHESIS_SYSTEM_PROMPT`). It receives the goal plus each task's status
-and result, and its answer is shown in the chat as **Swarm Result**. The
-per-task status table is still shown above it.
-
-- With no model selected, the swarm ends with the status table only.
-- A failed synthesis call - including a provider stream error - is reported as
-  **Swarm Error** / **Synthesis Failed** rather than passing a partial answer
-  off as success.
+A swarm team is led by a `team-leader` sub-agent of your session. The leader
+waits until every subtask has finished (it never re-assigns tasks or shuts
+teammates down; blocked teammates start as their dependencies finish), then
+combines the results into a single answer following `SYNTHESIS_SYSTEM_PROMPT`,
+calls `team_cleanup`, and returns the answer to your session like any
+background `new_agent` result. The swarm view shows the per-task status table
+when the subtasks are done. `/swarm cancel` closes the team and cancels its
+leader.
 
 ## Notes
 

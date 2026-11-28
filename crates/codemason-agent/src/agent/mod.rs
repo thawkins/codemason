@@ -979,7 +979,7 @@ directories and files to target, and where output must be written.\n\
 3. Call `team_wait` to block until every teammate is idle.\n\
 4. Read `team_status` and the teammates' outputs.\n\
 5. Re-assign work or shut down teammates that are stuck or incomplete, then wait again.\n\
-6. Call `team_cleanup` when the team is finished.\n\n\
+6. When you have what your summary needs, call `team_cleanup`.\n\n\
 Your final message is a concise summary: the results, the files written, and any \
 unresolved items. You cannot edit files, run shell commands or spawn other agents.";
 
