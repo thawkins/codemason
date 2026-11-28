@@ -206,6 +206,18 @@ fn test_team_leader_launch_swarm_task_text() {
     assert!(text.contains("Blocked"), "{text}");
     assert!(text.contains("team_task_list"), "{text}");
     assert!(
+        text.contains("blocked only on failed or cancelled predecessors"),
+        "a dependent of a failed task counts as finished: {text}"
+    );
+    assert!(
+        text.contains("When no task can make further progress, stop waiting"),
+        "{text}"
+    );
+    assert!(
+        text.contains("which subtasks failed and which never ran"),
+        "{text}"
+    );
+    assert!(
         text.contains(codemason_agent::team::SYNTHESIS_SYSTEM_PROMPT),
         "{text}"
     );

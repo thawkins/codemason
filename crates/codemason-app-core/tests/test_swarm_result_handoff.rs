@@ -248,3 +248,79 @@ async fn test_swarm_cancel_stops_the_leader() {
     );
     std::fs::remove_dir_all(&dir).expect("clean scratch dir");
 }
+
+/// The swarm leader's own `team_cleanup` reports the leader's session; the
+/// frontend that launched it still clears the swarm and drops the team from
+/// the pane, so a new `/swarm` is accepted.
+#[tokio::test]
+async fn test_swarm_leader_cleanup_clears_swarm_state() {
+    let dir = scratch("leader-cleanup");
+    let mut app = support::make_app();
+    app.cwd_path = dir.clone();
+    app.session.directory = dir.clone();
+    support::attach_leader_runtime(&mut app);
+    let primary = app.session.session_id.clone().expect("primary");
+    let leader = app
+        .session_processor
+        .session_manager
+        .create_child_session(
+            dir.clone(),
+            &primary,
+            codemason_storage::SessionKind::Subagent,
+        )
+        .expect("leader session");
+    let store = TeamStore::create(TEAM, &leader.id, &dir, true).expect("team");
+    let manager = codemason_agent::team::TeamManager::new(
+        TEAM,
+        leader.id.clone(),
+        store.dir.clone(),
+        std::sync::Arc::clone(&app.session_processor),
+        app.event_bus.clone(),
+    )
+    .into_arc();
+    assert!(app.session_processor.team_managers.bind(manager).is_ok());
+    app.session.swarm_state = Some(SwarmState {
+        team_name: TEAM.to_string(),
+        prompt: "Harden auth".to_string(),
+        decomposition: SwarmDecomposition { tasks: Vec::new() },
+        spawned: true,
+        completed: true,
+        default_agent_type: None,
+    });
+
+    app.handle_event(codemason_agent::event::Event::TeamCleanedUp {
+        session_id: leader.id.clone(),
+        team_name: TEAM.to_string(),
+    })
+    .await;
+
+    assert!(app.session.swarm_state.is_none(), "the swarm is cleared");
+    assert!(
+        app.session_processor.team_managers.get(TEAM).is_none(),
+        "the team is dropped from the pane"
+    );
+    app.execute_slash_command("/swarm Harden auth again").await;
+    assert_ne!(
+        app.status, "[warn] A swarm is already active - use /swarm cancel first",
+        "a new swarm is accepted"
+    );
+
+    // A cleanup reported by a session that is not this session's leader is
+    // ignored.
+    app.session.swarm_state = Some(SwarmState {
+        team_name: "swarm-other".to_string(),
+        prompt: "x".to_string(),
+        decomposition: SwarmDecomposition { tasks: Vec::new() },
+        spawned: true,
+        completed: true,
+        default_agent_type: None,
+    });
+    app.handle_event(codemason_agent::event::Event::TeamCleanedUp {
+        session_id: "stranger".to_string(),
+        team_name: "swarm-other".to_string(),
+    })
+    .await;
+    assert!(app.session.swarm_state.is_some());
+    // INTENTIONAL: a `/swarm` call may still be writing; leftovers stay in target/temp.
+    let _ = std::fs::remove_dir_all(&dir);
+}

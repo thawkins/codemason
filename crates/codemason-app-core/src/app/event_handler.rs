@@ -727,7 +727,9 @@ impl App {
             Event::TeamCleanedUp {
                 ref session_id,
                 ref team_name,
-            } if self.is_current_session(session_id) => {
+            } if self.is_current_session(session_id)
+                || self.is_own_team_leader(session_id, team_name) =>
+            {
                 self.on_team_cleaned_up(team_name).await;
             }
             Event::ShellCwdChanged {
@@ -3543,6 +3545,41 @@ impl App {
     /// Report whether `session_id` is the session this app is currently driving.
     pub fn is_current_session(&self, session_id: &str) -> bool {
         self.session.session_id.as_deref() == Some(session_id)
+    }
+
+    /// Whether `session_id` is the team-leader session of `team_name`, a team
+    /// this session tracks: the leader recorded as the active team's lead,
+    /// or a child session of this session that leads the swarm team or the
+    /// team's bound manager. A leader's own `team_cleanup` reports its own
+    /// session, so the frontend that launched it must still react.
+    #[must_use]
+    pub fn is_own_team_leader(&self, session_id: &str, team_name: &str) -> bool {
+        if self
+            .session
+            .active_team
+            .as_ref()
+            .is_some_and(|t| t.name == team_name && t.lead_session_id == session_id)
+        {
+            return true;
+        }
+        let tracked = self
+            .session
+            .swarm_state
+            .as_ref()
+            .is_some_and(|s| s.team_name == team_name)
+            || self
+                .session_processor
+                .team_managers
+                .get(team_name)
+                .is_some_and(|m| m.lead_session_id == session_id);
+        let Some(current) = self.session.session_id.as_deref() else {
+            return false;
+        };
+        tracked
+            && matches!(
+                self.session_processor.session_manager.get_session(session_id),
+                Ok(Some(child)) if child.parent_id.as_deref() == Some(current)
+            )
     }
 
     /// Surface OTLP metric-export failures as "Agent Notice" bubbles and act on

@@ -97,9 +97,10 @@ has that task's description and dependency results.
 ### The swarm's team leader synthesises one answer
 
 A swarm team is led by a `team-leader` sub-agent of your session. The leader
-waits until every subtask has finished (it never re-assigns tasks or shuts
-teammates down; blocked teammates start as their dependencies finish), then
-combines the results into a single answer following `SYNTHESIS_SYSTEM_PROMPT`,
+waits until no subtask can make further progress (it never re-assigns tasks or
+shuts teammates down; blocked teammates start as their dependencies finish, and
+a subtask blocked only on failed or cancelled ones counts as finished), then
+combines the completed results, naming what failed or never ran, into a single answer following `SYNTHESIS_SYSTEM_PROMPT`,
 calls `team_cleanup`, and returns the answer to your session like any
 background `new_agent` result. The swarm view shows the per-task status table
 when the subtasks are done. `/swarm cancel` closes the team and cancels its

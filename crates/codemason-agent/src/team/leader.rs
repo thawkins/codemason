@@ -248,8 +248,10 @@ pub fn leader_task_for_existing_team(team_name: &str, context: &str) -> String {
     )
 }
 
-/// The leader task for a `/swarm` team: a passive supervisor that waits for
-/// every subtask, synthesises one answer to the goal, and cleans up.
+/// The leader task for a `/swarm` team: a passive supervisor that waits
+/// until no subtask can make further progress (failed or cancelled tasks,
+/// and tasks blocked only on them, count as finished), synthesises one answer
+/// to the goal naming what failed or never ran, and cleans up.
 ///
 /// The swarm's frontend keeps unblocking dependent members, so the leader
 /// must not re-assign work or shut teammates down; it carries the synthesis
@@ -262,9 +264,13 @@ pub fn leader_task_for_swarm(team_name: &str, goal: &str) -> String {
          do NOT call `team_shutdown_teammate`. A `Blocked` or parked teammate is waiting \
          on its dependencies; it is started automatically when they finish.\n\n\
          1. Call `team_wait`, then check `team_task_list` and `team_status`. Keep calling \
-         `team_wait` until every swarm task is completed or cancelled.\n\
-         2. Synthesise the final answer from the subtask results, following this \
+         `team_wait` while any task can still make progress. A task counts as finished \
+         when it is completed, failed or cancelled, and so does a task that is blocked \
+         only on failed or cancelled predecessors: it will never run. When no task can \
+         make further progress, stop waiting.\n\
+         2. Synthesise the final answer from the subtasks that completed, following this \
          guidance:\n{synthesis}\n\
+         State clearly which subtasks failed and which never ran.\n\
          3. Call `team_cleanup`.\n\n\
          Your final message is that answer.\n\nGoal: {goal}",
         synthesis = super::swarm::SYNTHESIS_SYSTEM_PROMPT

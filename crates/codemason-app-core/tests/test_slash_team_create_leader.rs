@@ -176,3 +176,50 @@ async fn test_slash_team_create_leader_close_cancels_leader() {
         "closing the team cancels its leader"
     );
 }
+
+/// With stock permissions the blueprint's `team_spawn` seed is refused: the
+/// launch fails, nothing is left behind, and the status names the permission.
+#[tokio::test]
+async fn test_slash_team_create_leader_refused_seed_creates_nothing() {
+    let ws = workspace("refused_seed");
+    let (mut app, manager) = app_in(&ws);
+    let primary = app.session.session_id.clone().expect("primary");
+
+    app.execute_slash_command("/team create pair alpha x").await;
+
+    assert!(
+        app.status.starts_with("Failed to create team"),
+        "status: {}",
+        app.status
+    );
+    assert!(app.status.contains("team:manage"), "status: {}", app.status);
+    assert!(manager.list_agents(&primary).await.is_empty());
+    assert!(TeamStore::load_by_name("alpha", &ws).is_err());
+    assert!(app.session_processor.team_managers.get("alpha").is_none());
+}
+
+/// A non-empty `spawn-prompts.json` that spawns nobody fails the launch.
+#[tokio::test]
+async fn test_slash_team_create_leader_seed_spawning_nobody_fails() {
+    let ws = workspace("spawns_nobody");
+    let bp = ws.join(".codemason/blueprints/teams/ghost");
+    std::fs::create_dir_all(&bp).expect("blueprint dir");
+    std::fs::write(
+        bp.join("spawn-prompts.json"),
+        r#"[{"tool": "no_such_tool", "teammate_name": "ghost"}]"#,
+    )
+    .expect("spawn prompts");
+    let (mut app, manager) = app_in(&ws);
+    let primary = app.session.session_id.clone().expect("primary");
+
+    app.execute_slash_command("/team create ghost alpha x")
+        .await;
+
+    assert!(
+        app.status.contains("none was spawned"),
+        "status: {}",
+        app.status
+    );
+    assert!(manager.list_agents(&primary).await.is_empty());
+    assert!(TeamStore::load_by_name("alpha", &ws).is_err());
+}

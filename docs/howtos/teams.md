@@ -243,12 +243,17 @@ is created. It then launches the team leader (`launch_leader_for_team_with_seed`
 is created with the leader's session as lead, and the blueprint is seeded with
 `seed_only: true` as the leader's session, all before the leader's first step, so the
 leader's first `team_wait` already sees its teammates. A seeding error fails the launch:
-the team and the leader session are removed and no leader task is left. `seed_only`
+the team and the leader session are removed and no leader task is left. With `seed_only`,
+any refused or failed seed entry (for example a `team_spawn` the session's permissions do
+not allow: add an allow rule for `team:manage`), or a `spawn-prompts.json` that spawns
+nobody, is such an error, and the status names each refused tool and its permission. `seed_only`
 applies the blueprint to the existing team and never creates (or re-creates) its
 directory, and it is accepted only from the team's lead session. The leader is told the
 team already exists, so it skips `team_create`, goes straight to `team_wait`, and calls
 `team_cleanup` once it has its summary. `/team close`, `/team delete` and
-`/team forcecleanup` cancel the team's running leader.
+`/team forcecleanup` cancel the team's running leader. The leader's `team_cleanup` reports
+the leader's own session; the session that launched the leader still clears the team from
+its Teams pane and its swarm state.
 
 ### 6.2 Wait for teammates
 
@@ -844,8 +849,10 @@ creates an ephemeral team, and orchestrates parallel execution.
    `Results from dependencies` section carrying up to 4 KiB of each
    predecessor's `team_task_complete` result.
 6. The leader is a passive supervisor: it never re-assigns tasks or shuts
-   teammates down, and keeps calling `team_wait` until every subtask is done.
-   It then synthesises one answer from the goal and each task's result
+   teammates down, and keeps calling `team_wait` while any subtask can still
+   make progress (a failed or cancelled subtask, and one blocked only on such
+   predecessors, counts as finished). It then synthesises one answer from the
+   completed results, naming the subtasks that failed or never ran
    (`SYNTHESIS_SYSTEM_PROMPT` guidance), calls `team_cleanup`, and returns the
    answer to your session like any background `new_agent` result. The swarm
    view reports the per-task tally only.

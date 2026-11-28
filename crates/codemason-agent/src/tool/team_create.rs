@@ -75,6 +75,52 @@ async fn dispatch_seed_tool(
 /// Stable reason code for a `team_create` call from a non-leader agent.
 pub const REASON_NOT_TEAM_LEADER: &str = "not_team_leader";
 
+/// Stable reason code for a `seed_only` call whose blueprint seeding was
+/// refused or failed.
+pub const REASON_SEED_FAILED: &str = "seed_failed";
+
+/// Decide a `seed_only` call's outcome: a team leader must not start on a
+/// half-seeded team, so any refused or failed seed entry, or a non-empty
+/// `spawn-prompts.json` that left the team with no members, is an error
+/// listing each reason (tool, permission category) and the fix.
+///
+/// # Errors
+///
+/// A [`REASON_SEED_FAILED`] error when seeding was incomplete.
+fn seed_only_result(
+    blueprint: &str,
+    task_failures: &[String],
+    failed_spawns: &[serde_json::Value],
+    wants_teammates: bool,
+    members: usize,
+) -> Result<()> {
+    let mut reasons: Vec<String> = task_failures.to_vec();
+    reasons.extend(failed_spawns.iter().map(|f| {
+        format!(
+            "spawn tool '{}' for teammate '{}': {}",
+            f.get("tool").and_then(|v| v.as_str()).unwrap_or("?"),
+            f.get("teammate_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?"),
+            f.get("error").and_then(|v| v.as_str()).unwrap_or("?"),
+        )
+    }));
+    if wants_teammates && members == 0 && reasons.is_empty() {
+        reasons.push("spawn-prompts.json lists teammates but none was spawned".to_string());
+    }
+    if reasons.is_empty() {
+        return Ok(());
+    }
+    Err(super::param_schema::reason_error(
+        REASON_SEED_FAILED,
+        format!(
+            "blueprint '{blueprint}' could not be seeded: {}. Allow the permission each \
+             refused tool names (for example an allow rule for `team:manage`) and retry.",
+            reasons.join("; ")
+        ),
+    ))
+}
+
 /// Creates a new team directory and initial config.
 pub struct TeamCreateTool;
 
@@ -224,9 +270,22 @@ impl Tool for TeamCreateTool {
                 let _ = std::fs::copy(&readme, &dest);
             }
 
-            run_task_seed(&bdir, &store, &name, ctx).await;
+            let task_failures = run_task_seed(&bdir, &store, &name, ctx).await;
             failed_spawns =
                 run_spawn_prompts(&bdir, &mut store, &name, ctx, work_context.as_deref()).await;
+            if seed_only {
+                let wants_teammates = read_json_array(&bdir.join("spawn-prompts.json"))
+                    .is_some_and(|items| !items.is_empty());
+                let members = TeamStore::load_by_name(&name, &ctx.working_dir)
+                    .map_or(store.config.members.len(), |s| s.config.members.len());
+                seed_only_result(
+                    &bp,
+                    &task_failures,
+                    &failed_spawns,
+                    wants_teammates,
+                    members,
+                )?;
+            }
         }
 
         // Reload store to get the final member list after blueprint seeding.
@@ -356,12 +415,19 @@ fn find_blueprint_dir(working_dir: &std::path::Path, bp: &str) -> Option<std::pa
 /// Run the blueprint's `task-seed.json`, if present: each entry naming a
 /// `tool` is dispatched through the permission gate with `team_name` forced to
 /// `name`; an entry with a `title` and no tool becomes a task directly.
-/// Failures are logged and never abort team creation.
-async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ctx: &ToolContext) {
+/// Failures are logged and returned, one line per refused or failed seed
+/// tool; only a `seed_only` call turns them into an error.
+async fn run_task_seed(
+    bdir: &std::path::Path,
+    store: &TeamStore,
+    name: &str,
+    ctx: &ToolContext,
+) -> Vec<String> {
+    let mut failures = Vec::new();
     // If task-seed.json exists, parse and execute each seed
     let seed = bdir.join("task-seed.json");
     let Some(items) = read_json_array(&seed) else {
-        return;
+        return failures;
     };
     let registry = crate::tool::create_default_registry();
     for item in &items {
@@ -405,6 +471,7 @@ async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ct
                     }
                     Err(e) => {
                         tracing::error!(tool = %tool_name, error = %e, arg_keys = %arg_keys, "Seed tool execution failed");
+                        failures.push(format!("task-seed tool '{tool_name}': {e}"));
                     }
                 }
             }
@@ -413,6 +480,7 @@ async fn run_task_seed(bdir: &std::path::Path, store: &TeamStore, name: &str, ct
             seed_task(obj, store, name).await;
         }
     }
+    failures
 }
 
 /// Parse `path` as a JSON array, or `None` when it is missing, unreadable or
