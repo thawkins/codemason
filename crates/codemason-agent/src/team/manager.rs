@@ -1512,8 +1512,9 @@ impl TeamManager {
     /// * `text` - the user's message.
     ///
     /// # Errors
-    /// Fails when the member is unknown, has no runtime handle, or has exited
-    /// (`Stopped`, `Failed` or shutting down): `teammate <name> has exited`.
+    /// Fails when the member is unknown, has no runtime handle or live agent loop,
+    /// or has exited (`Stopped`, `Failed` or shutting down): `teammate <name> has
+    /// exited`.
     pub fn send_user_turn(&self, agent_id: &str, text: &str) -> Result<()> {
         let store = TeamStore::load(&self.team_dir)?;
         let member = store.config.member_by_id(agent_id).ok_or_else(|| {
@@ -1529,6 +1530,11 @@ impl TeamManager {
         let name = member.name.clone();
         drop(store);
 
+        // A non-terminal roster row whose loop task has returned (or never
+        // started) would accept the turn and never run it: refuse visibly.
+        if !self.has_live_agent_loop(agent_id) {
+            anyhow::bail!("teammate {name} has exited");
+        }
         let Some(handle) = self.handles.get(agent_id) else {
             anyhow::bail!("teammate {name} has exited");
         };

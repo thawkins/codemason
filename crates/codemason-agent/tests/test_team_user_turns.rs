@@ -30,6 +30,16 @@ fn set_member(team_dir: &std::path::Path, status: MemberStatus) {
     store.save().expect("save");
 }
 
+/// Give `tm-001` a running agent loop; the loop ends when the sender drops.
+fn live_loop(manager: &codemason_agent::team::TeamManager) -> tokio::sync::oneshot::Sender<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _ = rx.await;
+    });
+    manager.set_agent_loop_handle("tm-001", Some(handle));
+    tx
+}
+
 /// Status of `tm-001` as stored on disk.
 fn status_of(team_dir: &std::path::Path) -> MemberStatus {
     TeamStore::load(team_dir)
@@ -44,6 +54,7 @@ fn status_of(team_dir: &std::path::Path) -> MemberStatus {
 async fn test_team_user_turns_run_before_mailbox() {
     let (manager, _tmp, _bus) = team_manager("ut-a", "lead-sess", true);
     set_member(&manager.team_dir, MemberStatus::Idle);
+    let _loop = live_loop(&manager);
     Mailbox::open(&manager.team_dir, "tm-001")
         .expect("open")
         .push(
@@ -68,6 +79,7 @@ async fn test_team_user_turns_run_before_mailbox() {
 async fn test_team_user_turns_wake_parked_teammate() {
     let (manager, _tmp, _bus) = team_manager("ut-b", "lead-sess", true);
     set_member(&manager.team_dir, MemberStatus::Suspended);
+    let _loop = live_loop(&manager);
 
     manager.send_user_turn("tm-001", "wake up").expect("queue");
 
@@ -87,6 +99,26 @@ async fn test_team_user_turns_exited_teammate_refused() {
         .send_user_turn("tm-001", "hello?")
         .expect_err("a stopped teammate has exited");
     assert!(err.to_string().contains("has exited"), "err: {err}");
+}
+
+#[tokio::test]
+async fn test_team_user_turns_member_without_live_loop_refused() {
+    let (manager, _tmp, _bus) = team_manager("ut-d", "lead-sess", true);
+    // Non-terminal status, a registered handle, but no loop task to run the turn.
+    set_member(&manager.team_dir, MemberStatus::Idle);
+    assert!(!manager.has_live_agent_loop("tm-001"));
+
+    let err = manager
+        .send_user_turn("tm-001", "anyone?")
+        .expect_err("a member whose loop has returned cannot run a turn");
+    assert!(err.to_string().contains("has exited"), "err: {err}");
+    assert!(
+        !matches!(
+            manager.next_teammate_turn("tm-001", &mut HashSet::new()),
+            TeammateNextTurn::Run(_)
+        ),
+        "the refused turn must not be queued"
+    );
 }
 
 #[tokio::test]
