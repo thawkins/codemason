@@ -102,6 +102,9 @@ pub fn entry_full(
 }
 
 /// A new `AgentManager` with the given background cap.
+// Shared helper mounted by many test files; a file that only needs
+// `test_processor` would otherwise warn.
+#[allow(dead_code)]
 pub fn manager(max_background: usize) -> Arc<AgentManager> {
     Arc::new(AgentManager::new(
         Arc::new(EventBus::new(16)),
