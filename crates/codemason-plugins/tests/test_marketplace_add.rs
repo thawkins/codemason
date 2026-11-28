@@ -35,9 +35,9 @@ fn dispatch(tree: &TempTree, args: &str) -> String {
 
 /// Give the scratch config home an empty global `codemason.json`. With no
 /// global and no project config, `Config::load()` treats the run as a first
-/// run and writes a default `.codemason/codemason.json` into the process cwd
-/// - the crate directory under nextest, i.e. into the repository (AGENTS.md
-/// "Test Layout").
+/// run and writes a default `.codemason/codemason.json` into the process cwd,
+/// which is the crate directory under nextest, i.e. into the repository
+/// (AGENTS.md "Test Layout").
 fn seed_global_config(config_home: &std::path::Path) {
     let dir = config_home.join("codemason");
     std::fs::create_dir_all(&dir).expect("global config dir");
