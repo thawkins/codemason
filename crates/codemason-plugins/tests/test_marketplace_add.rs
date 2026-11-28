@@ -33,6 +33,17 @@ fn dispatch(tree: &TempTree, args: &str) -> String {
     .expect("`marketplace` is a management subcommand")
 }
 
+/// Give the scratch config home an empty global `codemason.json`. With no
+/// global and no project config, `Config::load()` treats the run as a first
+/// run and writes a default `.codemason/codemason.json` into the process cwd
+/// - the crate directory under nextest, i.e. into the repository (AGENTS.md
+/// "Test Layout").
+fn seed_global_config(config_home: &std::path::Path) {
+    let dir = config_home.join("codemason");
+    std::fs::create_dir_all(&dir).expect("global config dir");
+    std::fs::write(dir.join("codemason.json"), "{}").expect("global config");
+}
+
 #[test]
 fn marketplace_add_records_the_marketplace_in_the_global_config() {
     let _lock = crate::global_env_lock();
@@ -41,6 +52,7 @@ fn marketplace_add_records_the_marketplace_in_the_global_config() {
     let saved = std::env::var_os("XDG_CONFIG_HOME");
     // SAFETY: single-threaded via `crate::global_env_mutex()`; restored below.
     unsafe { std::env::set_var("XDG_CONFIG_HOME", &home) };
+    seed_global_config(&home);
 
     let added = dispatch(&tree, "claude add anthropics/claude-plugins-community");
     let listed = dispatch(&tree, "claude list");
@@ -88,6 +100,7 @@ fn marketplace_remove_drops_a_previously_added_marketplace() {
     let saved = std::env::var_os("XDG_CONFIG_HOME");
     // SAFETY: single-threaded via `crate::global_env_mutex()`; restored below.
     unsafe { std::env::set_var("XDG_CONFIG_HOME", &home) };
+    seed_global_config(&home);
 
     let _ = dispatch(&tree, "codex add openai/plugins");
     let removed = dispatch(&tree, "codex remove plugins");
