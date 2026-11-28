@@ -37,8 +37,6 @@ use crate::llm::LlmClient;
 use crate::provider::anthropic::AnthropicClient;
 use crate::provider::azure_foundry::AzureFoundryClient;
 use crate::provider::http_client::{MAX_ERROR_BODY_BYTES, read_body_capped};
-use crate::provider::wire::decode::{StreamKey, ToolCallAccumulator};
-use crate::provider::wire::profile_table::ANTHROPIC_MESSAGES;
 use crate::provider::wire::trace;
 use crate::{ModelInfo, Provider};
 use codemason_config::{Capabilities, Cost};
@@ -433,219 +431,16 @@ impl LlmClient for AzureAnthropicClient {
             anyhow::bail!("Azure Anthropic API error ({status}): {body_text}");
         }
 
-        // Reuse the Anthropic SSE stream parser by delegating to the inner client.
-        // The AnthropicClient::chat method is what we want, but it hardcodes
-        // "x-api-key" and its own URL.  Instead, we inline the response handling
-        // below - but since the response format is identical, we can call the
-        // private helper logic by constructing an identical response and passing
-        // it through.
-        //
-        // Simplification: we build an identical async_stream here that mirrors
-        // AnthropicClient::chat after the HTTP response is received.
-        use crate::llm::StreamEvent;
-        use codemason_types::event::FinishReason;
-        use serde_json::Value;
-
-        let rate_limit_event =
-            crate::provider::anthropic::parse_anthropic_rate_limit_headers(response.headers());
-        let stream = response.bytes_stream();
-
-        let event_stream = async_stream::stream! {
-            // PERF-063: pre-size the SSE accumulation buffer so a long stream does
-            // not repeatedly realloc/copy as it grows.
-            let mut buffer = String::with_capacity(8 * 1024);
-            // FUNC-033: hold an incomplete trailing multibyte character from the
-            // previous chunk so a UTF-8 sequence split across TCP chunks is not
-            // corrupted.
-            let mut pending_utf8: Vec<u8> = Vec::new();
-            let mut current_event_type = String::new();
-            // FR-004: the Anthropic-Messages shape behind the Azure resource keys a
-            // tool block by its content-block index, so the shared accumulator owns
-            // the open calls instead of a `BTreeMap<u64, String>` here.
-            let mut acc = ToolCallAccumulator::new(ANTHROPIC_MESSAGES, "azure_resource");
-
-            if let Some(ev) = rate_limit_event {
-                yield ev;
-            }
-
-            futures::pin_mut!(stream);
-
-            loop {
-                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "Azure Resource").await {
-                    Ok(Some(r)) => match r {
-                        Ok(c) => c,
-                        Err(e) => {
-                            yield StreamEvent::Error { message: e.to_string() };
-                            break;
-                        }
-                    },
-                    Ok(None) => break,
-                    Err(message) => {
-                        yield StreamEvent::Error { message };
-                        break;
-                    }
-                };
-
-                // SEC-codemason-llm-004 (SECTASKS T-028): fail the stream when a
-
-                // peer dribbles bytes without ever emitting a newline instead
-
-                // of letting the accumulation buffer grow without bound.
-
-                if let Err(e) = super::http_client::append_chunk_guarded(
-
-                    &mut buffer,
-
-                    &mut pending_utf8,
-
-                    &chunk,
-
-                    "Azure Resource",
-
-                ) {
-
-                    yield StreamEvent::Error {
-
-                        message: e.to_string(),
-
-                    };
-
-                    return;
-
-                }
-
-                while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    if let Some(event_type) = line.strip_prefix("event: ") {
-                        current_event_type = event_type.trim().to_string();
-                        continue;
-                    }
-
-                    if let Some(data) = line.strip_prefix("data: ") {
-                          let data = data.trim();
-                          if data == "[DONE]" {
-                              yield StreamEvent::Finish { reason: FinishReason::Stop };
-                              return;
-                          }
-
-                          let parsed: Value = match serde_json::from_str(data) {
-                              Ok(v) => v,
-                              Err(e) => {
-                                  // FUNC-032 (ANTIPAT 3.3): a corrupt frame must be
-                                  // logged, not silently dropped - it can carry
-                                  // tool-call deltas.
-                                  // SEC-codemason-llm-020: redact secrets and cap the
-                                  // raw frame before logging.
-                                  tracing::warn!(
-                                      error = %e,
-                                      frame = %crate::provider::http_client::redact_frame(data),
-                                      "Azure Anthropic: dropping malformed SSE data frame"
-                                  );
-                                  continue;
-                              }
-                          };
-
-                        match current_event_type.as_str() {
-                            "content_block_start" => {
-                                let content_block = &parsed["content_block"];
-                                let block_index = parsed["index"].as_u64().unwrap_or(0);
-                                match content_block["type"].as_str() {
-                                    Some("text") => {}
-                                    Some("thinking") => {
-                                        yield StreamEvent::ReasoningStart;
-                                    }
-                                    Some("tool_use") => {
-                                        let id = content_block["id"].as_str().unwrap_or("");
-                                        let name = content_block["name"].as_str().unwrap_or("");
-                                        if let Some(event) =
-                                            acc.open(StreamKey::Index(block_index), Some(id), name)
-                                        {
-                                            yield event;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            "content_block_delta" => {
-                                let delta = &parsed["delta"];
-                                let block_index = parsed["index"].as_u64().unwrap_or(0);
-                                match delta["type"].as_str() {
-                                    Some("text_delta") => {
-                                        if let Some(text) = delta["text"].as_str() {
-                                            yield StreamEvent::TextDelta { text: text.to_string() };
-                                        }
-                                    }
-                                    Some("thinking_delta") => {
-                                        if let Some(text) = delta["thinking"].as_str() {
-                                            yield StreamEvent::ReasoningDelta { text: text.to_string() };
-                                        }
-                                    }
-                                    // FR-011: the signed-thinking block's
-                                    // signature, surfaced apart from the
-                                    // reasoning text so the record can echo the
-                                    // block back with it.
-                                    Some("signature_delta") => {
-                                        if let Some(signature) = delta["signature"].as_str() {
-                                            yield StreamEvent::ReasoningSignature {
-                                                signature: signature.to_string(),
-                                            };
-                                        }
-                                    }
-                                    Some("input_json_delta") => {
-                                        if let Some(json_str) = delta["partial_json"].as_str()
-                                            && let Some(event) =
-                                                acc.delta(&StreamKey::Index(block_index), json_str)
-                                        {
-                                            yield event;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            "content_block_stop" => {
-                                // Close the block named by this event's index.
-                                let block_index = parsed["index"].as_u64().unwrap_or(0);
-                                if let Some(event) = acc.end(&StreamKey::Index(block_index)) {
-                                    yield event;
-                                }
-                            }
-                            "message_delta" => {
-                                if let Some(usage) = parsed.get("usage") {
-                                    let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0);
-                                    yield StreamEvent::Usage {
-                                        input_tokens: 0,
-                                        output_tokens,
-                                    };
-                                }
-                                if let Some(stop_reason) = parsed["delta"]["stop_reason"].as_str() {
-                                    let reason = match stop_reason {
-                                        "tool_use" => FinishReason::ToolUse,
-                                        "max_tokens" => FinishReason::Length,
-                                        _ => FinishReason::Stop,
-                                    };
-                                    yield StreamEvent::Finish { reason };
-                                }
-                            }
-                            "message_start" => {
-                                if let Some(usage) = parsed["message"].get("usage") {
-                                    let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0);
-                                    yield StreamEvent::Usage {
-                                        input_tokens,
-                                        output_tokens: 0,
-                                    };
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        };
-
-        Ok(Box::pin(event_stream))
+        // CO-13: the response is the Anthropic Messages shape, so the Anthropic
+        // stream parser handles it under this provider's labels, tool calls
+        // included (its shared `ToolCallAccumulator`, FR-004).
+        Ok(crate::provider::anthropic::messages_event_stream(
+            response,
+            crate::provider::anthropic::MessagesStreamLabels {
+                stream: "Azure Resource",
+                source: "azure_resource",
+                log: "Azure Anthropic",
+            },
+        ))
     }
 }

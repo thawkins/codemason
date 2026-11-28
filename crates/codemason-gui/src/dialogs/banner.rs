@@ -1,9 +1,8 @@
 //! The run-cost banner (`App::session.run_cost_banner`): the one-line
 //! summary a finished run leaves at the bottom of the window.
 //!
-//! It is not a modal. As in the TUI (`render_run_cost_banner`) it stays up
-//! until the next key press or until it expires (`App::poll_timers`, which
-//! the shell runs every frame).
+//! It is not a modal. It stays up until the next key press or until it
+//! expires (`App::poll_timers`, which the shell runs every frame).
 //!
 //! The next key press dismisses it the way app-core's `dispatch_key` does:
 //! a plain character dismisses it and still types, any other key is used up

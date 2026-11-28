@@ -45,6 +45,7 @@ lingua = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = "3.14"
 axum = { workspace = true }
 wiremock = "0.6"

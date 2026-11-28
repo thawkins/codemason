@@ -8,6 +8,9 @@
 //! tests drive the parser and the end-to-end install against that local remote,
 //! so no network is contacted and no real marketplace repository is cloned.
 
+// RS-04 sets `GIT_CONFIG_*` for one test (Rust 2024 `set_var` is unsafe).
+#![allow(unsafe_code)]
+
 use std::path::{Path, PathBuf};
 
 use codemason_plugins::{AddError, StoreDirs, add, parse_git_source};
@@ -316,6 +319,12 @@ fn parse_git_source_refuses_unsafe_characters() {
 
 /// End-to-end: an option-looking ref cannot reach `git` through `add`, and the
 /// command it names never runs.
+///
+/// Unix only: the marker path is written into a `#ref:subpath` source, and a
+/// Windows path's drive colon is that syntax's delimiter. The guard itself is
+/// platform-independent and covered everywhere by
+/// `parse_git_source_refuses_option_like_refs_and_subpaths`.
+#[cfg(unix)]
 #[test]
 fn add_refuses_an_option_like_ref_without_running_it() {
     let temp = temp_dir("git-injection");
@@ -380,8 +389,8 @@ fn add_installs_a_whole_repo_source_whose_claude_manifest_is_nested() {
 
 // -- SI-05: a `git+` install is bounded in time and size ----------------------
 
-/// Both limit tests set the same override: it is process-wide and first-call
-/// wins, so they agree even when run in one process.
+/// The limit tests set the same override. It is thread-local, so it never
+/// shrinks the cap under the other install tests in this binary.
 const TEST_GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const TEST_MAX_TREE_BYTES: u64 = 2048;
 
@@ -497,5 +506,64 @@ fn add_refuses_an_unsafe_subpath_instead_of_installing_the_whole_repo() {
     assert!(
         codemason_plugins::scan_dirs(store_dirs(&temp)).is_empty(),
         "nothing may be installed"
+    );
+}
+
+/// RS-04: the size cap is enforced while git runs, not only after it exits.
+/// A `post-checkout` hook (injected through `GIT_CONFIG_*` command-line config)
+/// stalls the clone after the oversized tree is on disk; without an in-flight
+/// size poll the install would only fail at the timeout, as an I/O error.
+#[test]
+fn add_git_source_kills_a_clone_that_outgrows_the_cap_mid_run() {
+    set_test_git_limits();
+    let _env = crate::global_env_lock();
+    let root = temp_dir("git-stall");
+    let (url, remote) = remote_with_plugin(&root, ".", "Stall");
+    std::fs::write(remote.join("blob.bin"), vec![b'x'; 8192]).expect("blob");
+    // Only a clone of this repository stalls; any other clone running in the
+    // same process meanwhile runs the hook as a no-op.
+    std::fs::write(remote.join("RS04_STALL"), "").expect("marker");
+    git(&remote, &["add", "-A"]);
+    git(&remote, &["commit", "-q", "-m", "blob"]);
+
+    let hooks = root.join("hooks");
+    std::fs::create_dir_all(&hooks).expect("hooks dir");
+    let hook = hooks.join("post-checkout");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nif [ -f RS04_STALL ]; then sleep 10; fi\nexit 0\n",
+    )
+    .expect("hook");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let hooks_path = hooks.to_string_lossy().replace('\\', "/");
+    // SAFETY: process-global; serialised by the crate-wide env lock above and
+    // removed again before the lock is released.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "core.hooksPath");
+        std::env::set_var("GIT_CONFIG_VALUE_0", &hooks_path);
+    }
+    let started = std::time::Instant::now();
+    let result = add(&store_dirs(&root), &root, &format!("git+{url}"), false);
+    let elapsed = started.elapsed();
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("GIT_CONFIG_COUNT");
+        std::env::remove_var("GIT_CONFIG_KEY_0");
+        std::env::remove_var("GIT_CONFIG_VALUE_0");
+    }
+
+    let err = result.expect_err("an oversized clone must be refused");
+    assert!(
+        matches!(err, AddError::TooLarge { max, .. } if max == TEST_MAX_TREE_BYTES),
+        "the clone must be stopped by the size cap, not the timeout: got {err:?}"
+    );
+    assert!(
+        elapsed < TEST_GIT_TIMEOUT,
+        "the clone must be killed before the timeout, took {elapsed:?}"
     );
 }

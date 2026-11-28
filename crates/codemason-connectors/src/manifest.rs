@@ -32,7 +32,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use codemason_types::guard::validate_relative_component;
+use codemason_surface::archive::{ArchiveKind, ExtractError, ExtractLimits};
 
 use crate::descriptor::{ConnectorDescriptor, ConnectorId, ConnectorProvenance};
 use crate::error::{ConnectorError, flatten_chain};
@@ -47,6 +47,18 @@ pub const MAX_SOURCE_BYTES: u64 = 50 * 1024 * 1024;
 /// just-under-the-cap entries would otherwise write unbounded data into the
 /// store. The running total across all entries is bounded by this value.
 pub const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Maximum entries (files, directories, links) read from one install archive
+/// (RS-05). The byte caps do not bound the entry count: zero-byte entries cost
+/// nothing against them, yet each one is a file created in the store.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
+/// The caps every connector archive extraction enforces (RS-10).
+const EXTRACT_LIMITS: ExtractLimits = ExtractLimits {
+    max_entry_bytes: MAX_SOURCE_BYTES,
+    max_total_bytes: MAX_EXTRACTED_BYTES,
+    max_entries: MAX_ARCHIVE_ENTRIES,
+};
 
 /// Wall-clock budget for one install-archive download.
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(1);
@@ -551,32 +563,6 @@ fn download_and_extract(url: &str, staging: &Path) -> Result<PathBuf, StageError
     extract_archive(&bytes, kind, staging)
 }
 
-/// Which archive format a package uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArchiveKind {
-    Zip,
-    TarGz,
-}
-
-impl ArchiveKind {
-    fn from_path(name: &str) -> Option<Self> {
-        let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".tar.gz") {
-            return Some(Self::TarGz);
-        }
-        match Path::new(&lower)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("zip") => Some(Self::Zip),
-            Some("tgz") => Some(Self::TarGz),
-            _ => None,
-        }
-    }
-}
-
 /// Extract a local archive file into `staging`, returning the extraction root.
 fn extract_archive_into(file: &Path, staging: &Path) -> Result<PathBuf, StageError> {
     let Some(kind) = ArchiveKind::from_path(&file.to_string_lossy()) else {
@@ -603,123 +589,22 @@ fn extract_archive(bytes: &[u8], kind: ArchiveKind, staging: &Path) -> Result<Pa
         });
     }
     std::fs::create_dir_all(staging).map_err(StageError::io)?;
-    match kind {
-        ArchiveKind::Zip => extract_zip(bytes, staging)?,
-        ArchiveKind::TarGz => extract_tar_gz(bytes, staging)?,
-    }
+    // RS-10: the shared bounded extractor (codemason-surface).
+    codemason_surface::archive::extract(bytes, kind, staging, EXTRACT_LIMITS)
+        .map_err(stage_error)?;
     Ok(staging.to_path_buf())
 }
 
-/// Extract a zip archive, bounding both the per-entry and the total decompressed
-/// size.
-fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
-    use std::io::{Cursor, Read as _};
-
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec()))
-        .map_err(|e| StageError::Io(format!("zip open: {e}")))?;
-    let mut total: u64 = 0;
-    for i in 0..archive.len() {
-        let entry = archive
-            .by_index(i)
-            .map_err(|e| StageError::Io(format!("zip entry {i}: {e}")))?;
-        if entry.is_dir() {
-            continue;
-        }
-        let name = entry
-            .name()
-            .map_err(|e| StageError::Io(format!("zip entry {i} name: {e}")))?
-            .to_string();
-        let rel = safe_relative_path(&name)?;
-        let dest = staging.join(&rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(StageError::io)?;
-        }
-        // SEC-070: bound the *read* itself so a zip-bomb entry cannot be fully
-        // decompressed into memory before the size check runs. Read at most the
-        // remaining headroom + 1 byte; anything larger fails here.
-        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
-        let mut body = Vec::new();
-        entry
-            .take(MAX_SOURCE_BYTES.min(remaining).saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|e| StageError::Io(format!("zip entry {name}: {e}")))?;
-        if body.len() as u64 > MAX_SOURCE_BYTES {
-            return Err(StageError::TooLarge {
-                size: body.len() as u64,
-                max: MAX_SOURCE_BYTES,
-            });
-        }
-        total = total.saturating_add(body.len() as u64);
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(StageError::Io(format!(
-                "archive decompressed past the {MAX_EXTRACTED_BYTES} byte total cap"
-            )));
-        }
-        std::fs::write(&dest, &body).map_err(StageError::io)?;
+/// Map a shared extraction failure onto this crate's [`StageError`], keeping
+/// the messages the connector surface has always reported.
+fn stage_error(err: ExtractError) -> StageError {
+    match err {
+        ExtractError::UnsafePath(name) => StageError::UnsafePath(name),
+        ExtractError::EntryTooLarge { size, .. } => StageError::TooLarge {
+            size,
+            max: MAX_SOURCE_BYTES,
+        },
+        ExtractError::Io(err) => StageError::io(err),
+        ExtractError::Message(message) => StageError::Io(message),
     }
-    Ok(())
-}
-
-/// Extract a `.tar.gz` archive, bounding both the per-entry and the total
-/// decompressed size.
-fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), StageError> {
-    use std::io::{Cursor, Read as _};
-
-    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes.to_vec()));
-    let mut archive = tar::Archive::new(decoder);
-    let entries = archive
-        .entries()
-        .map_err(|e| StageError::Io(format!("tar entries: {e}")))?;
-    let mut total: u64 = 0;
-    for entry in entries {
-        let entry = entry.map_err(|e| StageError::Io(format!("tar entry: {e}")))?;
-        if !entry.header().entry_type().is_file() {
-            continue;
-        }
-        let path = entry
-            .path()
-            .map_err(|e| StageError::Io(format!("tar entry path: {e}")))?
-            .to_path_buf();
-        let name = path.to_string_lossy().replace('\\', "/");
-        let rel = safe_relative_path(&name)?;
-        let dest = staging.join(&rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(StageError::io)?;
-        }
-        // SEC-070: bound the read itself (gzip-bomb defence), as for the zip path.
-        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
-        let mut body = Vec::new();
-        entry
-            .take(MAX_SOURCE_BYTES.min(remaining).saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|e| StageError::Io(format!("tar entry {name}: {e}")))?;
-        if body.len() as u64 > MAX_SOURCE_BYTES {
-            return Err(StageError::TooLarge {
-                size: body.len() as u64,
-                max: MAX_SOURCE_BYTES,
-            });
-        }
-        total = total.saturating_add(body.len() as u64);
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(StageError::Io(format!(
-                "archive decompressed past the {MAX_EXTRACTED_BYTES} byte total cap"
-            )));
-        }
-        std::fs::write(&dest, &body).map_err(StageError::io)?;
-    }
-    Ok(())
-}
-
-/// Reject an archive entry that would escape the store: an absolute path, a
-/// Windows prefix, or any `..` component (FR-029).
-///
-/// The rule delegates to the shared
-/// [`validate_relative_component`](codemason_types::guard::validate_relative_component)
-/// guard (ANTIPAT M14) so the archive sink and the file tools cannot drift apart.
-fn safe_relative_path(name: &str) -> Result<PathBuf, StageError> {
-    let normalised = name.replace('\\', "/");
-    if validate_relative_component(&normalised, "archive entry").is_err() {
-        return Err(StageError::UnsafePath(name.to_string()));
-    }
-    Ok(PathBuf::from(normalised))
 }

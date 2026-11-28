@@ -172,12 +172,11 @@ pub fn validate_relative_component(value: &str, label: &str) -> Result<(), Strin
         ));
     }
     let path = Path::new(value);
-    // `is_absolute()` is true exactly when a `RootDir` component is present
-    // (possibly behind a Windows prefix), so the second `is_absolute` check and
-    // the `Component::RootDir` arm that used to follow this block were both
-    // unreachable (F17/F18). Rejecting absolute paths here still rejects every
-    // `RootDir` component.
-    if path.is_absolute() {
+    // `has_root()` is true whenever a `RootDir` component is present, on every
+    // platform. `is_absolute()` is not enough: on Windows it also needs a drive
+    // prefix, so `/etc/passwd` would pass and a later join would land at
+    // `C:\etc\passwd`. Every absolute path has a root, so this rejects those too.
+    if path.has_root() {
         return Err(format!(
             "`{label}` value '{value}' is rejected: it must be relative to the plugin root"
         ));

@@ -128,7 +128,9 @@ pub fn create_session_worktree(project: &Project, branch: &str, root: &Path) -> 
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    let dest_text = dest.display().to_string();
+    // `git` rejects the Windows verbatim form (`\\?\C:\...`) that a
+    // canonicalized root carries, so hand it the plain path.
+    let dest_text = dunce::simplified(&dest).display().to_string();
 
     let remote = project.remote.as_ref();
     if let Some(remote) = remote {
@@ -214,7 +216,7 @@ pub fn create_session_worktree(project: &Project, branch: &str, root: &Path) -> 
 ///
 /// Returns an error when git refuses to remove the worktree.
 pub fn remove_session_worktree(project: &Project, path: &Path) -> Result<()> {
-    let path_text = path.display().to_string();
+    let path_text = dunce::simplified(path).display().to_string();
     git(
         &["worktree", "remove", "--force", &path_text],
         &project.worktree,

@@ -62,7 +62,37 @@ pub fn global_state_dir() -> Option<PathBuf> {
 #[doc(hidden)]
 #[must_use]
 pub fn legacy_home_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".codemason"))
+    home_dir().map(|h| h.join(".codemason"))
+}
+
+/// The user's home directory, honouring an absolute `HOME` on every platform.
+///
+/// `dirs::home_dir()` reads `HOME` only on Unix; on Windows it asks the OS for
+/// the profile directory, so a process that redirects `HOME` (as the tests
+/// do) would still reach the real `%USERPROFILE%`. A blank or relative value
+/// falls back to `dirs::home_dir()`.
+///
+/// Not for paths whose move would orphan data, such as the credential key.
+#[must_use]
+pub fn home_dir() -> Option<PathBuf> {
+    absolute_env_dir("HOME").or_else(dirs::home_dir)
+}
+
+/// The platform data directory, honouring an absolute `XDG_DATA_HOME` on every
+/// platform (`dirs::data_dir()` reads it only on Linux). A blank or relative
+/// value falls back to `dirs::data_dir()`.
+///
+/// Not for paths whose move would orphan data, such as the credential key.
+#[must_use]
+pub fn data_dir() -> Option<PathBuf> {
+    absolute_env_dir("XDG_DATA_HOME").or_else(dirs::data_dir)
+}
+
+/// The value of `name` as a directory, when it is set to an absolute path.
+fn absolute_env_dir(name: &str) -> Option<PathBuf> {
+    crate::config::read_env(name)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
 }
 
 /// Legacy XDG-data root. Kept only for the legacy-migration scan; new code
@@ -72,7 +102,7 @@ pub fn legacy_home_dir() -> Option<PathBuf> {
 #[doc(hidden)]
 #[must_use]
 pub fn legacy_data_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("codemason"))
+    data_dir().map(|d| d.join("codemason"))
 }
 
 /// Global memory directory: `~/.config/codemason/memory/`.

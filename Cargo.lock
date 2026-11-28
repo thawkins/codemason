@@ -1306,6 +1306,7 @@ dependencies = [
  "codemason-tools-core",
  "codemason-tools-extended",
  "codemason-types",
+ "ctor",
  "futures",
  "libc",
  "parking_lot",
@@ -1342,8 +1343,10 @@ dependencies = [
  "codemason-tools-vcs",
  "codemason-types",
  "criterion",
+ "ctor",
  "dashmap",
  "dirs",
+ "dunce",
  "flate2",
  "fs2",
  "futures",
@@ -1382,6 +1385,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "which",
  "wiremock",
 ]
 
@@ -1411,6 +1415,7 @@ dependencies = [
  "codemason-tools-vcs",
  "codemason-types",
  "criterion",
+ "ctor",
  "dirs",
  "filetime",
  "fs2",
@@ -1458,6 +1463,7 @@ dependencies = [
  "codemason-llm",
  "codemason-types",
  "criterion",
+ "ctor",
  "futures",
  "hex",
  "reqwest",
@@ -1480,6 +1486,7 @@ dependencies = [
  "chrono",
  "codemason-types",
  "criterion",
+ "ctor",
  "globset",
  "ignore",
  "lru",
@@ -1516,6 +1523,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "codemason-types",
+ "ctor",
  "dirs",
  "globset",
  "serde",
@@ -1533,6 +1541,7 @@ dependencies = [
  "codemason-config",
  "codemason-surface",
  "codemason-types",
+ "ctor",
  "flate2",
  "hex",
  "regex",
@@ -1570,6 +1579,7 @@ dependencies = [
  "craft-quit",
  "craft-ui",
  "craft-window",
+ "ctor",
  "eframe",
  "egui",
  "egui_commonmark",
@@ -1601,6 +1611,7 @@ dependencies = [
  "codemason-config",
  "codemason-storage",
  "codemason-types",
+ "ctor",
  "dirs",
  "futures",
  "hex",
@@ -1612,6 +1623,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1624,6 +1636,7 @@ dependencies = [
  "codemason-surface",
  "codemason-tools-core",
  "codemason-types",
+ "ctor",
  "flate2",
  "hex",
  "reqwest",
@@ -1652,6 +1665,7 @@ dependencies = [
  "codemason-tools-extended",
  "codemason-types",
  "criterion",
+ "ctor",
  "futures",
  "proptest",
  "regex",
@@ -1683,6 +1697,7 @@ dependencies = [
  "codemason-research",
  "codemason-types",
  "criterion",
+ "ctor",
  "futures",
  "hmac",
  "http-body-util",
@@ -1705,6 +1720,7 @@ dependencies = [
  "chrono",
  "codemason-tools-extended",
  "codemason-types",
+ "ctor",
  "regex",
  "serde",
  "serde_json",
@@ -1725,6 +1741,7 @@ dependencies = [
  "chrono",
  "codemason-types",
  "criterion",
+ "ctor",
  "dirs",
  "rand 0.10.3",
  "rusqlite",
@@ -1744,12 +1761,16 @@ version = "0.1.0"
 dependencies = [
  "codemason-config",
  "codemason-types",
+ "ctor",
+ "flate2",
  "reqwest",
  "serde_json",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "url",
+ "zip",
 ]
 
 [[package]]
@@ -1758,6 +1779,7 @@ version = "0.1.0"
 dependencies = [
  "codemason-config",
  "codemason-types",
+ "ctor",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1779,6 +1801,7 @@ dependencies = [
  "chrono",
  "codemason-config",
  "codemason-types",
+ "ctor",
  "dirs",
  "filetime",
  "globset",
@@ -1812,6 +1835,7 @@ dependencies = [
  "codemason-tools-core",
  "codemason-tools-extended",
  "codemason-types",
+ "ctor",
  "futures",
  "html2text",
  "lingua",
@@ -1844,6 +1868,7 @@ dependencies = [
  "codemason-config",
  "codemason-storage",
  "codemason-types",
+ "ctor",
  "futures",
  "reqwest",
  "serde",
@@ -1861,6 +1886,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "ctor",
  "libc",
  "regex",
  "serde",
@@ -2307,6 +2333,16 @@ dependencies = [
  "getrandom 0.4.3",
  "hybrid-array",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "ctor"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea691ed9f36489d087419b8b2ba3ef27d89621380b4178c73e2445a379e4e0f4"
+dependencies = [
+ "link-section",
+ "linktime-proc-macro",
 ]
 
 [[package]]
@@ -5334,6 +5370,18 @@ checksum = "e429650453aa15779df3560ce9150c1cdfa48bbb8975e95a925cf868b2a3dc0a"
 dependencies = [
  "include_dir",
 ]
+
+[[package]]
+name = "link-section"
+version = "0.19.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d9aae57673c1a235149777a74d152f3210ebd3e3b13346d2cdb6809e566bd3c"
+
+[[package]]
+name = "linktime-proc-macro"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e57c38c1e860fd37c604281cdfb1dd2216977fd76a50f85ba2f388ef3219616"
 
 [[package]]
 name = "linux-raw-sys"

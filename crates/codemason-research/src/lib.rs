@@ -177,7 +177,7 @@ pub use page_summarizer::{LlmPageSummarizer, PageSummarizer, PageSummary};
 pub use patcher::{PatchResult, SurgicalPatch, build_surgical_patches};
 pub use plan_dep::{
     ResearchDependency, ResearchDependencyError, parse_research_dependencies,
-    parse_spec_frontmatter_research, research_dependency_names,
+    research_dependency_names,
 };
 pub use planner::{HeuristicPlanner, LlmPlanner, Planner};
 pub use provider_stats::ProviderCallStats;

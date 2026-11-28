@@ -320,3 +320,53 @@ fn stage_falls_back_to_the_global_leg_when_no_project_leg_resolves() {
     let staged = stage(&dirs, &tree.0, source.to_str().unwrap(), false).expect("stage");
     assert_eq!(staged.installed_dir, tree.0.join("global/connectors/echo"));
 }
+
+// -- RS-05: the archive entry count is bounded --------------------------------
+
+/// A connector manifest plus `MAX_ARCHIVE_ENTRIES + 1` zero-byte entries.
+fn many_empty_entries() -> Vec<(String, String)> {
+    let mut files = vec![(MANIFEST_FILE.to_string(), manifest_for("echo", "Echo"))];
+    files.extend(
+        (0..=codemason_connectors::MAX_ARCHIVE_ENTRIES).map(|i| (format!("e/{i}"), String::new())),
+    );
+    files
+}
+
+fn assert_entry_cap_refused(err: &StageError) {
+    assert!(
+        matches!(err, StageError::Io(msg) if msg.contains("entries")),
+        "expected an entry-count refusal, got {err:?}"
+    );
+}
+
+#[test]
+fn stage_zip_with_too_many_entries_is_refused() {
+    let tree = TempTree::new("stage-zip-many");
+    let zip = tree.0.join("many.zip");
+    let files = many_empty_entries();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.as_str()))
+        .collect();
+    make_zip(&zip, &refs);
+
+    let err = stage(&dirs(&tree), &tree.0, zip.to_str().unwrap(), false)
+        .expect_err("an archive past the entry cap must be refused");
+    assert_entry_cap_refused(&err);
+}
+
+#[test]
+fn stage_tar_gz_with_too_many_entries_is_refused() {
+    let tree = TempTree::new("stage-targz-many");
+    let archive = tree.0.join("many.tar.gz");
+    let files = many_empty_entries();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.as_str()))
+        .collect();
+    make_tar_gz(&archive, &refs);
+
+    let err = stage(&dirs(&tree), &tree.0, archive.to_str().unwrap(), false)
+        .expect_err("an archive past the entry cap must be refused");
+    assert_entry_cap_refused(&err);
+}

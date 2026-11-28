@@ -59,3 +59,7 @@ mod test_version_flag;
 
 #[path = "test_wire_matrix_flag.rs"]
 mod test_wire_matrix_flag;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "common/profile_isolation.rs"]
+mod profile_isolation;

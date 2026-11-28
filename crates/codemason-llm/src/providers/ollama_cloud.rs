@@ -430,26 +430,23 @@ impl LlmClient for OllamaCloudClient {
             tracing::debug!(body_bytes = body_len, "Ollama Cloud request body built");
         }
 
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
+        let response = super::http_client::send_within_first_byte_timeout(
             self.http
                 .post(&url)
                 .header("content-type", "application/json")
-                .header("Authorization", codemason_types::strutil::bearer_auth_header(&self.api_key))
+                .header(
+                    "Authorization",
+                    codemason_types::strutil::bearer_auth_header(&self.api_key),
+                )
                 .body(body_bytes)
                 .send(),
+            timeout_secs,
+            "ollama_cloud",
+            &url,
+            || format!("Ollama Cloud: initial response timed out after {timeout_secs}s"),
+            || format!("Failed to connect to Ollama Cloud at {url}"),
         )
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(provider = "ollama_cloud", url = %url, error = %e, "chat request timed out");
-        })
-        .map_err(|_| {
-            anyhow::anyhow!("Ollama Cloud: initial response timed out after {timeout_secs}s")
-        })?
-        .inspect_err(|e| {
-            tracing::warn!(provider = "ollama_cloud", url = %url, error = %e, "chat request failed");
-        })
-        .with_context(|| format!("Failed to connect to Ollama Cloud at {url}"))?;
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             // ANTIPAT 3.1/3.2: capped error-body read.
@@ -683,24 +680,18 @@ impl LlmClient for OllamaCloudClient {
                     }
 
                     if parsed.get("done").and_then(serde_json::Value::as_bool) == Some(true) {
-                        // PERF-062: only serialise the done frame for the log
-                        // when INFO logging is actually enabled.
-                        if tracing::enabled!(tracing::Level::INFO) {
-                            let done_preview = serde_json::to_string(&parsed).unwrap_or_default();
-                            // SEC-codemason-llm-006 (SECTASKS T-050): slicing at a
-                            // raw byte offset panics when it lands inside a
-                            // multibyte UTF-8 character in a server-controlled
-                            // string field (the same fix already applied in
-                            // openrouter.rs / FUNC-001).
-                            let done_preview =
-                                codemason_types::strutil::truncate_bytes_no_ellipsis(&done_preview, 500);
-                            tracing::info!(
-                                model = %model_name,
-                                open_calls = acc.open_count(),
-                                done_frame = %done_preview,
-                                "Ollama Cloud: done frame received"
-                            );
-                        }
+                        // CO-12: log the frame's metadata only. The done frame of
+                        // `/api/generate` carries the final `response` fragment
+                        // and `context` token ids (an encoding of the whole
+                        // conversation), so it is never logged whole.
+                        tracing::info!(
+                            model = %model_name,
+                            open_calls = acc.open_count(),
+                            done_reason = parsed.get("done_reason").and_then(serde_json::Value::as_str).unwrap_or(""),
+                            prompt_eval_count = parsed.get("prompt_eval_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            eval_count = parsed.get("eval_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            "Ollama Cloud: done frame received"
+                        );
 
                         if let Some(prompt_tokens) = parsed.get("prompt_eval_count").and_then(serde_json::Value::as_u64)
                         {

@@ -274,7 +274,8 @@ async fn test_create_session_success() {
         .join("target")
         .join("temp");
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let body = format!(r#"{{"directory":"{}"}}"#, dir.display());
+    // `json!` escapes the path; a Windows `\` spliced in raw is invalid JSON.
+    let body = serde_json::json!({ "directory": dir.display().to_string() }).to_string();
     let req = Request::builder()
         .method("POST")
         .uri("/sessions")
@@ -359,4 +360,35 @@ async fn func066_rate_limiter_enforces_exactly_60() {
         app.oneshot(req).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
     );
+}
+
+/// RS-06: the window is 60 seconds. A full budget 59 s into the window is
+/// still refused; a full budget whose window opened exactly 60 s ago resets.
+#[tokio::test]
+async fn test_rate_limiter_window_is_sixty_seconds() {
+    for (age_secs, expect_limited) in [(59u64, true), (60u64, false)] {
+        let state = crate::support::test_state("tok");
+        state.storage.create_session("s1", "/tmp").unwrap();
+        {
+            let mut lim = state.rate_limiter.lock().await;
+            let started = std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(age_secs))
+                .unwrap();
+            lim.insert("s1".to_string(), (60, started));
+        }
+        let app = router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/sessions/s1/messages")
+            .header("Authorization", "Bearer tok")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"content":"hi"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status() == StatusCode::TOO_MANY_REQUESTS,
+            expect_limited,
+            "age {age_secs}s"
+        );
+    }
 }

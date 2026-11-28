@@ -3716,13 +3716,13 @@ pub struct App {
     /// SQLite call every frame).
     pub memory_cache_count: u64,
     /// `true` when `memory_cache_*` is stale and needs a SQLite refresh on
-    /// the next `render_memory_panel` call.
+    /// the next `refresh_memory_cache` call.
     pub memory_cache_dirty: bool,
     /// Index of the currently selected memory row in the Alt+M panel (cursor).
     pub memory_cursor: usize,
     /// Line index (into `memory_content_lines`) of each selectable memory row's
-    /// preview line, computed by `render_memory_panel` so cursor navigation can
-    /// scroll the selection into view.
+    /// preview line, for scrolling the selection into view. Nothing fills it
+    /// since the terminal Memory panel was removed, so that scroll does nothing.
     pub memory_row_line_indices: Vec<usize>,
     /// Number of selectable memory rows last rendered in the panel.
     pub memory_row_count: usize,
@@ -4134,7 +4134,7 @@ pub struct App {
     /// Cached count of structured memories (SQLite).
     pub memory_entry_count: u64,
     /// Atomic cache updated by the off-thread refresh query.
-    /// The TUI main loop copies this into `memory_entry_count` once per tick.
+    /// `App::housekeeping` copies this into `memory_entry_count` once per pass.
     pub memory_entry_count_pending: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// When the cached memory stats were last refreshed.
     pub memory_stats_last_refresh: std::time::Instant,
@@ -5128,7 +5128,7 @@ impl App {
                 std::fs::create_dir_all(parent)?;
             }
             let content = history_entries_to_string(&self.input_history);
-            std::fs::write(path, content)?;
+            write_history_atomic(path, &content)?;
             tracing::debug!(
                 "Saved {} history entries to {:?}",
                 self.input_history.len(),
@@ -5139,7 +5139,8 @@ impl App {
     }
 
     /// Flush history to disk in a background thread if the debounce deadline
-    /// has elapsed.  Called from the TUI main loop (~50 ms cadence).
+    /// has elapsed.  Called from `App::housekeeping`, which the GUI runs every
+    /// frame.
     ///
     /// This avoids blocking the UI thread on every keystroke while still
     /// persisting history within a few seconds of a change.
@@ -5172,7 +5173,7 @@ impl App {
                     return;
                 }
             }
-            if let Err(e) = std::fs::write(&path, content) {
+            if let Err(e) = write_history_atomic(&path, &content) {
                 tracing::warn!("Failed to save history (async): {e}");
             } else {
                 tracing::debug!("Saved {entry_count} history entries to {path:?}");
@@ -5209,7 +5210,7 @@ impl App {
     /// Poll the status auto-expiry timer and transition to `"ready"` if the
     /// grace period has elapsed and the status is unchanged.
     ///
-    /// Called from the TUI main loop (~50 ms cadence). If the recorded status
+    /// Called from `App::poll_timers` every frame. If the recorded status
     /// snapshot still matches the current status and the delay has passed, the
     /// status is set to `"ready"`. If the status changed since the timer was
     /// armed, the timer is silently cleared without overwriting the new status.
@@ -5242,7 +5243,7 @@ impl App {
     /// `RUN_COST_BANNER_EXPIRY_SECS` seconds so it does not obstruct the
     /// status bar during long unattended runs (e.g. `/spec impl`).
     ///
-    /// Called from the TUI main loop (~50 ms cadence).
+    /// Called from `App::poll_timers` every frame.
     pub fn poll_run_cost_banner_expiry(&mut self) {
         if let Some(shown_at) = self.session.run_cost_banner_at {
             if shown_at.elapsed() >= std::time::Duration::from_secs(RUN_COST_BANNER_EXPIRY_SECS) {
@@ -5255,8 +5256,7 @@ impl App {
     /// Run the App's wall-clock timers: the status auto-expiry, the run-cost
     /// banner auto-dismiss and the timed question's auto-answer.
     ///
-    /// Each frontend calls it on its periodic tick (the TUI from its
-    /// housekeeping pass, the GUI every frame), whatever is on screen, so a
+    /// The GUI calls it every frame, whatever is on screen, so a
     /// timed question hidden behind another modal still answers its default
     /// and the agent waiting on it is never blocked.
     pub fn poll_timers(&mut self) {
@@ -5323,7 +5323,7 @@ impl App {
     /// untouched. The answered entry is removed from the queue, and the reply
     /// is published on the event bus exactly as a user selection would be.
     ///
-    /// Called from the TUI main loop (~50 ms cadence).
+    /// Called from `App::poll_timers` every frame.
     pub fn poll_question_expiry(&mut self) {
         let Some(req) = self.session.question_queue.front() else {
             return;
@@ -5375,7 +5375,7 @@ impl App {
     /// main-loop deadline. This poll reaps such latches so the loop returns
     /// to its normal idle cadence.
     ///
-    /// Called from the TUI main loop each wake.
+    /// Called from `App::housekeeping`, which the GUI runs every frame.
     pub fn poll_stale_spinners(&mut self) {
         let mut reaped = false;
         if let Some(state) = &self.model_loading_state
@@ -5429,7 +5429,7 @@ impl App {
     /// divergence in both directions (missing entries re-added, ghosts of
     /// dropped completions removed).
     ///
-    /// Called from the TUI main loop each wake.
+    /// Called from `App::housekeeping`, which the GUI runs every frame.
     ///
     /// Triggers:
     /// - **Lag-triggered (immediate)**: the shared lag counter changed - a
@@ -5736,4 +5736,15 @@ fn unescape_history_line(line: &str) -> String {
         }
     }
     result
+}
+
+/// Write the history file through a temp file in the same directory and a
+/// rename (UI-02), so a crash or a full disk mid-write leaves the previous
+/// history in place instead of a truncated file.
+fn write_history_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let temp = tempfile::NamedTempFile::new_in(parent)?;
+    std::fs::write(temp.path(), content)?;
+    temp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }

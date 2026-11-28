@@ -34,6 +34,7 @@ codemason-llm = { path = "../codemason-llm" }
 codemason-types = { path = "../codemason-types" }
 
 [dev-dependencies]
+ctor = { workspace = true }
 # Used only by `benches/agent_loop.rs` and `tests/test_bench_core.rs`.
 rustc-hash = { workspace = true }
 tempfile = "3.14"

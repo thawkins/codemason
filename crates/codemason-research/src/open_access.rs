@@ -113,12 +113,25 @@ pub trait OpenAccessClient: Send + Sync {
 }
 
 /// Production HTTP client for OA lookups.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ReqwestOpenAccessClient {
     /// Optional contact email appended to the user-agent.
     pub contact_email: Option<String>,
     /// Per-request timeout.
     pub timeout: Duration,
+    /// The HTTP client, built on first use from the fields above and reused
+    /// after that so every lookup shares one connection pool and TLS setup
+    /// (RS-18). Set the fields before the first request.
+    http: std::sync::OnceLock<reqwest::Client>,
+}
+
+/// Hand-written so the default carries the 30-second timeout from
+/// [`ReqwestOpenAccessClient::new`]; a derived `Default` would set
+/// `Duration::ZERO` and time out every request (RS-09).
+impl Default for ReqwestOpenAccessClient {
+    fn default() -> Self {
+        Self::new(None)
+    }
 }
 
 impl ReqwestOpenAccessClient {
@@ -129,6 +142,7 @@ impl ReqwestOpenAccessClient {
         Self {
             contact_email,
             timeout: Duration::from_secs(30),
+            http: std::sync::OnceLock::new(),
         }
     }
 
@@ -139,7 +153,21 @@ impl ReqwestOpenAccessClient {
         }
     }
 
+    /// The shared HTTP client, built on the first call (RS-18).
+    ///
+    /// `reqwest::Client` is a handle around an `Arc`, so the clone is cheap
+    /// and shares the pool.
     fn client(&self) -> Result<reqwest::Client> {
+        if let Some(client) = self.http.get() {
+            return Ok(client.clone());
+        }
+        let client = self.build_client()?;
+        // Two first calls may race; whichever stores first wins and both
+        // clients are valid.
+        Ok(self.http.get_or_init(|| client).clone())
+    }
+
+    fn build_client(&self) -> Result<reqwest::Client> {
         reqwest::Client::builder()
             .timeout(self.timeout)
             // Fail fast on DNS/TCP stalls: without a connect timeout a

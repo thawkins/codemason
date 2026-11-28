@@ -565,7 +565,7 @@ impl Drop for HookGroupGuard {
 /// `ESRCH` then).
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn kill_hook_process_group(pid: u32) {
+pub(crate) fn kill_hook_process_group(pid: u32) {
     let pid = pid as i32;
     if pid <= 0 {
         return;
@@ -582,7 +582,7 @@ fn kill_hook_process_group(pid: u32) {
 /// the hook child does not survive its own `KillOnDrop` teardown there, so
 /// nothing further is required when the 30 s hook timeout fires.
 #[cfg(windows)]
-fn kill_hook_process_group(_pid: u32) {}
+pub(crate) fn kill_hook_process_group(_pid: u32) {}
 
 /// Look up and run a quality-gate hook for the given event in a team's settings.
 ///

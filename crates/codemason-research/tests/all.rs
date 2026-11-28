@@ -194,3 +194,7 @@ mod test_web_gatherer_helpers;
 mod test_web_search_tool_exclusions;
 #[path = "test_web_time_deadline.rs"]
 mod test_web_time_deadline;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

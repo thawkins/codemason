@@ -15,6 +15,36 @@
 > 319 s with 16 skipped; `cargo fmt --check` and
 > `cargo clippy --workspace --all-targets -- -D warnings` are clean.
 
+> **Deep-refactor train (unreleased, branch `claude/deep-refactor-8aed50`).**
+>
+> - **Shape:** no crate is added or removed.
+> - **New shared modules:**
+>   - `codemason-agent::child_process`;
+>   - `codemason-surface::archive` and `codemason-surface::git_source`;
+>   - `codemason_types::sanitize::CREDENTIAL_PREFIXES`.
+> - **Removed duplicates:** the plugins and connectors copies of the archive and
+>   `git+` code, and the Azure copy of the Anthropic stream parser.
+> - **Monster functions split**, with line counts before and after:
+>   - `process_user_message` 1,830 -> 99;
+>   - `dispatch_key` 1,147 -> 28;
+>   - `handle_key` 1,021 -> 48;
+>   - `ResearchSession::run` 970 -> 123;
+>   - `Storage::migrate` 670 -> 62;
+>   - `merge_inner` 403 -> 241;
+>   - `async_main` 497 -> 162.
+> - **Measurement at this commit:** **2,299** crate `.rs` files, **843,443** crate
+>   lines, **1,463** files under `crates/*/tests/` and **16,487** `#[test]` /
+>   `#[tokio::test]` attributes (**2,324 / 852,805 / 1,478 / 16,576** with the root
+>   package).
+> - **Commands used:**
+>   - `find crates -name '*.rs' | wc -l`;
+>   - `xargs cat | wc -l` over the same files;
+>   - `find crates -path '*/tests/*' -name '*.rs' | wc -l`;
+>   - `grep -rhoE '#\[(tokio::)?test(\(|\])' crates | wc -l`.
+>
+>   The test-file count includes `tests/support` and `tests/inline` files, so it is
+>   not directly comparable with the 1.0.185 figure.
+
 > **Material contrast, verb-labelled confirmations (1.0.185).** No crate is
 > added or removed. `codemason-gui` gains 6 files and 5,192 lines over the
 > 1.0.181 measurement (the Material dialog migration and this release's

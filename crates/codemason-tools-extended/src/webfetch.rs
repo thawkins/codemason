@@ -15,6 +15,11 @@ use crate::masterfetch::security::validate_url;
 pub struct WebFetchTool;
 
 const DEFAULT_MAX_LENGTH: usize = 50_000;
+/// Upper bound on the model-supplied `max_length` (10 MiB of text), so a huge
+/// value cannot turn the streaming download cap into an unbounded read (TL-08).
+pub const MAX_LENGTH_CEILING: usize = 10 * 1024 * 1024;
+/// Upper bound on the model-supplied `timeout`, in seconds (TL-08).
+pub const MAX_TIMEOUT_SECS: u64 = 300;
 const USER_AGENT: &str = "codemason/0.1 (https://github.com/thawkins/codemason)";
 
 /// Extract the article text from HTML using the `readability-rs` crate, which
@@ -51,7 +56,8 @@ impl Tool for WebFetchTool {
     fn description(&self) -> &'static str {
         "Fetch the content of a URL via HTTP GET. REQUIRED parameter: 'url' (string). \
              Optional: 'format' (string enum raw/text, default text), 'max_length' \
-             (integer, default 50000), and 'timeout' (integer seconds, default 30). \
+             (integer, default 50000, max 10485760), and 'timeout' (integer seconds, default 30, \
+             max 300). \
              HTML is automatically converted to plain text unless format is 'raw'. \
              Common gotcha: only HTTP/HTTPS URLs are supported; invalid or missing \
              schemes return an error."
@@ -72,11 +78,11 @@ impl Tool for WebFetchTool {
                 },
                 "max_length": {
                     "type": "integer",
-                    "description": "Maximum characters to return (default: 50000)"
+                    "description": "Maximum characters to return (default: 50000, max: 10485760)"
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Request timeout in seconds (default: 30)"
+                    "description": "Request timeout in seconds (default: 30, max: 300)"
                 }
             },
             "required": ["url"],
@@ -111,10 +117,17 @@ impl Tool for WebFetchTool {
         }
 
         let format = input["format"].as_str().unwrap_or("text");
+        // TL-08: clamp both model-supplied limits to fixed ceilings.
         let max_length = input["max_length"]
             .as_u64()
-            .map_or(DEFAULT_MAX_LENGTH, |v| v as usize);
-        let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+            .map_or(DEFAULT_MAX_LENGTH, |v| {
+                usize::try_from(v).unwrap_or(usize::MAX)
+            })
+            .min(MAX_LENGTH_CEILING);
+        let timeout_secs = input["timeout"]
+            .as_u64()
+            .unwrap_or(DEFAULT_TIMEOUT_SECS)
+            .min(MAX_TIMEOUT_SECS);
 
         // M-014: reuse the shared reqwest client singleton (reusing the
         // connection pool + TLS session cache) instead of building a fresh

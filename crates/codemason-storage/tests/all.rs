@@ -48,6 +48,8 @@ mod test_background_tasks_crud;
 mod test_compaction_prune;
 #[path = "test_compaction_role.rs"]
 mod test_compaction_role;
+#[path = "test_credential_key_file.rs"]
+mod test_credential_key_file;
 #[path = "test_cron_automation_lifecycle.rs"]
 mod test_cron_automation_lifecycle;
 #[path = "test_cron_events_table.rs"]
@@ -108,6 +110,8 @@ mod test_settings_and_file_storage;
 mod test_sidebar_sections;
 #[path = "test_snapshot_expand.rs"]
 mod test_snapshot_expand;
+#[path = "test_snapshot_restore.rs"]
+mod test_snapshot_restore;
 #[path = "test_storage_transactions.rs"]
 mod test_storage_transactions;
 #[path = "test_task_crud.rs"]
@@ -128,3 +132,7 @@ mod test_usage_stats;
 mod test_wal_warmup;
 #[path = "test_warm_index_scan.rs"]
 mod test_warm_index_scan;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

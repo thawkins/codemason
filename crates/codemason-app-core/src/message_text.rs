@@ -313,24 +313,6 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
     // the same rich display as canonical tools.
     let tool = canonical_tool_name(tool);
 
-    // Helper: try multiple field names, return first that has a str value.
-    let get_str = |keys: &[&str]| -> Option<String> {
-        keys.iter()
-            .find_map(|k| input.get(*k)?.as_str().map(|s| s.to_string()))
-    };
-
-    // Helper: get path and make it relative to cwd
-    let get_relative_path = |keys: &[&str]| -> String {
-        get_str(keys)
-            .as_deref()
-            .map(|p| make_relative_path(p, cwd))
-            .unwrap_or_default()
-    };
-
-    // Helper: keep inline tool summaries compact without hiding too much of
-    // the tool arguments in the chat transcript.
-    let trunc120 = |s: &str| truncate_str(s, 120);
-
     // Fallback: for tools that must never hide their parameters (bash/read/write/create/edit),
     // if the structured extractor yields an empty summary (unexpected provider field names),
     // emit a compact raw-JSON rendering so the user can always see what arguments were sent.
@@ -354,7 +336,74 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         }
     };
 
-    let specific = match tool {
+    // Every tool name belongs to exactly one family, so the chain order only
+    // mirrors the original arm order; the unknown-tool default runs last.
+    let specific = file_input_summary(tool, input, cwd)
+        .or_else(|| search_input_summary(tool, input, cwd))
+        .or_else(|| exec_input_summary(tool, input))
+        .or_else(|| web_input_summary(tool, input))
+        .or_else(|| agent_input_summary(tool, input))
+        .or_else(|| team_input_summary(tool, input))
+        .or_else(|| code_intel_input_summary(tool, input, cwd))
+        .or_else(|| git_input_summary(tool, input))
+        .or_else(|| forge_input_summary(tool, input))
+        .or_else(|| utility_input_summary(tool, input))
+        .unwrap_or_else(|| unknown_tool_input_summary(tool, input));
+
+    let fallback_for = canonical_tool_name(tool);
+    let needs_fallback = matches!(fallback_for, "Bash" | "read" | "Write" | "create" | "Edit");
+
+    // If the specific extractor returned an empty summary for a parameter-heavy tool,
+    // fall back to a raw-args rendering so the input is never invisible.
+    if specific.is_empty() && needs_fallback {
+        fallback_raw_args(tool, input)
+    } else {
+        specific
+    }
+}
+
+/// Helper: try multiple field names, return first that has a str value.
+///
+/// # Arguments
+/// * `input` - the tool call's JSON arguments.
+/// * `keys` - field names to try, in order.
+///
+/// # Returns
+/// The string value, or `None` when no key holds a string.
+fn input_str(input: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|k| input.get(*k)?.as_str().map(|s| s.to_string()))
+}
+
+/// Helper: get path and make it relative to cwd
+///
+/// # Arguments
+/// * `input` - the tool call's JSON arguments.
+/// * `cwd` - working directory that the path is shown relative to.
+/// * `keys` - field names to try, in order.
+///
+/// # Returns
+/// The relative path, or an empty string when no key holds a string.
+fn input_path(input: &serde_json::Value, cwd: &str, keys: &[&str]) -> String {
+    input_str(input, keys)
+        .as_deref()
+        .map(|p| make_relative_path(p, cwd))
+        .unwrap_or_default()
+}
+
+/// Input summary for the file, directory, move/copy and PDF tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+/// * `cwd` - working directory that paths are shown relative to.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn file_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  FILE OPERATIONS
         // ===================================================================
@@ -367,20 +416,20 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             // the provider uses entirely unexpected field names. If the known key
             // resolves to an empty path (e.g. `{"path":""}`), we intentionally return
             // an empty summary to preserve existing test expectations.
-            get_relative_path(&["path", "file_path"])
+            input_path(input, cwd, &["path", "file_path"])
         }
         // intentionally gated on the structured extractor yielding an empty
         // string. This preserves existing behaviour for empty/missing known
         // parameters while still showing something useful when the provider
         // uses unexpected field names.
-        "Write" | "create" => get_relative_path(&["path"]),
+        "Write" | "create" => input_path(input, cwd, &["path"]),
         "Edit" | "patch" => {
             // The edit tool's canonical parameter is `file_path`, with `path` as a
             // deprecated legacy alias. Check both so the file name always shows
             // in the message window header regardless of which name the model used.
-            get_relative_path(&["file_path", "path"])
+            input_path(input, cwd, &["file_path", "path"])
         }
-        "rm" => get_relative_path(&["path"]),
+        "rm" => input_path(input, cwd, &["path"]),
         "multiedit" | "multi_edit" => {
             let count = input
                 .get("edits")
@@ -389,9 +438,9 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
                 .unwrap_or(0);
             pluralize(count, "edit", "edits")
         }
-        "append_to_file" | "append_file" => get_relative_path(&["path"]),
+        "append_to_file" | "append_file" => input_path(input, cwd, &["path"]),
         "apply_patch" => {
-            let target = get_str(&["path"]).unwrap_or_default();
+            let target = input_str(input, &["path"]).unwrap_or_default();
             if target.is_empty() {
                 "apply patch".to_string()
             } else {
@@ -399,8 +448,8 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "diff_files" => {
-            let a = get_str(&["path_a", "file_a", "original"]).unwrap_or_default();
-            let b = get_str(&["path_b", "file_b", "modified"]).unwrap_or_default();
+            let a = input_str(input, &["path_a", "file_a", "original"]).unwrap_or_default();
+            let b = input_str(input, &["path_b", "file_b", "modified"]).unwrap_or_default();
             format!(
                 "{} ↔ {}",
                 make_relative_path(&a, cwd),
@@ -413,21 +462,21 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         // ===================================================================
         "list" => {
             // list_directory uses "directory"; canonical list uses "path".
-            get_relative_path(&["path", "directory"])
+            input_path(input, cwd, &["path", "directory"])
         }
-        "make_directory" | "mkdir" => get_relative_path(&["path", "directory"]),
+        "make_directory" | "mkdir" => input_path(input, cwd, &["path", "directory"]),
 
         // ===================================================================
         //  FILE INFO
         // ===================================================================
-        "file_info" => get_relative_path(&["path"]),
+        "file_info" => input_path(input, cwd, &["path"]),
 
         // ===================================================================
         //  FILE MOVE/COPY
         // ===================================================================
         "move_file" | "rename_file" => {
-            let src = get_str(&["source", "src", "from", "path"]).unwrap_or_default();
-            let dst = get_str(&["destination", "dst", "to"]).unwrap_or_default();
+            let src = input_str(input, &["source", "src", "from", "path"]).unwrap_or_default();
+            let dst = input_str(input, &["destination", "dst", "to"]).unwrap_or_default();
             if dst.is_empty() {
                 make_relative_path(&src, cwd)
             } else {
@@ -439,8 +488,8 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "copy_file" => {
-            let src = get_str(&["source", "src", "from", "path"]).unwrap_or_default();
-            let dst = get_str(&["destination", "dst", "to"]).unwrap_or_default();
+            let src = input_str(input, &["source", "src", "from", "path"]).unwrap_or_default();
+            let dst = input_str(input, &["destination", "dst", "to"]).unwrap_or_default();
             format!(
                 "{} → {}",
                 make_relative_path(&src, cwd),
@@ -449,11 +498,34 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         }
 
         // ===================================================================
+        //  DOCUMENT (PDF)
+        // ===================================================================
+        "pdf_read" => input_path(input, cwd, &["path"]),
+        "pdf_write" => input_path(input, cwd, &["path"]),
+        _ => return None,
+    };
+    Some(summary)
+}
+
+/// Input summary for the local and session search tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+/// * `cwd` - working directory that paths are shown relative to.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn search_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> Option<String> {
+    let summary = match tool {
+        // ===================================================================
         //  SEARCH OPERATIONS
         // ===================================================================
         "search" => {
-            let query = get_str(&["query", "pattern"]).unwrap_or_default();
-            let path = get_str(&["path"])
+            let query = input_str(input, &["query", "pattern"]).unwrap_or_default();
+            let path = input_str(input, &["path"])
                 .as_deref()
                 .map(|p| make_relative_path(p, cwd));
             match path {
@@ -481,6 +553,34 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             .to_string(),
 
         // ===================================================================
+        //  EXTENDED SEARCH / INTELLIGENCE
+        // ===================================================================
+        "conversation_search" => {
+            let query = input_str(input, &["query"]).unwrap_or_default();
+            format!("session: \"{}\"", trunc120(&query))
+        }
+        "session_search" => {
+            let query = input_str(input, &["query"]).unwrap_or_default();
+            format!("all sessions: \"{}\"", trunc120(&query))
+        }
+        _ => return None,
+    };
+    Some(summary)
+}
+
+/// Input summary for the execution, environment, background-process, open, initiative and Skill tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn exec_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
+        // ===================================================================
         //  EXECUTION
         // ===================================================================
         "Bash" => {
@@ -488,7 +588,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             // with " ; " so multiline commands display on a single line.
             // Bash gets the wider preview budget: the command IS the action, so
             // a clipped `cd ... && cargo build | tail` hides which step ran.
-            get_str(&["command", "code", "cmd"])
+            input_str(input, &["command", "code", "cmd"])
                 .as_deref()
                 .map(|s| s.replace('\n', " ; "))
                 .map(|s| format!("$ {}", truncate_str(&s, BASH_COMMAND_PREVIEW_CHARS)))
@@ -496,7 +596,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         }
 
         "calculator" => {
-            let expr = get_str(&["expression", "expr", "query"]).unwrap_or_default();
+            let expr = input_str(input, &["expression", "expr", "query"]).unwrap_or_default();
             trunc120(&expr)
         }
         "DateTime" => {
@@ -507,17 +607,98 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             let sign = if offset < 0 { '-' } else { '+' };
             let magnitude = offset.abs();
             let zone = format!("UTC{sign}{:02}:{:02}", magnitude / 60, magnitude % 60);
-            get_str(&["format"])
+            input_str(input, &["format"])
                 .map(|fmt| format!("{zone} {fmt}"))
                 .unwrap_or(zone)
         }
 
         // ===================================================================
+        //  ENVIRONMENT
+        // ===================================================================
+        "get_env" => {
+            let key = input_str(input, &["key", "name", "variable"]).unwrap_or_default();
+            if key.is_empty() {
+                "all vars".to_string()
+            } else {
+                key
+            }
+        }
+        "bash_reset" => "reset shell".to_string(),
+
+        // ===================================================================
+        //  BACKGROUND PROCESS MANAGEMENT
+        // ===================================================================
+        "bg" => {
+            let action = input_str(input, &["action"]).unwrap_or_else(|| "list".to_string());
+            match action.as_str() {
+                "spawn" => {
+                    let cmd = input_str(input, &["command"]).unwrap_or_default();
+                    let first = cmd.lines().next().unwrap_or("");
+                    format!("spawn: {}", trunc120(first))
+                }
+                other => {
+                    let task = input_str(input, &["task_id"]).unwrap_or_default();
+                    if task.is_empty() {
+                        format!("{}", other)
+                    } else {
+                        format!("{} {}", other, short_id(&task))
+                    }
+                }
+            }
+        }
+
+        "open" => {
+            let target = input_str(input, &["target"]).unwrap_or_default();
+            let action = input_str(input, &["action"]).unwrap_or_else(|| "open".to_string());
+            format!("{} {}", action, trunc120(&target))
+        }
+        "initiative" => {
+            let action = input_str(input, &["action"]).unwrap_or_else(|| "list".to_string());
+            match action.as_str() {
+                "create" => {
+                    let title = input_str(input, &["title"]).unwrap_or_default();
+                    format!("create \"{}\"", trunc120(&title))
+                }
+                "update" | "read" | "close" | "checkpoint" => {
+                    let id = input_str(input, &["id"]).unwrap_or_default();
+                    format!("{} {}", action, trunc120(&id))
+                }
+                other => format!("{}", other),
+            }
+        }
+        "Skill" => {
+            let action = input_str(input, &["action"]).unwrap_or_else(|| "list".to_string());
+            match action.as_str() {
+                "list" | "reload" => action,
+                other => {
+                    let name = input_str(input, &["name"]).unwrap_or_default();
+                    format!("{} {}", other, trunc120(&name))
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(summary)
+}
+
+/// Input summary for the network and masterfetch tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn web_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
+        // ===================================================================
         //  NETWORK
         // ===================================================================
         "http_request" | "web_request" => {
-            let method = get_str(&["method"]).unwrap_or_else(|| "GET".to_string());
-            let url = get_str(&["url"]).unwrap_or_default();
+            let method = input_str(input, &["method"]).unwrap_or_else(|| "GET".to_string());
+            let url = input_str(input, &["url"]).unwrap_or_default();
             format!("{} {}", method, trunc120(&url))
         }
         "webfetch" => input
@@ -553,89 +734,28 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             .and_then(|v| v.as_str())
             .map(|q| format!("\"{}\"", trunc120(q)))
             .unwrap_or_else(|| "search".to_string()),
+        _ => return None,
+    };
+    Some(summary)
+}
 
-        // ===================================================================
-        //  EXTENDED SEARCH / INTELLIGENCE
-        // ===================================================================
-        "conversation_search" => {
-            let query = get_str(&["query"]).unwrap_or_default();
-            format!("session: \"{}\"", trunc120(&query))
-        }
-        "session_search" => {
-            let query = get_str(&["query"]).unwrap_or_default();
-            format!("all sessions: \"{}\"", trunc120(&query))
-        }
-
-        // ===================================================================
-        //  ENVIRONMENT
-        // ===================================================================
-        "get_env" => {
-            let key = get_str(&["key", "name", "variable"]).unwrap_or_default();
-            if key.is_empty() {
-                "all vars".to_string()
-            } else {
-                key
-            }
-        }
-        "bash_reset" => "reset shell".to_string(),
-
-        // ===================================================================
-        //  BACKGROUND PROCESS MANAGEMENT
-        // ===================================================================
-        "bg" => {
-            let action = get_str(&["action"]).unwrap_or_else(|| "list".to_string());
-            match action.as_str() {
-                "spawn" => {
-                    let cmd = get_str(&["command"]).unwrap_or_default();
-                    let first = cmd.lines().next().unwrap_or("");
-                    format!("spawn: {}", trunc120(first))
-                }
-                other => {
-                    let task = get_str(&["task_id"]).unwrap_or_default();
-                    if task.is_empty() {
-                        format!("{}", other)
-                    } else {
-                        format!("{} {}", other, short_id(&task))
-                    }
-                }
-            }
-        }
-
-        "open" => {
-            let target = get_str(&["target"]).unwrap_or_default();
-            let action = get_str(&["action"]).unwrap_or_else(|| "open".to_string());
-            format!("{} {}", action, trunc120(&target))
-        }
-        "initiative" => {
-            let action = get_str(&["action"]).unwrap_or_else(|| "list".to_string());
-            match action.as_str() {
-                "create" => {
-                    let title = get_str(&["title"]).unwrap_or_default();
-                    format!("create \"{}\"", trunc120(&title))
-                }
-                "update" | "read" | "close" | "checkpoint" => {
-                    let id = get_str(&["id"]).unwrap_or_default();
-                    format!("{} {}", action, trunc120(&id))
-                }
-                other => format!("{}", other),
-            }
-        }
-        "Skill" => {
-            let action = get_str(&["action"]).unwrap_or_else(|| "list".to_string());
-            match action.as_str() {
-                "list" | "reload" => action,
-                other => {
-                    let name = get_str(&["name"]).unwrap_or_default();
-                    format!("{} {}", other, trunc120(&name))
-                }
-            }
-        }
-
+/// Input summary for the user-interaction, reasoning, planning, task, sub-agent and agent_complete tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn agent_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  USER INTERACTION
         // ===================================================================
         "question" | "AskUserQuestion" => {
-            let q = get_str(&["question", "query"]).unwrap_or_default();
+            let q = input_str(input, &["question", "query"]).unwrap_or_default();
             trunc120(&q)
         }
 
@@ -643,7 +763,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         //  REASONING
         // ===================================================================
         "think" => {
-            let thought = get_str(&["thought", "thinking", "text"]).unwrap_or_default();
+            let thought = input_str(input, &["thought", "thinking", "text"]).unwrap_or_default();
             trunc120(&thought)
         }
 
@@ -663,13 +783,13 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         //  TASK MANAGEMENT
         // ===================================================================
         "TaskCreate" => {
-            let subject = get_str(&["subject"]).unwrap_or_default();
+            let subject = input_str(input, &["subject"]).unwrap_or_default();
             format!("+{}", trunc120(&subject))
         }
         "TaskUpdate" => {
-            let task_id = get_str(&["task_id"]).unwrap_or_default();
-            let status = get_str(&["status"]);
-            let subject = get_str(&["subject"]);
+            let task_id = input_str(input, &["task_id"]).unwrap_or_default();
+            let status = input_str(input, &["status"]);
+            let subject = input_str(input, &["subject"]);
             match (status, subject) {
                 (Some(s), _) => format!("{} → {}", task_id, s),
                 (None, Some(t)) => format!("~{} \"{}\"", task_id, trunc120(&t)),
@@ -677,7 +797,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "TaskGet" => {
-            let task_id = get_str(&["task_id"]).unwrap_or_default();
+            let task_id = input_str(input, &["task_id"]).unwrap_or_default();
             format!("get {}", task_id)
         }
         "TaskList" => {
@@ -719,6 +839,35 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
 
+        // ===================================================================
+        //  AGENT COMPLETE
+        // ===================================================================
+        "agent_complete" => {
+            let summary = input_str(input, &["summary"]).unwrap_or_default();
+            // Only the first line goes in the compact header; embedding a
+            // multi-line summary here joins its words when rendered (the
+            // renderer strips '\n' graphemes inside a Span).  The full summary is
+            // rendered line-by-line in the result section below.
+            let first_line = summary.lines().next().unwrap_or_default();
+            trunc120(first_line)
+        }
+        _ => return None,
+    };
+    Some(summary)
+}
+
+/// Input summary for the team-coordination tools (`team_*`).
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn team_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  TEAM COORDINATION
         // ===================================================================
@@ -805,12 +954,29 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             format!("shutdown {}", teammate)
         }
         "team_shutdown_ack" => "ack shutdown".to_string(),
+        _ => return None,
+    };
+    Some(summary)
+}
 
+/// Input summary for the LSP, code-index and spec tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+/// * `cwd` - working directory that paths are shown relative to.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn code_intel_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  LSP / CODE INTELLIGENCE
         // ===================================================================
         "lsp_definition" | "lsp_references" => {
-            let path = get_relative_path(&["path"]);
+            let path = input_path(input, cwd, &["path"]);
             let line = input.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
             let column = input.get("column").and_then(|v| v.as_u64()).unwrap_or(0);
             if path.is_empty() {
@@ -820,7 +986,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "lsp_hover" => {
-            let path = get_relative_path(&["path"]);
+            let path = input_path(input, cwd, &["path"]);
             let line = input.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
             let column = input.get("column").and_then(|v| v.as_u64()).unwrap_or(0);
             if path.is_empty() {
@@ -830,7 +996,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "lsp_symbols" | "lsp_diagnostics" => {
-            let path = get_relative_path(&["path"]);
+            let path = input_path(input, cwd, &["path"]);
             if path.is_empty() {
                 "analyze".to_string()
             } else {
@@ -842,9 +1008,9 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         //  CODE INDEX
         // ===================================================================
         "codeindex_search" => {
-            let query = get_str(&["query"]).unwrap_or_default();
-            let kind = get_str(&["kind"]);
-            let lang = get_str(&["language"]);
+            let query = input_str(input, &["query"]).unwrap_or_default();
+            let kind = input_str(input, &["kind"]);
+            let lang = input_str(input, &["language"]);
             let mut label = format!("\"{}\"", trunc120(&query));
             if let Some(k) = kind {
                 label.push_str(&format!(" kind:{}", k));
@@ -855,9 +1021,9 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             label
         }
         "codeindex_symbols" => {
-            let name = get_str(&["name"]);
-            let kind = get_str(&["kind"]);
-            let file = get_str(&["file_path"]);
+            let name = input_str(input, &["name"]);
+            let kind = input_str(input, &["kind"]);
+            let file = input_str(input, &["file_path"]);
             let mut parts = Vec::new();
             if let Some(n) = name {
                 parts.push(format!("name:{}", trunc120(&n)));
@@ -875,7 +1041,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "codeindex_references" => {
-            let symbol = get_str(&["symbol"]).unwrap_or_default();
+            let symbol = input_str(input, &["symbol"]).unwrap_or_default();
             format!("refs: {}", trunc120(&symbol))
         }
         "codeindex_status" => {
@@ -888,7 +1054,7 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         }
         "codeindex_reindex" => "reindex".to_string(),
         "codeindex_dependencies" => {
-            let path = get_relative_path(&["path"]);
+            let path = input_path(input, cwd, &["path"]);
             let direction = input
                 .get("direction")
                 .and_then(|v| v.as_str())
@@ -900,12 +1066,12 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             format!("god nodes (top {})", n)
         }
         "codeindex_path" => {
-            let from = get_str(&["from"]).unwrap_or_default();
-            let to = get_str(&["to"]).unwrap_or_default();
+            let from = input_str(input, &["from"]).unwrap_or_default();
+            let to = input_str(input, &["to"]).unwrap_or_default();
             format!("path {} → {}", trunc120(&from), trunc120(&to))
         }
         "codeindex_explain" => {
-            let symbol = get_str(&["symbol"]).unwrap_or_default();
+            let symbol = input_str(input, &["symbol"]).unwrap_or_default();
             format!("explain {}", trunc120(&symbol))
         }
         "codeindex_communities" => "communities".to_string(),
@@ -921,30 +1087,40 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             }
         }
         "spec_read" => {
-            let id = get_str(&["spec_id"]).unwrap_or_default();
+            let id = input_str(input, &["spec_id"]).unwrap_or_default();
             format!("read {}", trunc120(&id))
         }
         "spec_search" => {
-            let query = get_str(&["query"]).unwrap_or_default();
+            let query = input_str(input, &["query"]).unwrap_or_default();
             format!("search \"{}\"", trunc120(&query))
         }
         "spec_task_update" => {
-            let id = get_str(&["spec_id"]).unwrap_or_default();
-            let task = get_str(&["task_id"]).unwrap_or_default();
-            let status = get_str(&["status"]).unwrap_or_default();
+            let id = input_str(input, &["spec_id"]).unwrap_or_default();
+            let task = input_str(input, &["task_id"]).unwrap_or_default();
+            let status = input_str(input, &["status"]).unwrap_or_default();
             format!("{} {} → {}", id, task, status)
         }
         "spec_coverage" => {
-            let id = get_str(&["spec_id"]).unwrap_or_default();
+            let id = input_str(input, &["spec_id"]).unwrap_or_default();
             format!("coverage {}", trunc120(&id))
         }
+        _ => return None,
+    };
+    Some(summary)
+}
 
-        // ===================================================================
-        //  DOCUMENT (PDF)
-        // ===================================================================
-        "pdf_read" => get_relative_path(&["path"]),
-        "pdf_write" => get_relative_path(&["path"]),
-
+/// Input summary for the local git tools (`git_*`).
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn git_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  GITHUB
         // ===================================================================
@@ -1145,7 +1321,23 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
                 (a, None) => format!("tag {}", a),
             }
         }
+        _ => return None,
+    };
+    Some(summary)
+}
 
+/// Input summary for the GitLab and GitHub tools (`gitlab_*`, `github_*`).
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn forge_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  GITLAB
         // ===================================================================
@@ -1300,6 +1492,23 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
             let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(1);
             format!("actions ({})", limit)
         }
+        _ => return None,
+    };
+    Some(summary)
+}
+
+/// Input summary for the utility, memory, cron and model-info tools.
+///
+/// One family of [`tool_input_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary text, or `None` when `tool` is not in this family.
+fn utility_input_summary(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let summary = match tool {
         // ===================================================================
         //  UTILITY
         // ===================================================================
@@ -1308,15 +1517,15 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         "truncate" => "truncate".to_string(),
         "read_line_range" => "line range".to_string(),
         "memory_store" => {
-            let category = get_str(&["category"]).unwrap_or_default();
+            let category = input_str(input, &["category"]).unwrap_or_default();
             format!("store {}", trunc120(&category))
         }
         "memory_recall" => {
-            let query = get_str(&["query"]).unwrap_or_default();
+            let query = input_str(input, &["query"]).unwrap_or_default();
             format!("recall \"{}\"", trunc120(&query))
         }
         "memory_forget" => {
-            let id = get_str(&["id"]).unwrap_or_default();
+            let id = input_str(input, &["id"]).unwrap_or_default();
             if id.is_empty() {
                 "forget".to_string()
             } else {
@@ -1328,21 +1537,21 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         //  CRON SCHEDULER
         // ===================================================================
         "cron_add" => {
-            let id = get_str(&["id"]).unwrap_or_default();
-            let schedule = get_str(&["schedule"]).unwrap_or_default();
+            let id = input_str(input, &["id"]).unwrap_or_default();
+            let schedule = input_str(input, &["schedule"]).unwrap_or_default();
             format!("add `{}` {}", trunc120(&id), trunc120(&schedule))
         }
         "cron_remove" => {
-            let id = get_str(&["id"]).unwrap_or_default();
+            let id = input_str(input, &["id"]).unwrap_or_default();
             format!("remove `{}`", trunc120(&id))
         }
         "cron_list" => "list events".to_string(),
         "cron_enable" => {
-            let id = get_str(&["id"]).unwrap_or_default();
+            let id = input_str(input, &["id"]).unwrap_or_default();
             format!("enable `{}`", trunc120(&id))
         }
         "cron_disable" => {
-            let id = get_str(&["id"]).unwrap_or_default();
+            let id = input_str(input, &["id"]).unwrap_or_default();
             format!("disable `{}`", trunc120(&id))
         }
 
@@ -1350,15 +1559,15 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
         //  MODEL INFO
         // ===================================================================
         "model_info" => {
-            let format = get_str(&["format"]).unwrap_or_else(|| "text".to_string());
+            let format = input_str(input, &["format"]).unwrap_or_else(|| "text".to_string());
             format!("model info ({})", format)
         }
         "codemason_info" => {
-            let format = get_str(&["format"]).unwrap_or_else(|| "text".to_string());
+            let format = input_str(input, &["format"]).unwrap_or_else(|| "text".to_string());
             format!("codemason build/execution info ({})", format)
         }
         "os_info" => {
-            let format = get_str(&["format"]);
+            let format = input_str(input, &["format"]);
             // Show the probe flag only when the caller set it explicitly, so
             // the summary reflects the supplied arguments rather than the tool
             // default (`probe` defaults to `true` server-side).
@@ -1373,44 +1582,30 @@ pub fn tool_input_summary(tool: &str, input: &serde_json::Value, cwd: &str) -> S
                 (None, false) => "(no parameters)".to_string(),
             }
         }
-
-        // ===================================================================
-        //  AGENT COMPLETE
-        // ===================================================================
-        "agent_complete" => {
-            let summary = get_str(&["summary"]).unwrap_or_default();
-            // Only the first line goes in the compact header; embedding a
-            // multi-line summary here joins its words when rendered (the
-            // renderer strips '\n' graphemes inside a Span).  The full summary is
-            // rendered line-by-line in the result section below.
-            let first_line = summary.lines().next().unwrap_or_default();
-            trunc120(first_line)
-        }
-
-        // ===================================================================
-        // DEFAULT: Unknown tools
-        // ===================================================================
-        _ => {
-            if tool.starts_with("team_") {
-                summarize_tool_args(input, 40)
-            } else if tool.starts_with("mcp_") {
-                let server_tool = tool.strip_prefix("mcp_").unwrap_or(tool);
-                server_tool.to_string()
-            } else {
-                summarize_tool_args(input, 40)
-            }
-        }
+        _ => return None,
     };
+    Some(summary)
+}
 
-    let fallback_for = canonical_tool_name(tool);
-    let needs_fallback = matches!(fallback_for, "Bash" | "read" | "Write" | "create" | "Edit");
-
-    // If the specific extractor returned an empty summary for a parameter-heavy tool,
-    // fall back to a raw-args rendering so the input is never invisible.
-    if specific.is_empty() && needs_fallback {
-        fallback_raw_args(tool, input)
+/// Input summary for a tool no family claims.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The MCP server tool name for `mcp_*` tools, else compact JSON arguments.
+fn unknown_tool_input_summary(tool: &str, input: &serde_json::Value) -> String {
+    // ===================================================================
+    // DEFAULT: Unknown tools
+    // ===================================================================
+    if tool.starts_with("team_") {
+        summarize_tool_args(input, 40)
+    } else if tool.starts_with("mcp_") {
+        let server_tool = tool.strip_prefix("mcp_").unwrap_or(tool);
+        server_tool.to_string()
     } else {
-        specific
+        summarize_tool_args(input, 40)
     }
 }
 
@@ -1504,6 +1699,59 @@ pub fn tool_result_summary(
         t if t.starts_with("codeindex_") => codeindex_result_summary(t, &ctx),
         t if t.starts_with("spec_") => spec_result_summary(t, &ctx),
         t if t.starts_with("cron_") => cron_result_summary(t, &ctx),
+        // Every remaining tool name belongs to exactly one family, so the chain
+        // order only mirrors the original arm order and a family's `None` falls
+        // through the rest unchanged to the unknown-tool default.
+        _ => file_result_summary(tool, &ctx, input)
+            .or_else(|| search_result_summary(tool, &ctx))
+            .or_else(|| exec_result_summary(tool, &ctx))
+            .or_else(|| web_result_summary(tool, &ctx))
+            .or_else(|| agent_result_summary(tool, &ctx, input))
+            .or_else(|| utility_result_summary(tool, &ctx))
+            .or_else(|| patch_skill_result_summary(tool, &ctx))
+            .or_else(|| unknown_tool_result_summary(tool, out)),
+    }
+}
+
+/// The inputs every per-family helper of [`tool_result_summary`] reads.
+#[derive(Clone, Copy)]
+struct ResultCtx<'a> {
+    out: &'a serde_json::Value,
+    cwd: &'a str,
+    /// Output line count from `lines` / `line_count` metadata (0 when absent).
+    line_count: usize,
+}
+
+/// Truncate a display value to 120 characters.
+///
+/// Helper: keep inline tool summaries compact without hiding too much of
+/// the tool arguments in the chat transcript.
+fn trunc120(s: &str) -> String {
+    truncate_str(s, 120)
+}
+
+/// Result summary for the file, directory, move/copy and PDF tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn file_result_summary(
+    tool: &str,
+    ctx: &ResultCtx<'_>,
+    input: &serde_json::Value,
+) -> Option<String> {
+    let out = ctx.out;
+    let cwd = ctx.cwd;
+    let line_count = ctx.line_count;
+    match tool {
         // ===================================================================
         //  FILE OPERATIONS
         // ===================================================================
@@ -1654,6 +1902,38 @@ pub fn tool_result_summary(
                 Some("copied".to_string())
             }
         }
+
+        // ===================================================================
+        //  DOCUMENT (PDF)
+        // ===================================================================
+        "pdf_read" => Some(format!("{} read", pluralize(line_count, "line", "lines"))),
+        "pdf_write" => {
+            let path = input["path"]
+                .as_str()
+                .map(|p| make_relative_path(p, cwd))
+                .unwrap_or_default();
+            // `pdf_write` reports a page count, not a line count.
+            Some(format!("written to {}", path))
+        }
+        _ => None,
+    }
+}
+
+/// Result summary for the local search tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn search_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  SEARCH OPERATIONS
         // ===================================================================
@@ -1694,7 +1974,26 @@ pub fn tool_result_summary(
                 trunc
             ))
         }
+        _ => None,
+    }
+}
 
+/// Result summary for the execution, environment, background-process and open tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn exec_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    let line_count = ctx.line_count;
+    match tool {
         // ===================================================================
         //  EXECUTION
         // ===================================================================
@@ -1733,6 +2032,68 @@ pub fn tool_result_summary(
                 None => truncate_str(t, 100),
             })
         }
+
+        // ===================================================================
+        //  ENVIRONMENT
+        // ===================================================================
+        "get_env" => {
+            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            if count > 0 {
+                Some(pluralize(count, "var", "vars"))
+            } else {
+                Some("not found".to_string())
+            }
+        }
+        "bash_reset" => Some("shell reset".to_string()),
+
+        // ===================================================================
+        //  BACKGROUND PROCESS
+        // ===================================================================
+        "bg" => {
+            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
+            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+            if task_id.is_empty() {
+                Some(action.to_string())
+            } else {
+                Some(format!("{} {}", action, task_id))
+            }
+        }
+
+        // ===================================================================
+        //  OPEN
+        // ===================================================================
+        "open" => {
+            let target = out.get("target").and_then(|v| v.as_str()).unwrap_or("?");
+            let success = out
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Some(format!(
+                "{} ({})",
+                trunc120(target),
+                if success { "opened" } else { "failed" }
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Result summary for the network and masterfetch tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn web_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    let line_count = ctx.line_count;
+    match tool {
         // ===================================================================
         //  NETWORK
         // ===================================================================
@@ -1767,18 +2128,59 @@ pub fn tool_result_summary(
                 pluralize(line_count, "line", "lines")
             ))
         }
+
         // ===================================================================
-        //  ENVIRONMENT
+        //  MASTERFETCH
         // ===================================================================
-        "get_env" => {
-            let count = out.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            if count > 0 {
-                Some(pluralize(count, "var", "vars"))
+        "mf_fetch" => {
+            let url = out.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = out.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cached = out.get("cached").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(if cached {
+                format!("cached {}", trunc120(url))
+            } else if status > 0 {
+                format!("{} ({})", trunc120(url), status)
             } else {
-                Some("not found".to_string())
-            }
+                trunc120(url)
+            })
         }
-        "bash_reset" => Some("shell reset".to_string()),
+        "mf_crawl" => {
+            let pages = out
+                .get("pages_fetched")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            Some(format!("{} crawled", pluralize(pages, "page", "pages")))
+        }
+        "mf_cache_clear" => {
+            let purged = out.get("purged").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            Some(format!("{} purged", pluralize(purged, "entry", "entries")))
+        }
+        "mf_screenshot" => Some("screenshot captured".to_string()),
+        "mf_version" => Some("version info".to_string()),
+        _ => None,
+    }
+}
+
+/// Result summary for the user-interaction, reasoning, planning, task and sub-agent tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+/// * `input` - the tool call's JSON arguments.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn agent_result_summary(
+    tool: &str,
+    ctx: &ResultCtx<'_>,
+    input: &serde_json::Value,
+) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  USER INTERACTION
         // ===================================================================
@@ -1940,18 +2342,25 @@ pub fn tool_result_summary(
                 Some(format!("timeout waiting for {} task(s)", count))
             }
         }
-        // ===================================================================
-        //  DOCUMENT (PDF)
-        // ===================================================================
-        "pdf_read" => Some(format!("{} read", pluralize(line_count, "line", "lines"))),
-        "pdf_write" => {
-            let path = input["path"]
-                .as_str()
-                .map(|p| make_relative_path(p, cwd))
-                .unwrap_or_default();
-            // `pdf_write` reports a page count, not a line count.
-            Some(format!("written to {}", path))
-        }
+        _ => None,
+    }
+}
+
+/// Result summary for the utility, memory and model-info tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn utility_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  UTILITY
         // ===================================================================
@@ -2003,34 +2412,56 @@ pub fn tool_result_summary(
         }
 
         // ===================================================================
-        //  MASTERFETCH
+        //  MODEL INFO
         // ===================================================================
-        "mf_fetch" => {
-            let url = out.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-            let status = out.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-            let cached = out.get("cached").and_then(|v| v.as_bool()).unwrap_or(false);
-            Some(if cached {
-                format!("cached {}", trunc120(url))
-            } else if status > 0 {
-                format!("{} ({})", trunc120(url), status)
-            } else {
-                trunc120(url)
-            })
+        "model_info" => {
+            let provider = out
+                .get("provider_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let model = out
+                .get("model_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            Some(format!("{} / {}", trunc120(provider), trunc120(model)))
         }
-        "mf_crawl" => {
-            let pages = out
-                .get("pages_fetched")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
-            Some(format!("{} crawled", pluralize(pages, "page", "pages")))
+        "codemason_info" => {
+            let version = out.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+            let built = out
+                .get("build_time")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let pid = out
+                .get("execution")
+                .and_then(|e| e.get("pid"))
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "?".to_string(), |p| p.to_string());
+            Some(format!(
+                "v{} built {} (pid {})",
+                trunc120(version),
+                trunc120(built),
+                pid
+            ))
         }
-        "mf_cache_clear" => {
-            let purged = out.get("purged").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            Some(format!("{} purged", pluralize(purged, "entry", "entries")))
-        }
-        "mf_screenshot" => Some("screenshot captured".to_string()),
-        "mf_version" => Some("version info".to_string()),
+        _ => None,
+    }
+}
 
+/// Result summary for the apply_patch, session-search, initiative and Skill tools.
+///
+/// One family of [`tool_result_summary`]; `tool` is already canonical.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `ctx` - the tool output, cwd and output line count.
+///
+/// # Returns
+/// The summary, or `None` when `tool` is not in this family or has nothing
+/// to report. No other family claims the same name, so the caller's next
+/// family also returns `None` for it.
+fn patch_skill_result_summary(tool: &str, ctx: &ResultCtx<'_>) -> Option<String> {
+    let out = ctx.out;
+    match tool {
         // ===================================================================
         //  APPLY PATCH / SKILLS / SEARCH
         // ===================================================================
@@ -2064,99 +2495,32 @@ pub fn tool_result_summary(
             let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
             Some(action.to_string())
         }
-
-        // ===================================================================
-        //  BACKGROUND PROCESS
-        // ===================================================================
-        "bg" => {
-            let action = out.get("action").and_then(|v| v.as_str()).unwrap_or("done");
-            let task_id = out.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-            if task_id.is_empty() {
-                Some(action.to_string())
-            } else {
-                Some(format!("{} {}", action, task_id))
-            }
-        }
-
-        // ===================================================================
-        //  OPEN
-        // ===================================================================
-        "open" => {
-            let target = out.get("target").and_then(|v| v.as_str()).unwrap_or("?");
-            let success = out
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            Some(format!(
-                "{} ({})",
-                trunc120(target),
-                if success { "opened" } else { "failed" }
-            ))
-        }
-
-        // ===================================================================
-        //  MODEL INFO
-        // ===================================================================
-        "model_info" => {
-            let provider = out
-                .get("provider_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let model = out
-                .get("model_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            Some(format!("{} / {}", trunc120(provider), trunc120(model)))
-        }
-        "codemason_info" => {
-            let version = out.get("version").and_then(|v| v.as_str()).unwrap_or("?");
-            let built = out
-                .get("build_time")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let pid = out
-                .get("execution")
-                .and_then(|e| e.get("pid"))
-                .and_then(serde_json::Value::as_u64)
-                .map_or_else(|| "?".to_string(), |p| p.to_string());
-            Some(format!(
-                "v{} built {} (pid {})",
-                trunc120(version),
-                trunc120(built),
-                pid
-            ))
-        }
-
-        // ===================================================================
-        // DEFAULT: Unknown tools
-        // ===================================================================
-        _ => {
-            if tool.starts_with("team_") {
-                Some(
-                    out.get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("done")
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
+        _ => None,
     }
 }
 
-/// The inputs every per-family helper of [`tool_result_summary`] reads.
-#[derive(Clone, Copy)]
-struct ResultCtx<'a> {
-    out: &'a serde_json::Value,
-    cwd: &'a str,
-    /// Output line count from `lines` / `line_count` metadata (0 when absent).
-    line_count: usize,
-}
-
-/// Truncate a display value to 120 characters.
-fn trunc120(s: &str) -> String {
-    truncate_str(s, 120)
+/// Result summary for a tool no family claims.
+///
+/// # Arguments
+/// * `tool` - canonical tool name.
+/// * `out` - the tool's JSON output.
+///
+/// # Returns
+/// The `status` field for a `team_*` tool, else `None`.
+fn unknown_tool_result_summary(tool: &str, out: &serde_json::Value) -> Option<String> {
+    // ===================================================================
+    // DEFAULT: Unknown tools
+    // ===================================================================
+    if tool.starts_with("team_") {
+        Some(
+            out.get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("done")
+                .to_string(),
+        )
+    } else {
+        None
+    }
 }
 
 /// Result summary for the team-coordination tools (`team_*`).

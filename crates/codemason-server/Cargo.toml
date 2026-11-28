@@ -39,6 +39,7 @@ codemason-config = { path = "../codemason-config" }
 chrono = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 # `tower::ServiceExt::oneshot` drives the router in tests; production code
 # only needs `tower-http`.
 tower = { workspace = true }

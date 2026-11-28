@@ -470,6 +470,43 @@ pub struct ModelRef {
     pub model_id: String,
 }
 
+impl ModelRef {
+    /// Build a reference from its two parts.
+    fn from_parts((provider_id, model_id): (&str, &str)) -> Self {
+        Self {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+        }
+    }
+
+    /// Parse `provider/model`, splitting at the first `/`; the model part may
+    /// itself contain `/` (`openrouter/meta/llama`). Returns `None` when there
+    /// is no `/`. Either part may be empty.
+    #[must_use]
+    pub fn split_slash(text: &str) -> Option<Self> {
+        text.split_once('/').map(Self::from_parts)
+    }
+
+    /// Parse `provider/model` or, when there is no `/`, `provider:model`.
+    /// Returns `None` when there is neither separator (a bare model id is
+    /// ambiguous without a default provider). Either part may be empty.
+    #[must_use]
+    pub fn split_slash_or_colon(text: &str) -> Option<Self> {
+        text.split_once('/')
+            .or_else(|| text.split_once(':'))
+            .map(Self::from_parts)
+    }
+
+    /// Parse a trimmed `provider/model`, rejecting an empty provider or model.
+    #[must_use]
+    pub fn parse_strict(text: &str) -> Option<Self> {
+        text.trim()
+            .split_once('/')
+            .filter(|(p, m)| !p.is_empty() && !m.is_empty())
+            .map(Self::from_parts)
+    }
+}
+
 /// Functional role of an agent, orthogonal to its [`AgentMode`].
 ///
 /// A `TeamLeader` is the only role allowed to create and run agent teams
@@ -1970,8 +2007,16 @@ fn resolve_include(
     depth: usize,
 ) -> String {
     // Reject absolute paths outright - they can never be under a project
-    // root and would let an instruction file read arbitrary files.
-    if Path::new(target).is_absolute() {
+    // root and would let an instruction file read arbitrary files. On Windows
+    // `/etc/x` (rooted) and `C:x` (drive-relative) are not `is_absolute()` yet
+    // still leave the project, so a root or a drive prefix is rejected too.
+    let target_path = Path::new(target);
+    if target_path.has_root()
+        || matches!(
+            target_path.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+    {
         tracing::warn!(
             include_target = target,
             "instruction @<path> rejected: absolute paths are not allowed"
@@ -2257,7 +2302,9 @@ pub fn skills_prompt_section(registry: &crate::skill::SkillRegistry, agent: &Age
     section
 }
 
-/// Build a system prompt for the given agent using cached context.#[must_use]
+/// Build a system prompt for the given agent, reading its context (instruction
+/// files and project details) from disk.
+#[must_use]
 pub fn build_system_prompt(
     agent: &AgentInfo,
     working_dir: &Path,

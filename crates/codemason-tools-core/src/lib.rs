@@ -206,57 +206,9 @@ pub trait Tool: Send + Sync {
 ///
 /// Returns an error if the path escapes all given roots.
 pub fn check_path_within_any_root(path: &Path, roots: &[&Path]) -> anyhow::Result<()> {
-    if roots.is_empty() {
-        anyhow::bail!("Path validation failed: no allowed roots configured");
-    }
-
-    let canonical = if let Ok(c) = path.canonicalize() {
-        c
-    } else {
-        // Path does not exist - walk up to the longest existing prefix
-        // and reconstruct, using the first root as fallback.
-        let fallback_root = roots[0]
-            .canonicalize()
-            .unwrap_or_else(|_| roots[0].to_path_buf().clean_path());
-
-        resolve_missing_path(path, fallback_root, |p| {
-            if p.exists() {
-                Ok(Some(p.canonicalize()?))
-            } else {
-                Ok(None)
-            }
-        })?
-    };
-
-    // Check if path is within any of the allowed roots
-    // Both the path and roots are canonicalized before matching to handle
-    // symlinks, bind mounts, and other path aliases correctly
-    for root in roots {
-        let canonical_root = match root.canonicalize() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::debug!(
-                    "Failed to canonicalize allowed root '{}': {}. Using cleaned path instead.",
-                    root.display(),
-                    e
-                );
-                root.to_path_buf().clean_path()
-            }
-        };
-
-        if is_path_within(&canonical, &canonical_root)
-            || is_alias_within(&canonical, &canonical_root)
-        {
-            return Ok(());
-        }
-    }
-
-    // Path escapes all allowed roots - show canonical path for clarity
-    anyhow::bail!(
-        "Path escape rejected: '{}' (canonical: '{}') resolves outside all allowed roots",
-        path.display(),
-        canonical.display()
-    );
+    // TL-17: one implementation. A fresh cache gives the same answer as the
+    // cached check the tools use, without sharing lookups across calls.
+    check_path_within_any_root_cached(path, roots, &CanonicalPathCache::new())
 }
 
 /// Resolve a path that does not exist (yet) to the canonical form it would

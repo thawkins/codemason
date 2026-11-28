@@ -171,3 +171,13 @@ async fn recover_open_access_prefers_unpaywall_then_europepmc() {
     .unwrap();
     assert_eq!(result.map(|r| r.source), Some(RecoverySource::EuropePmc));
 }
+
+/// RS-09: `Default` must use the same 30 s timeout as `new(None)`, not zero.
+#[test]
+fn reqwest_client_default_matches_new() {
+    let d = ReqwestOpenAccessClient::default();
+    let n = ReqwestOpenAccessClient::new(None);
+    assert_eq!(d.timeout, n.timeout);
+    assert_eq!(d.timeout, Duration::from_secs(30));
+    assert_eq!(d.contact_email, None);
+}

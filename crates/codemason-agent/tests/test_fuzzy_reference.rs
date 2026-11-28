@@ -147,7 +147,10 @@ fn test_collect_project_files_cache_shares_full_list() {
         .iter()
         .map(|p| p.to_string_lossy().to_string())
         .collect();
-    assert!(names.iter().any(|n| n.contains("src/main.rs")));
+    assert!(
+        full.iter()
+            .any(|p| p.ends_with(Path::new("src").join("main.rs")))
+    );
     assert!(names.iter().any(|n| n == "Cargo.toml"));
 
     let _ = std::fs::remove_dir_all(&tmp);

@@ -46,14 +46,16 @@ same-file = "1.0"
 # Shell utilities
 which = "8.0"
 
-# Unix process-group signalling (killpg) for killing orphaned test binaries on timeout
-libc = { workspace = true }
-
 # Utilities
 chrono = { workspace = true }
 dirs = { workspace = true }
 
+# Unix process-group signalling (killpg) for killing orphaned test binaries on timeout
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = "3.14"
 filetime = "0.2"
 

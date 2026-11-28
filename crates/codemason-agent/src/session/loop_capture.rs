@@ -320,7 +320,13 @@ pub fn compute_change_summary(capture: &LoopCapture, dir: &Path) -> ChangeSummar
 /// Render `path` relative to `dir` when possible, else its lossy display.
 fn relative_path(dir: &Path, path: &Path) -> String {
     match path.strip_prefix(dir) {
-        Ok(relative) => relative.display().to_string(),
+        // Join with `/` so the file list reads the same on every platform;
+        // `display()` would give `src\sub\deep.rs` on Windows.
+        Ok(relative) => relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
         Err(_) => path.display().to_string(),
     }
 }

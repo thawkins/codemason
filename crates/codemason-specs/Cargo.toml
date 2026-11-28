@@ -21,16 +21,17 @@ path = "tests/all.rs"
 codemason-tools-extended = { path = "../codemason-tools-extended" }
 # `strutil::lowercase_range_to_original` maps search matches back to the spec text.
 codemason-types = { path = "../codemason-types" }
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
 # Completion timestamps in PLAN.md status cells are RFC 3339 UTC strings.
 chrono = { workspace = true }
 thiserror = { workspace = true }
-regex = "1"
+regex = { workspace = true }
 tokio = { version = "1.42", features = ["fs", "io-util"] }
-tracing = "0.1"
+tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1.42", features = ["full"] }
+ctor = { workspace = true }
+tokio = { workspace = true }
 tempfile = "3"
 serde_json = { workspace = true }
 

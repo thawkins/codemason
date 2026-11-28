@@ -484,12 +484,9 @@ impl App {
     pub(crate) fn apply_selected_model_and_thinking(&self, agent: &mut AgentInfo) {
         if (!agent.model_pinned || agent.model.is_none())
             && let Some(ref model_str) = self.session.selected_model
-            && let Some((provider, model)) = model_str.split_once('/')
+            && let Some(model) = ModelRef::split_slash(model_str)
         {
-            agent.model = Some(ModelRef {
-                provider_id: provider.to_string(),
-                model_id: model.to_string(),
-            });
+            agent.model = Some(model);
         }
 
         // If still no model, fall back to the first available provider/model.
@@ -1126,14 +1123,11 @@ impl App {
         };
 
         // Parse the currently selected model so teammates inherit it in the reconcile loop.
-        let active_model: Option<codemason_agent::agent::ModelRef> =
-            self.session.selected_model.as_deref().and_then(|s| {
-                s.split_once('/')
-                    .map(|(pid, mid)| codemason_agent::agent::ModelRef {
-                        provider_id: pid.to_string(),
-                        model_id: mid.to_string(),
-                    })
-            });
+        let active_model: Option<codemason_agent::agent::ModelRef> = self
+            .session
+            .selected_model
+            .as_deref()
+            .and_then(codemason_agent::agent::ModelRef::split_slash);
 
         let mut manager = TeamManager::new(
             team_name.to_string(),
@@ -2176,9 +2170,9 @@ impl App {
                         .unwrap_or(&path_abs)
                         .to_path_buf();
                     let display = if is_dir {
-                        format!("{}/", rel.to_string_lossy())
+                        format!("{}/", slash_path(&rel))
                     } else {
-                        rel.to_string_lossy().to_string()
+                        slash_path(&rel)
                     };
                     entries.push(FileMenuEntry {
                         display,
@@ -2194,7 +2188,7 @@ impl App {
                 let parent_display = if parent.as_os_str().is_empty() {
                     "../".to_string()
                 } else {
-                    format!("{}/", parent.to_string_lossy())
+                    format!("{}/", slash_path(parent))
                 };
                 entries.insert(
                     0,
@@ -2278,4 +2272,12 @@ impl App {
             },
         );
     }
+}
+
+/// `path` joined with `/` on every OS, matching the other file-menu entries.
+fn slash_path(path: &std::path::Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }

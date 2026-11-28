@@ -35,7 +35,7 @@ fn test_skill(name: &str, body: &str) -> SkillInfo {
 #[tokio::test]
 async fn test_invoke_simple_skill() {
     let skill = test_skill("greet", "Hello $ARGUMENTS!");
-    let result = invoke_skill(&skill, "world", "s1", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "world", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
 
@@ -49,7 +49,7 @@ async fn test_invoke_simple_skill() {
 async fn test_invoke_with_dynamic_context() {
     let mut skill = test_skill("info", "Version: !`echo 1.0.0`");
     skill.allow_dynamic_context = true;
-    let result = invoke_skill(&skill, "", "s1", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
 
@@ -60,7 +60,7 @@ async fn test_invoke_with_dynamic_context() {
 async fn test_invoke_with_args_and_context() {
     let mut skill = test_skill("deploy", "Deploy $0 at !`date +%Y`");
     skill.allow_dynamic_context = true;
-    let result = invoke_skill(&skill, "staging", "s1", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "staging", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
 
@@ -84,7 +84,7 @@ async fn test_invoke_preserves_fork_metadata() {
     skill.model = Some("anthropic:claude-haiku".to_string());
     skill.allowed_tools = vec!["read".to_string(), "Grep".to_string()];
 
-    let result = invoke_skill(&skill, "", "s1", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
 
@@ -102,7 +102,7 @@ async fn test_invoke_skips_dynamic_context_when_disabled() {
     // Default allow_dynamic_context is false - commands should NOT execute.
     let skill = test_skill("info", "Version: !`echo 1.0.0`");
     assert!(!skill.allow_dynamic_context);
-    let result = invoke_skill(&skill, "", "s1", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
     // The !`echo 1.0.0` pattern remains unprocessed.
@@ -112,7 +112,7 @@ async fn test_invoke_skips_dynamic_context_when_disabled() {
 #[tokio::test]
 async fn test_invoke_no_args_no_context() {
     let skill = test_skill("simplify", "Review recently changed files");
-    let result = invoke_skill(&skill, "", "s1", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
 
@@ -122,7 +122,7 @@ async fn test_invoke_no_args_no_context() {
 #[tokio::test]
 async fn test_invoke_session_id_substitution() {
     let skill = test_skill("debug", "Session: ${CODEMASON_SESSION_ID}");
-    let result = invoke_skill(&skill, "", "my-session-42", Path::new("/tmp"))
+    let result = invoke_skill(&skill, "", "my-session-42", &std::env::temp_dir())
         .await
         .expect("should invoke");
 
@@ -210,7 +210,7 @@ async fn test_invoke_forked_skill_sets_metadata() {
     skill.model = Some("anthropic/claude-haiku".to_string());
     skill.allowed_tools = vec!["read".to_string(), "Grep".to_string()];
 
-    let invocation = invoke_skill(&skill, "src/main.rs", "s1", Path::new("/tmp"))
+    let invocation = invoke_skill(&skill, "src/main.rs", "s1", &std::env::temp_dir())
         .await
         .expect("should invoke");
 

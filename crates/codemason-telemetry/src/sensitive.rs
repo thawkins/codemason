@@ -42,6 +42,8 @@
 //! `redacted` bucket, which is the same behaviour already used by the
 //! cardinality cap (FR-035) for overflow values.
 
+use codemason_types::sanitize::CREDENTIAL_PREFIXES;
+
 /// Sentinel value substituted in place of a sensitive attribute value (FR-034).
 ///
 /// Re-exported from [`codemason_types::sanitize::REDACTION_PLACEHOLDER`] so the
@@ -224,32 +226,17 @@ fn looks_sensitive_inner(value: &str, colon_rule: ColonRule) -> bool {
     }
 
     // -- Known API-key prefixes --------------------------------------------
-    // These are the common prefixes used by the providers codemason supports
-    // and by the major cloud platforms. Matching is case-insensitive for
-    // the alphabetic prefixes (Bearer, AKIA, AIza, xoxb) because real
-    // tokens are case-mixed but the prefix is consistently cased.
+    // CO-07: the one list in `codemason_types::sanitize`, shared with log
+    // redaction. Matching is case-insensitive because real tokens are
+    // case-mixed while the prefix is consistently cased. An entry with a
+    // `min_tail` needs that many characters after the prefix, so a tool name
+    // such as `npm_install` is not mistaken for an `npm_` token.
     let lower = value.to_ascii_lowercase();
-    const PREFIXES: &[&str] = &[
-        "sk-",         // OpenAI
-        "sk_",         // OpenAI (alternate)
-        "bearer ",     // HTTP Authorization header
-        "ghp_",        // GitHub personal access token
-        "gho_",        // GitHub OAuth token
-        "ghs_",        // GitHub server-to-server token
-        "ghr_",        // GitHub refresh token
-        "github_pat_", // GitHub fine-grained PAT
-        "xoxb-",       // Slack bot token
-        "xoxp-",       // Slack user token
-        "xoxs-",       // Slack signature secret
-        "akia",        // AWS access key id (18 chars, starts with AKIA)
-        "aiza",        // Google API key (starts with AIza)
-        "ya29.",       // Google OAuth2 access token
-        "jwt ",        // JWT bearer prefix
-    ];
-    for prefix in PREFIXES {
-        if lower.starts_with(prefix) {
-            return true;
-        }
+    if CREDENTIAL_PREFIXES.iter().any(|entry| {
+        lower.starts_with(&entry.prefix.to_ascii_lowercase())
+            && value.len() - entry.prefix.len() >= entry.min_tail
+    }) {
+        return true;
     }
 
     // -- "key:secret" shape ------------------------------------------------

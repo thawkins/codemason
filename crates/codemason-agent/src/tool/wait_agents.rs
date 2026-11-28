@@ -548,7 +548,7 @@ impl Tool for WaitAgentsTool {
         // Wait for any remaining tasks via event bus, with a periodic
         // manager re-scan as a fallback against lost or lagged events.
         if !waiting_for.is_empty() {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+            let deadline = super::deadline_after(timeout_secs);
             let mut scan_interval = tokio::time::interval(Duration::from_secs(5));
             scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             // `interval.tick()` returns immediately the first time; consume

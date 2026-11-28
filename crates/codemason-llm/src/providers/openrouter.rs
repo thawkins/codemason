@@ -485,26 +485,23 @@ impl LlmClient for OpenRouterClient {
         let first_byte_timeout = request
             .stream_timeout_secs
             .unwrap_or(http_client::DEFAULT_STREAM_TIMEOUT_SECS);
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(first_byte_timeout),
+        let response = super::http_client::send_within_first_byte_timeout(
             self.http
                 .post(&url)
-                .header("Authorization", codemason_types::strutil::bearer_auth_header(&self.api_key))
+                .header(
+                    "Authorization",
+                    codemason_types::strutil::bearer_auth_header(&self.api_key),
+                )
                 .header("content-type", "application/json")
                 .body(body_bytes)
                 .send(),
+            first_byte_timeout,
+            "openrouter",
+            &url,
+            || format!("OpenRouter: initial response timed out after {first_byte_timeout}s"),
+            || format!("Failed to connect to OpenRouter at {url}"),
         )
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(provider = "openrouter", url = %url, error = %e, "chat request timed out");
-        })
-        .map_err(|_| {
-            anyhow::anyhow!("OpenRouter: initial response timed out after {first_byte_timeout}s")
-        })?
-        .inspect_err(|e| {
-            tracing::warn!(provider = "openrouter", url = %url, error = %e, "chat request failed");
-        })
-        .with_context(|| format!("Failed to connect to OpenRouter at {url}"))?;
+        .await?;
 
         if !response.status().is_success() {
             let status = response.status();

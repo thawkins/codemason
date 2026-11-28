@@ -203,9 +203,11 @@ def main() -> int:
     families_seen: dict[str, dict[str, list[str]]] = {}
 
     crate_dirs = sorted(p for p in pathlib.Path("crates").iterdir() if p.is_dir())
+    # RS-24: the root `codemason` package's `tests/` is one more test binary.
+    crate_dirs.append(pathlib.Path("."))
 
     for crate_dir in crate_dirs:
-        crate = crate_dir.name
+        crate = crate_dir.name or "codemason"
         loaded: dict[pathlib.Path, tuple[list[str], list[str]]] = {}
         for path in sorted((crate_dir / "tests").rglob("*.rs")):
             data = load_tests(path)
@@ -313,6 +315,11 @@ def main() -> int:
         shared_lock[all_rs.parts[1]] = (
             "global_env_lock"
             in all_rs.read_text(encoding="utf-8", errors="replace")
+        )
+    root_all = pathlib.Path("tests/all.rs")
+    if root_all.is_file():
+        shared_lock["codemason"] = "global_env_lock" in root_all.read_text(
+            encoding="utf-8", errors="replace"
         )
 
     for crate, families in sorted(families_seen.items()):

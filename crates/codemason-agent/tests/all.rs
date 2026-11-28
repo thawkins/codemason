@@ -252,6 +252,8 @@ mod test_history_estimators;
 #[path = "test_history_version_cache.rs"]
 mod test_history_version_cache;
 
+#[path = "test_hook_process_limits.rs"]
+mod test_hook_process_limits;
 #[path = "test_hooks.rs"]
 mod test_hooks;
 
@@ -471,6 +473,9 @@ mod test_remote_acp_dispatch;
 
 #[path = "test_remote_backend.rs"]
 mod test_remote_backend;
+
+#[path = "test_remote_backend_body_cap.rs"]
+mod test_remote_backend_body_cap;
 
 #[path = "test_research_adapter_extra2.rs"]
 mod test_research_adapter_extra2;
@@ -872,5 +877,9 @@ mod test_session_archive_project;
 mod test_session_project_attach;
 #[path = "test_session_worktree.rs"]
 mod test_session_worktree;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;
 #[path = "test_team_create_leader_gate.rs"]
 mod test_team_create_leader_gate;

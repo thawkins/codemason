@@ -723,3 +723,7 @@ pub fn scratch_config_target() -> ScratchConfig {
         _lock: lock,
     }
 }
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

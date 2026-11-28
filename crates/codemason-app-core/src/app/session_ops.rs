@@ -870,7 +870,7 @@ impl App {
 
     /// Adopt a completed background context snapshot, if one has landed.
     ///
-    /// T-013/FR-015: called from the TUI main loop every frame. Drains
+    /// T-013/FR-015: called from `App::housekeeping` every frame. Drains
     /// [`crate::app::SessionView::context_snapshot_result`], stores the snapshot in the render
     /// cache and clears the in-flight latch.
     ///
@@ -5671,7 +5671,10 @@ impl App {
             // Resolve file:// URI
             let candidate = if let Some(rest) = trimmed.strip_prefix("file://") {
                 Some(percent_decode_path(rest))
-            } else if trimmed.starts_with('/') || trimmed.starts_with('.') {
+            } else if std::path::Path::new(trimmed).is_absolute()
+                || trimmed.starts_with('/')
+                || trimmed.starts_with('.')
+            {
                 // Plain absolute or relative path
                 Some(std::path::PathBuf::from(trimmed))
             } else {

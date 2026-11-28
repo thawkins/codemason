@@ -620,8 +620,8 @@ async fn test_edit_log_success_writes_jsonl() {
     let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(entry["tool"], "Edit");
     assert!(
-        entry["file_path"].as_str().unwrap().ends_with("/a.rs"),
-        "file_path should end with /a.rs: {}",
+        std::path::Path::new(entry["file_path"].as_str().unwrap()).ends_with("a.rs"),
+        "file_path should end with the a.rs component: {}",
         entry["file_path"]
     );
     assert_eq!(entry["old_str"], "    bar\n");

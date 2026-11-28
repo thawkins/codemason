@@ -25,7 +25,7 @@ use std::time::Duration;
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TriggerConfig {
     /// Master feature gate for the trigger system. When `false`, all trigger
     /// functionality no-ops cleanly (FR-016). Default: `true`.

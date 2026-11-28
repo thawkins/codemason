@@ -1676,7 +1676,8 @@ impl TaskStore {
             .join(format!(".{file_name}.{}", uuid::Uuid::new_v4()));
         fs::write(&temp_path, json)?;
         let result: Result<()> = (|| {
-            let temp = OpenOptions::new().read(true).open(&temp_path)?;
+            // Write access: Windows `FlushFileBuffers` refuses a read-only handle.
+            let temp = OpenOptions::new().write(true).open(&temp_path)?;
             temp.sync_all()
                 .with_context(|| format!("sync temp file {}", temp_path.display()))?;
             fs::rename(&temp_path, path)

@@ -59,7 +59,8 @@ pub mod surface;
 pub mod tool_adapter;
 
 pub use add::{
-    AddError, AddOutcome, DOWNLOAD_TIMEOUT, GitSource, MAX_ARCHIVE_BYTES, add, parse_git_source,
+    AddError, AddOutcome, DOWNLOAD_TIMEOUT, GitSource, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, add,
+    parse_git_source,
 };
 pub use bridge::{
     PluginMcpContribution, plugin_agent_files, plugin_mcp_servers, plugin_skill_dirs,

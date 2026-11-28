@@ -404,3 +404,35 @@ async fn team_wait_reports_a_mid_wait_failure_as_failed() {
         "a failed member settles the wait"
     );
 }
+
+/// A model-supplied `timeout_secs` of `u64::MAX` used to overflow the
+/// deadline arithmetic and panic the tool (AG-08); it now just waits.
+#[tokio::test]
+async fn team_wait_with_the_largest_timeout_waits_instead_of_panicking() {
+    let (_tmp, dir) = setup_workspace();
+    seed_team(
+        &dir,
+        "long-team",
+        &[("runner", "tm-001", MemberStatus::Working)],
+    );
+    let bus = Arc::new(EventBus::new(64));
+    let ctx = make_ctx(&dir, "lead-sess", bus);
+
+    let wait = tokio::spawn(async move {
+        codemason_agent::tool::team_wait::TeamWaitTool
+            .execute(
+                json!({ "team_name": "long-team", "timeout_secs": u64::MAX }),
+                &ctx,
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!wait.is_finished(), "the wait ended (or panicked) at once");
+    wait.abort();
+}
+
+#[test]
+fn deadline_after_saturates_instead_of_overflowing() {
+    let deadline = codemason_agent::tool::deadline_after(u64::MAX);
+    assert!(deadline > tokio::time::Instant::now());
+}

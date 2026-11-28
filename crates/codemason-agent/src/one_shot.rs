@@ -86,8 +86,17 @@ pub async fn send_one_shot(
         .ok_or_else(|| anyhow::anyhow!("Provider '{}' not found", model_ref.provider_id))?;
 
     let api_key = resolve_api_key(&model_ref.provider_id, storage.as_ref())?;
+    // Without a loadable config only the model is passed.
+    let options = codemason_config::Config::load()
+        .map(|cfg| cfg.provider_client_options(&model_ref.provider_id, &model_ref.model_id))
+        .unwrap_or_else(|_| {
+            HashMap::from([(
+                "model_id".to_string(),
+                serde_json::Value::String(model_ref.model_id.clone()),
+            )])
+        });
     let client = provider
-        .create_client(&api_key, None, &HashMap::new())
+        .create_client(&api_key, None, &options)
         .await
         .map_err(|e| anyhow::anyhow!("failed to create LLM client: {e}"))?;
 

@@ -42,7 +42,9 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - name: Check
-        run: cargo check --workspace
+        # --all-targets: tests, benches and examples must build on Linux too,
+        # not only in the macOS job (RS-22).
+        run: cargo check --workspace --all-targets
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Test (nextest)
@@ -143,7 +145,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@nextest
       - name: Verify self-test fails on a seeded uncontained file tool
         run: bash scripts/check-file-tool-containment.sh --self-test
       - name: Verify every file tool is contained
@@ -188,10 +189,8 @@ jobs:
         run: bash scripts/check-tool-rename.sh --self-test
       - name: Verify no retired tool spelling survives as a literal (FR-027, NFR-008(e))
         run: bash scripts/check-tool-rename.sh
-      - name: Verify the shared guard regression suite
-        run: 'cargo nextest run -p codemason-types -E "test(test_shared_guards::)"'
-      - name: Verify the unified redaction regression suite
-        run: 'cargo nextest run -p codemason-types -E "test(test_unified_redaction::)"'
+      # The shared-guard and redaction suites run in `ms0-regression` (and in
+      # the full nextest run); a third copy here added nothing (RS-23).
 
   ms0-regression:
     name: ANTIPAT M0 regression suites
@@ -250,7 +249,7 @@ jobs:
         run: rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: 'cargo clippy --workspace -- -D warnings -A clippy::used_underscore_items -A clippy::redundant_pub_crate -A clippy::wildcard_imports'
+        run: 'cargo clippy --workspace --all-targets -- -D warnings -A clippy::used_underscore_items -A clippy::redundant_pub_crate -A clippy::wildcard_imports'
 
   fmt:
     name: Rustfmt

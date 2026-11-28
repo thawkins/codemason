@@ -287,15 +287,35 @@ impl ToolDispatchPipeline {
         // Stage 8: pre-tool hooks, handed the decode this pipeline already
         // performed so a guard and the Claude event payload do not parse the
         // arguments again (FR-007).
-        let pre_hook_result = crate::hooks::run_pre_tool_use_hooks_decoded(
-            &ctx.hook_configs,
-            &ctx.hook_working_dir,
-            &tc.name,
-            &tc.args_json,
-            Some(&input),
-            session_id,
-            Some(event_bus),
-        );
+        // A hook is a child process that can run up to its `timeout_secs`, so
+        // it runs on the blocking pool rather than a runtime worker (AG-01).
+        let pre_hook_result = if ctx.hook_configs.is_empty() {
+            crate::hooks::PreToolUseResult::NoDecision
+        } else {
+            let hooks = ctx.hook_configs.clone();
+            let working_dir = ctx.hook_working_dir.clone();
+            let tool_name = tc.name.clone();
+            let raw_input = tc.args_json.clone();
+            let decoded = input.clone();
+            let hook_session_id = session_id.to_string();
+            let hook_bus = Arc::clone(event_bus);
+            tokio::task::spawn_blocking(move || {
+                crate::hooks::run_pre_tool_use_hooks_decoded(
+                    &hooks,
+                    &working_dir,
+                    &tool_name,
+                    &raw_input,
+                    Some(&decoded),
+                    &hook_session_id,
+                    Some(&hook_bus),
+                )
+            })
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!(tool = %tc.name, error = %e, "PreToolUse hook runner panicked");
+                crate::hooks::PreToolUseResult::NoDecision
+            })
+        };
         // SEC-codemason-agent-001 (SECTASKS T-007): `hook_approved` distinguishes
         // "a hook explicitly approved this call" from "no hook decided". It is
         // threaded into the permission stage, where it can satisfy an `Ask` but

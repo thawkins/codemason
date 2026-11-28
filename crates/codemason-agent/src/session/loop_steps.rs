@@ -17,7 +17,6 @@
 //!    results.
 //! 6. [`Self::finalize_assistant_message`] - final save + timing + hooks.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -271,26 +270,8 @@ impl SessionProcessor {
         );
         let client = {
             let _scope = profiler.scope("llm.create_client");
-            let mut options: HashMap<String, serde_json::Value> = HashMap::new();
-            options.insert(
-                "model_id".to_string(),
-                serde_json::Value::String(model_ref.model_id.clone()),
-            );
-
-            // Merge provider-specific config options (auto_start, device,
-            // models_path) for providers that consume them.
             // PERF-001: reuse the `cfg` loaded once at the top of the turn.
-            if let Some(provider_cfg) = cfg.provider.get(&model_ref.provider_id) {
-                if let Some(auto_start) = provider_cfg.options.get("auto_start") {
-                    options.insert("auto_start".to_string(), auto_start.clone());
-                }
-                if let Some(device) = provider_cfg.options.get("device") {
-                    options.insert("device".to_string(), device.clone());
-                }
-                if let Some(models_path) = provider_cfg.options.get("models_path") {
-                    options.insert("models_path".to_string(), models_path.clone());
-                }
-            }
+            let options = cfg.provider_client_options(&model_ref.provider_id, &model_ref.model_id);
 
             // H2: reuse a warm per-(provider,model,key) client across turns so
             // the connection pool (TLS, keep-alive) built by the provider's

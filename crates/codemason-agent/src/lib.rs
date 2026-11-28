@@ -20,6 +20,7 @@ pub use codemason_types::startup::StartupTimings;
 pub mod autofix;
 pub mod automation;
 pub mod backend;
+mod child_process;
 pub mod file_ops;
 pub mod formatter;
 pub mod goal;

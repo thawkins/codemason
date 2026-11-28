@@ -429,20 +429,12 @@ async fn run_team_hook_with_configured_hook_returns_feedback() {
     // A single-token executable script (no shell metacharacters) that prints a
     // message and exits 2 (the block/feedback protocol).
     let script_dir = tempfile::tempdir().expect("script dir");
-    let script = script_dir.path().join("gate.sh");
-    std::fs::write(&script, "#!/bin/sh\necho needs work\nexit 2\n").expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script).expect("meta").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script, perms).expect("chmod");
-    }
+    let script = manager_support::write_exit2_gate(script_dir.path());
 
     let mut store = TeamStore::load(&manager.team_dir).expect("load");
     store.config.settings.hooks = vec![HookEntry {
         event: HookEvent::TaskCompleted,
-        command: script.to_str().expect("utf8").to_string(),
+        command: script,
     }];
     store.save().expect("persist hook");
 

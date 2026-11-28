@@ -56,9 +56,8 @@ async fn test_glob_recursive_matches_and_summary() {
 
     let out = glob("**/*.rs", &dir).await.unwrap();
     assert!(out.content.contains("2 files found"), "{}", out.content);
-    // The walk reports matched file names relative to the directory that
-    // contains them (its `collect_matches` recursion resets the root at each
-    // level), so nested files surface by their base name.
+    // Matches are reported by their path from the search root
+    // (`src/a.rs`, `src/nested/b.rs`).
     assert!(out.content.contains("a.rs"), "{}", out.content);
     assert!(out.content.contains("b.rs"), "{}", out.content);
     assert!(!out.content.contains("c.txt"), "{}", out.content);
@@ -130,4 +129,32 @@ async fn test_glob_invalid_pattern_is_error() {
     let dir = temp_dir("badpattern");
     let err = glob("[", &dir).await.unwrap_err();
     assert!(err.to_string().contains("Invalid glob pattern"), "{err}");
+}
+
+/// A directory-scoped pattern finds nested files and reports each one by its
+/// path from the search root (TL-03); the recursion used to reset the root at
+/// every level, so `src/**/*.rs` missed nested files entirely.
+#[tokio::test]
+async fn test_glob_directory_pattern_reaches_nested_files_with_full_paths() {
+    let dir = temp_dir("scoped");
+    // Six subdirectories, so both the sequential and the parallel walk run.
+    for sub in ["a", "b", "c", "d", "e", "f"] {
+        std::fs::create_dir_all(dir.join("src").join(sub).join("deep")).unwrap();
+        std::fs::write(dir.join("src").join(sub).join("deep").join("m.rs"), "x").unwrap();
+    }
+    std::fs::write(dir.join("src").join("top.rs"), "x").unwrap();
+    std::fs::write(dir.join("other.rs"), "x").unwrap();
+
+    let out = glob("src/**/*.rs", &dir).await.unwrap();
+
+    assert_eq!(
+        out.metadata.as_ref().unwrap()["count"],
+        7,
+        "{}",
+        out.content
+    );
+    let shown = out.content.replace('\\', "/");
+    assert!(shown.contains("src/top.rs"), "{}", out.content);
+    assert!(shown.contains("src/f/deep/m.rs"), "{}", out.content);
+    assert!(!shown.contains("other.rs"), "{}", out.content);
 }

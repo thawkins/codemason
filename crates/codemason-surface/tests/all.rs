@@ -6,6 +6,8 @@
 //! `AGENTS.md` ("Test Layout") and
 //! `docs/reports/testconsolidation-review.md`.
 
+#[path = "test_surface_archive.rs"]
+mod test_surface_archive;
 #[path = "test_surface_config_splice.rs"]
 mod test_surface_config_splice;
 #[path = "test_surface_harness_extra.rs"]
@@ -22,3 +24,7 @@ mod test_surface_net;
 mod test_surface_store;
 #[path = "test_surface_store_extra.rs"]
 mod test_surface_store_extra;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

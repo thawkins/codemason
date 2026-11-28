@@ -384,7 +384,8 @@ async fn successful_run_writes_output_file() {
         "automation done"
     );
     assert!(
-        out.contains("log/automation"),
+        path.ancestors()
+            .any(|a| a.ends_with(std::path::Path::new("log").join("automation"))),
         "output defaults under log/automation: {out}"
     );
 

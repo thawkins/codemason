@@ -170,39 +170,6 @@ pub fn parse_research_dependencies(
     Ok(out)
 }
 
-/// Parse the `research:` list from a SPEC.md frontmatter block. This
-/// complements [`parse_research_dependencies`] which reads PLAN.md.
-///
-/// Returns the names in document order, deduplicated. Invalid entries
-/// are ignored so the surface stays best-effort.
-#[must_use]
-pub fn parse_spec_frontmatter_research(frontmatter: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("research:") else {
-            continue;
-        };
-        let rest = rest.trim();
-        // Accept both inline `[a, b, c]` and a single bare name.
-        let inner = rest
-            .strip_prefix('[')
-            .and_then(|s| s.strip_suffix(']'))
-            .unwrap_or(rest);
-        for raw in inner.split(',') {
-            let name = raw.trim().trim_matches('"').trim_matches('\'');
-            if name.is_empty() {
-                continue;
-            }
-            if seen.insert(name.to_string()) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    out
-}
-
 /// Convenience wrapper: parse and return only the names in document order.
 ///
 /// Returns `Err` for the same reasons as [`parse_research_dependencies`].

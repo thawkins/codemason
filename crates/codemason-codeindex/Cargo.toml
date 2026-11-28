@@ -44,6 +44,7 @@ lru = { workspace = true }
 codemason-types = { path = "../codemason-types" }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = "3.5"
 tokio = { workspace = true, features = ["full", "test-util"] }
 criterion = { workspace = true }

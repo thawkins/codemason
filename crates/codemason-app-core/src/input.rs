@@ -253,37 +253,135 @@ pub enum InputAction {
 pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // Always check for quit commands first, before any modal interception.
     // This ensures Ctrl+C (arm quit) and Ctrl+D (confirm quit) work globally.
+    if let KeyResult::Done(action) = global_quit_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = priority_confirm_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = browse_panel_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = queue_overlay_key(app, key).await {
+        return action;
+    }
+    if let KeyResult::Done(action) = dialog_key(app, key).await {
+        return action;
+    }
+    if let KeyResult::Done(action) = question_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = permission_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = choice_confirm_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = pending_decision_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = external_editor_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = input_menu_key(app, key) {
+        return action;
+    }
+    if let KeyResult::Done(action) = viewer_key(app, key) {
+        return action;
+    }
+
+    // Session sidebar (spec MULTISESSION M5): its global shortcuts, and every
+    // key while it has focus, after all modal dialogs had their chance.
+    if crate::sessions_sidebar_state::handle_key(app, key) {
+        return None;
+    }
+
+    prompt_key(app, key)
+}
+
+/// Outcome of offering a key to one state in [`handle_key`]'s precedence
+/// chain.
+///
+/// A state that owns the key returns [`KeyResult::Done`] carrying the action
+/// [`handle_key`] must return as-is (`None` when the key is swallowed). A state
+/// that is not active returns [`KeyResult::Pass`], so [`handle_key`] offers the
+/// key to the next state in order. Helpers that run only once their state is
+/// known to be active return the `Option<InputAction>` directly.
+enum KeyResult {
+    /// The key was consumed; return this action from [`handle_key`].
+    Done(Option<InputAction>),
+    /// The state is not active; offer the key to the next state.
+    Pass,
+}
+
+/// Handle the always-on global quit keys (`Ctrl+C` / `Ctrl+D`).
+///
+/// # Arguments
+/// * `app` - application state, read for an active keyboard selection.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] with `CopyToClipboard`, `Quit` or `ConfirmQuit` for a
+/// quit key; [`KeyResult::Pass`] otherwise.
+fn global_quit_key(app: &App, key: KeyInput) -> KeyResult {
     if is_global_quit_key(key) {
         if key.key == Key::Char('c') {
             // Copy if a keyboard selection is active; otherwise arm quit.
             if app.session.kb_select_anchor.is_some() {
-                return Some(InputAction::CopyToClipboard);
+                return KeyResult::Done(Some(InputAction::CopyToClipboard));
             }
-            return Some(InputAction::Quit);
+            return KeyResult::Done(Some(InputAction::Quit));
         }
-        return Some(InputAction::ConfirmQuit);
+        return KeyResult::Done(Some(InputAction::ConfirmQuit));
     }
+    KeyResult::Pass
+}
 
+/// Handle the confirmation modals that take precedence over every dialog:
+/// memory delete, then router save.
+///
+/// # Arguments
+/// * `app` - application state, read for the pending confirmations.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] while either confirmation is pending (every other key is
+/// swallowed); [`KeyResult::Pass`] otherwise.
+fn priority_confirm_key(app: &App, key: KeyInput) -> KeyResult {
     // If a memory delete confirmation modal is active, intercept Enter/Esc
     // before any other dialog so the confirmation always takes precedence.
     if app.pending_memory_delete.is_some() {
-        match key.key {
-            Key::Enter => return Some(InputAction::ConfirmMemoryDelete),
-            Key::Esc => return Some(InputAction::CancelMemoryDelete),
-            _ => return None,
-        }
+        return KeyResult::Done(match key.key {
+            Key::Enter => Some(InputAction::ConfirmMemoryDelete),
+            Key::Esc => Some(InputAction::CancelMemoryDelete),
+            _ => None,
+        });
     }
 
     // If a router save confirmation modal is active, intercept Enter/Esc
     // before any other dialog so the confirmation always takes precedence.
     if app.pending_router_save.is_some() {
-        match key.key {
-            Key::Enter => return Some(InputAction::ConfirmRouterSave),
-            Key::Esc => return Some(InputAction::CancelRouterSave),
-            _ => return None,
-        }
+        return KeyResult::Done(match key.key {
+            Key::Enter => Some(InputAction::ConfirmRouterSave),
+            Key::Esc => Some(InputAction::CancelRouterSave),
+            _ => None,
+        });
     }
+    KeyResult::Pass
+}
 
+/// Route a key to whichever browse panel owns the keyboard: the plugin store,
+/// the connector server-address prompt, the connector catalogue, then the
+/// `/backend` switcher.
+///
+/// # Arguments
+/// * `app` - application state; the open panel is mutated.
+/// * `key` - the key press.
+///
+/// # Returns
+/// `KeyResult::Done(None)` while any of these panels is open (every key is
+/// consumed); [`KeyResult::Pass`] otherwise.
+fn browse_panel_key(app: &mut App, key: KeyInput) -> KeyResult {
     // While the plugin-store browse panel is open it owns the keyboard. The
     // panel has three focusable panes (spec `pluginstores` FR-052): the left column
     // is split vertically into the category navigator (top) and the marketplace
@@ -301,52 +399,8 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // FR-017, FR-024). Placed before the queue modals so the panel has priority while
     // it is open.
     if app.plugin_store.is_some() {
-        match key.key {
-            Key::Tab => app.plugin_store_focus_next(),
-            Key::BackTab => app.plugin_store_focus_prev(),
-            Key::Up => {
-                if app.plugin_store_nav_focused() {
-                    app.plugin_store_category_move_up();
-                } else if app.plugin_store_marketplace_focused() {
-                    app.plugin_store_marketplace_move_up();
-                } else {
-                    app.plugin_store_move_up();
-                }
-            }
-            Key::Down => {
-                if app.plugin_store_nav_focused() {
-                    app.plugin_store_category_move_down();
-                } else if app.plugin_store_marketplace_focused() {
-                    app.plugin_store_marketplace_move_down();
-                } else {
-                    app.plugin_store_move_down();
-                }
-            }
-            Key::Enter => {
-                if app.plugin_store_nav_focused() {
-                    app.plugin_store_category_confirm();
-                } else if app.plugin_store_marketplace_focused() {
-                    app.plugin_store_marketplace_confirm();
-                } else {
-                    app.plugin_store_install_selected();
-                }
-            }
-            Key::Char('c') if !key.mods.contains(Modifiers::CTRL) => {
-                if app.plugin_store_marketplace_focused() {
-                    app.plugin_store_clear_marketplace();
-                } else {
-                    app.plugin_store_clear_category();
-                }
-            }
-            Key::Backspace | Key::Esc => {
-                app.plugin_store_edit_or_close();
-            }
-            Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
-                app.plugin_store_push_char(c);
-            }
-            _ => {}
-        }
-        return None;
+        plugin_store_key(app, key);
+        return KeyResult::Done(None);
     }
 
     // While the connector-catalogue browse panel (`/connectors claude`) is open
@@ -366,64 +420,12 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // keyboard: characters edit the address, Enter installs with it, Esc
     // cancels; every other key is swallowed.
     if app.connector_url_prompt_open() {
-        match key.key {
-            Key::Enter => app.connector_url_prompt_submit(),
-            Key::Esc => app.connector_url_prompt_cancel(),
-            Key::Backspace => app.connector_url_prompt_backspace(),
-            Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
-                app.connector_url_prompt_insert(&c.to_string());
-            }
-            _ => {}
-        }
-        return None;
+        connector_url_prompt_key(app, key);
+        return KeyResult::Done(None);
     }
     if app.connector_store.is_some() {
-        match key.key {
-            Key::Tab => app.connector_catalogue_focus_next(),
-            Key::BackTab => app.connector_catalogue_focus_prev(),
-            Key::Up => {
-                if app.connector_catalogue_nav_focused() {
-                    app.connector_catalogue_category_move_up();
-                } else if app.connector_catalogue_marketplace_focused() {
-                    app.connector_catalogue_marketplace_move_up();
-                } else {
-                    app.connector_catalogue_move_up();
-                }
-            }
-            Key::Down => {
-                if app.connector_catalogue_nav_focused() {
-                    app.connector_catalogue_category_move_down();
-                } else if app.connector_catalogue_marketplace_focused() {
-                    app.connector_catalogue_marketplace_move_down();
-                } else {
-                    app.connector_catalogue_move_down();
-                }
-            }
-            Key::Enter => {
-                if app.connector_catalogue_nav_focused() {
-                    app.connector_catalogue_category_confirm();
-                } else if app.connector_catalogue_marketplace_focused() {
-                    app.connector_catalogue_marketplace_confirm();
-                } else {
-                    app.connector_catalogue_install_selected();
-                }
-            }
-            Key::Char('c') if !key.mods.contains(Modifiers::CTRL) => {
-                if app.connector_catalogue_marketplace_focused() {
-                    app.connector_catalogue_clear_marketplace();
-                } else {
-                    app.connector_catalogue_clear_category();
-                }
-            }
-            Key::Backspace | Key::Esc => {
-                app.connector_catalogue_edit_or_close();
-            }
-            Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
-                app.connector_catalogue_push_char(c);
-            }
-            _ => {}
-        }
-        return None;
+        connector_store_key(app, key);
+        return KeyResult::Done(None);
     }
 
     // While the `/backend` switcher panel (spec `openhands` FR-008) is open it
@@ -438,9 +440,145 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
             Key::Esc => app.close_backend_panel(),
             _ => {}
         }
-        return None;
+        return KeyResult::Done(None);
     }
+    KeyResult::Pass
+}
 
+/// Apply a key to the open plugin-store browse panel.
+///
+/// # Arguments
+/// * `app` - application state with `plugin_store` open; the panel is mutated.
+/// * `key` - the key press. Unbound keys are swallowed.
+fn plugin_store_key(app: &mut App, key: KeyInput) {
+    match key.key {
+        Key::Tab => app.plugin_store_focus_next(),
+        Key::BackTab => app.plugin_store_focus_prev(),
+        Key::Up => {
+            if app.plugin_store_nav_focused() {
+                app.plugin_store_category_move_up();
+            } else if app.plugin_store_marketplace_focused() {
+                app.plugin_store_marketplace_move_up();
+            } else {
+                app.plugin_store_move_up();
+            }
+        }
+        Key::Down => {
+            if app.plugin_store_nav_focused() {
+                app.plugin_store_category_move_down();
+            } else if app.plugin_store_marketplace_focused() {
+                app.plugin_store_marketplace_move_down();
+            } else {
+                app.plugin_store_move_down();
+            }
+        }
+        Key::Enter => {
+            if app.plugin_store_nav_focused() {
+                app.plugin_store_category_confirm();
+            } else if app.plugin_store_marketplace_focused() {
+                app.plugin_store_marketplace_confirm();
+            } else {
+                app.plugin_store_install_selected();
+            }
+        }
+        Key::Char('c') if !key.mods.contains(Modifiers::CTRL) => {
+            if app.plugin_store_marketplace_focused() {
+                app.plugin_store_clear_marketplace();
+            } else {
+                app.plugin_store_clear_category();
+            }
+        }
+        Key::Backspace | Key::Esc => {
+            app.plugin_store_edit_or_close();
+        }
+        Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
+            app.plugin_store_push_char(c);
+        }
+        _ => {}
+    }
+}
+
+/// Apply a key to the open connector-catalogue server-address prompt.
+///
+/// # Arguments
+/// * `app` - application state with the address prompt open; it is mutated.
+/// * `key` - the key press. Unbound keys are swallowed.
+fn connector_url_prompt_key(app: &mut App, key: KeyInput) {
+    match key.key {
+        Key::Enter => app.connector_url_prompt_submit(),
+        Key::Esc => app.connector_url_prompt_cancel(),
+        Key::Backspace => app.connector_url_prompt_backspace(),
+        Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
+            app.connector_url_prompt_insert(&c.to_string());
+        }
+        _ => {}
+    }
+}
+
+/// Apply a key to the open connector-catalogue browse panel.
+///
+/// # Arguments
+/// * `app` - application state with `connector_store` open; it is mutated.
+/// * `key` - the key press. Unbound keys are swallowed.
+fn connector_store_key(app: &mut App, key: KeyInput) {
+    match key.key {
+        Key::Tab => app.connector_catalogue_focus_next(),
+        Key::BackTab => app.connector_catalogue_focus_prev(),
+        Key::Up => {
+            if app.connector_catalogue_nav_focused() {
+                app.connector_catalogue_category_move_up();
+            } else if app.connector_catalogue_marketplace_focused() {
+                app.connector_catalogue_marketplace_move_up();
+            } else {
+                app.connector_catalogue_move_up();
+            }
+        }
+        Key::Down => {
+            if app.connector_catalogue_nav_focused() {
+                app.connector_catalogue_category_move_down();
+            } else if app.connector_catalogue_marketplace_focused() {
+                app.connector_catalogue_marketplace_move_down();
+            } else {
+                app.connector_catalogue_move_down();
+            }
+        }
+        Key::Enter => {
+            if app.connector_catalogue_nav_focused() {
+                app.connector_catalogue_category_confirm();
+            } else if app.connector_catalogue_marketplace_focused() {
+                app.connector_catalogue_marketplace_confirm();
+            } else {
+                app.connector_catalogue_install_selected();
+            }
+        }
+        Key::Char('c') if !key.mods.contains(Modifiers::CTRL) => {
+            if app.connector_catalogue_marketplace_focused() {
+                app.connector_catalogue_clear_marketplace();
+            } else {
+                app.connector_catalogue_clear_category();
+            }
+        }
+        Key::Backspace | Key::Esc => {
+            app.connector_catalogue_edit_or_close();
+        }
+        Key::Char(c) if !key.mods.contains(Modifiers::CTRL) => {
+            app.connector_catalogue_push_char(c);
+        }
+        _ => {}
+    }
+}
+
+/// Route a key to the queue-entry panel or the queue-control menu overlay.
+///
+/// # Arguments
+/// * `app` - application state; the open overlay (and, for its actions, the
+///   queue) is mutated.
+/// * `key` - the key press.
+///
+/// # Returns
+/// `KeyResult::Done(None)` while either overlay is open (every key is
+/// swallowed); [`KeyResult::Pass`] otherwise.
+async fn queue_overlay_key(app: &mut App, key: KeyInput) -> KeyResult {
     // While the queue-entry panel (ALT-Q `Show` row) is open it swallows every
     // keystroke so none of them can mutate the editable input buffer: `Up`/`Down`
     // move the highlight, `Enter` moves the highlighted entry one step toward the
@@ -457,7 +595,7 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
             Key::Esc => app.queue_show_close(),
             _ => {}
         }
-        return None;
+        return KeyResult::Done(None);
     }
 
     // While the queue-control menu overlay (ALT-Q) is open it swallows every
@@ -477,13 +615,27 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
             }
             _ => {}
         }
-        return None;
+        return KeyResult::Done(None);
     }
+    KeyResult::Pass
+}
 
+/// Route a key to the first open dialog that takes every key: the context
+/// menu, the shortcuts panel, provider setup, MCP discover, `/plugins list`,
+/// then `/loop` setup.
+///
+/// # Arguments
+/// * `app` - application state; the open dialog is mutated.
+/// * `key` - the key press.
+///
+/// # Returns
+/// `KeyResult::Done(None)` while any of these dialogs is open;
+/// [`KeyResult::Pass`] otherwise.
+async fn dialog_key(app: &mut App, key: KeyInput) -> KeyResult {
     // If context menu is active, route all keys there.
     if app.context_menu.is_some() {
         handle_context_menu_key(app, key);
-        return None;
+        return KeyResult::Done(None);
     }
 
     // If shortcuts panel is active, only Esc or '?' dismiss it.
@@ -491,194 +643,261 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
         if key.key == Key::Esc || key.key == Key::Char('?') {
             app.show_shortcuts = false;
         }
-        return None;
+        return KeyResult::Done(None);
     }
 
     // If provider setup dialog is active, route all keys there.
     if app.provider_setup.is_some() {
         handle_provider_setup_key(app, key);
-        return None;
+        return KeyResult::Done(None);
     }
 
     // If MCP discover dialog is active, route all keys there
     if app.mcp_discover.is_some() {
         handle_mcp_discover_key(app, key).await;
-        return None;
+        return KeyResult::Done(None);
     }
 
     // If the `/plugins list` dialog is active, route all keys there (FR-009).
     if app.plugins_list.is_some() {
         handle_plugins_list_key(app, key).await;
-        return None;
+        return KeyResult::Done(None);
     }
 
     // If the /loop setup dialog is active, route all keys there (T-014).
     if app.loop_setup.is_some() {
         crate::app::handle_loop_setup_key(app, key);
-        return None;
+        return KeyResult::Done(None);
     }
+    KeyResult::Pass
+}
 
+/// Route a key to the question dialog when a question is queued.
+///
+/// # Arguments
+/// * `app` - application state; the question queue, the selection and the
+///   typed answer are mutated, and answers are published on the event bus.
+/// * `key` - the key press.
+///
+/// # Returns
+/// `KeyResult::Done(None)` while a question is queued (every key is consumed);
+/// [`KeyResult::Pass`] otherwise.
+fn question_key(app: &mut App, key: KeyInput) -> KeyResult {
     // If question dialog is active, intercept keys. Enter and Esc answer
     // only once the front question has been shown for the answer delay, so a
     // double press cannot answer the next question unread; the answered
     // question leaves the queue at once (see `App::question_answerable`).
-    if !app.session.question_queue.is_empty() {
-        app.note_question_front();
-        let answerable = app.question_answerable();
-        let has_options = app
-            .session
-            .question_queue
-            .front()
-            .map(|r| !r.options.is_empty())
-            .unwrap_or(false);
+    if app.session.question_queue.is_empty() {
+        return KeyResult::Pass;
+    }
+    app.note_question_front();
+    let answerable = app.question_answerable();
+    let has_options = app
+        .session
+        .question_queue
+        .front()
+        .map(|r| !r.options.is_empty())
+        .unwrap_or(false);
 
-        if has_options {
-            return match key.key {
-                Key::Up | Key::Char('k') => {
-                    if app.session.question_selected_index > 0 {
-                        app.session.question_selected_index -= 1;
-                    }
-                    None
-                }
-                Key::Down | Key::Char('j') => {
-                    if let Some(req) = app.session.question_queue.front() {
-                        if app.session.question_selected_index + 1 < req.options.len() {
-                            app.session.question_selected_index += 1;
-                        }
-                    }
-                    None
-                }
-                Key::Enter if !answerable => None,
-                Key::Enter => {
-                    if let Some(req) = app.session.question_queue.front().cloned() {
-                        // FUNC-060: clamp the selection to the current option
-                        // set. A stale index (e.g. the queue advanced while the
-                        // selection was mid-flight) must never submit a blank
-                        // answer to the agent. The Up/Down handlers keep the
-                        // index in range, so an out-of-range value here means
-                        // the option list shrank; treat it as "no selection"
-                        // and keep the dialog open rather than answering empty.
-                        let selected = app
-                            .session
-                            .question_selected_index
-                            .min(req.options.len().saturating_sub(1));
-                        if let Some(response) = req.options.get(selected).cloned() {
-                            app.event_bus.publish(
-                                codemason_agent::event::Event::QuestionAnswered {
-                                    session_id: req.session_id.clone(),
-                                    request_id: req.id.clone(),
-                                    response,
-                                    secret: req.secret,
-                                },
-                            );
-                            app.session.question_queue.pop_front();
-                            app.note_question_front();
-                        }
-                    }
-                    None
-                }
-                Key::Esc if !answerable => None,
-                Key::Esc => {
-                    if let Some(req) = app.session.question_queue.front().cloned() {
-                        app.event_bus
-                            .publish(codemason_agent::event::Event::QuestionAnswered {
-                                session_id: req.session_id.clone(),
-                                request_id: req.id.clone(),
-                                response: "[User dismissed question]".to_string(),
-                                secret: req.secret,
-                            });
-                    }
-                    app.session.question_queue.pop_front();
-                    app.note_question_front();
-                    None
-                }
-                _ => None,
-            };
-        }
+    if has_options {
+        return KeyResult::Done(question_options_key(app, key, answerable));
+    }
+    KeyResult::Done(question_free_text_key(app, key, answerable))
+}
 
-        // Free-text question: accept typed input, submit on Enter, cancel on Esc.
-        return match key.key {
-            Key::Enter | Key::Esc if !answerable => None,
-            Key::Enter => {
-                if let Some(req) = app.session.question_queue.front().cloned() {
-                    let response = app.session.pending_question_input.trim().to_string();
-                    if !response.is_empty() {
-                        app.event_bus
-                            .publish(codemason_agent::event::Event::QuestionAnswered {
-                                session_id: req.session_id.clone(),
-                                request_id: req.id.clone(),
-                                response,
-                                secret: req.secret,
-                            });
-                        app.session.question_queue.pop_front();
-                        app.note_question_front();
-                    }
-                }
-                None
+/// Handle a key for a front question that offers a fixed set of options.
+///
+/// # Arguments
+/// * `app` - application state with a non-empty question queue.
+/// * `key` - the key press: `Up`/`k` and `Down`/`j` move the selection, `Enter`
+///   answers with it and `Esc` dismisses the question.
+/// * `answerable` - whether the front question has been shown for the answer
+///   delay; `Enter` and `Esc` do nothing until it has.
+///
+/// # Returns
+/// Always `None`: the dialog consumes every key.
+fn question_options_key(app: &mut App, key: KeyInput, answerable: bool) -> Option<InputAction> {
+    match key.key {
+        Key::Up | Key::Char('k') => {
+            if app.session.question_selected_index > 0 {
+                app.session.question_selected_index -= 1;
             }
-            Key::Esc => {
-                if let Some(req) = app.session.question_queue.front().cloned() {
+            None
+        }
+        Key::Down | Key::Char('j') => {
+            if let Some(req) = app.session.question_queue.front() {
+                if app.session.question_selected_index + 1 < req.options.len() {
+                    app.session.question_selected_index += 1;
+                }
+            }
+            None
+        }
+        Key::Enter if !answerable => None,
+        Key::Enter => {
+            if let Some(req) = app.session.question_queue.front().cloned() {
+                // FUNC-060: clamp the selection to the current option
+                // set. A stale index (e.g. the queue advanced while the
+                // selection was mid-flight) must never submit a blank
+                // answer to the agent. The Up/Down handlers keep the
+                // index in range, so an out-of-range value here means
+                // the option list shrank; treat it as "no selection"
+                // and keep the dialog open rather than answering empty.
+                let selected = app
+                    .session
+                    .question_selected_index
+                    .min(req.options.len().saturating_sub(1));
+                if let Some(response) = req.options.get(selected).cloned() {
                     app.event_bus
                         .publish(codemason_agent::event::Event::QuestionAnswered {
                             session_id: req.session_id.clone(),
                             request_id: req.id.clone(),
-                            response: "[User dismissed question]".to_string(),
+                            response,
                             secret: req.secret,
                         });
+                    app.session.question_queue.pop_front();
+                    app.note_question_front();
                 }
-                app.session.question_queue.pop_front();
-                app.note_question_front();
-                None
             }
-            Key::Backspace => {
-                app.session.pending_question_input.pop();
-                None
-            }
-            Key::Char(c) => {
-                app.session.pending_question_input.push(c);
-                None
-            }
-            _ => None,
-        };
-    }
-
-    // If permission dialog is active, intercept keys
-    if !app.session.permission_queue.is_empty() {
-        // Standard permission dialog: y/a/n only. An answer counts only once
-        // the front request has been shown for the answer delay, so a double
-        // press cannot grant the next request unread; the answered request
-        // leaves the queue at once (see `App::answer_front_permission`).
-        let (decision, verb) = match key.key {
-            Key::Char('y') => (
-                codemason_agent::permission::PermissionDecision::Once,
-                "grant",
-            ),
-            Key::Char('a') => (
-                codemason_agent::permission::PermissionDecision::Always,
-                "grant (always)",
-            ),
-            Key::Char('n') => (
-                codemason_agent::permission::PermissionDecision::Deny,
-                "deny",
-            ),
-            _ => return None,
-        };
-        app.note_permission_front();
-        if app.permission_answerable() {
-            app.answer_front_permission(decision, verb);
+            None
         }
-        return None;
+        Key::Esc if !answerable => None,
+        Key::Esc => {
+            if let Some(req) = app.session.question_queue.front().cloned() {
+                app.event_bus
+                    .publish(codemason_agent::event::Event::QuestionAnswered {
+                        session_id: req.session_id.clone(),
+                        request_id: req.id.clone(),
+                        response: "[User dismissed question]".to_string(),
+                        secret: req.secret,
+                    });
+            }
+            app.session.question_queue.pop_front();
+            app.note_question_front();
+            None
+        }
+        _ => None,
     }
+}
 
+/// Handle a key for a free-text front question.
+///
+/// # Arguments
+/// * `app` - application state with a non-empty question queue.
+/// * `key` - the key press: characters and `Backspace` edit the typed answer,
+///   `Enter` submits it and `Esc` dismisses the question.
+/// * `answerable` - whether the front question has been shown for the answer
+///   delay; `Enter` and `Esc` do nothing until it has.
+///
+/// # Returns
+/// Always `None`: the dialog consumes every key.
+fn question_free_text_key(app: &mut App, key: KeyInput, answerable: bool) -> Option<InputAction> {
+    // Free-text question: accept typed input, submit on Enter, cancel on Esc.
+    match key.key {
+        Key::Enter | Key::Esc if !answerable => None,
+        Key::Enter => {
+            if let Some(req) = app.session.question_queue.front().cloned() {
+                let response = app.session.pending_question_input.trim().to_string();
+                if !response.is_empty() {
+                    app.event_bus
+                        .publish(codemason_agent::event::Event::QuestionAnswered {
+                            session_id: req.session_id.clone(),
+                            request_id: req.id.clone(),
+                            response,
+                            secret: req.secret,
+                        });
+                    app.session.question_queue.pop_front();
+                    app.note_question_front();
+                }
+            }
+            None
+        }
+        Key::Esc => {
+            if let Some(req) = app.session.question_queue.front().cloned() {
+                app.event_bus
+                    .publish(codemason_agent::event::Event::QuestionAnswered {
+                        session_id: req.session_id.clone(),
+                        request_id: req.id.clone(),
+                        response: "[User dismissed question]".to_string(),
+                        secret: req.secret,
+                    });
+            }
+            app.session.question_queue.pop_front();
+            app.note_question_front();
+            None
+        }
+        Key::Backspace => {
+            app.session.pending_question_input.pop();
+            None
+        }
+        Key::Char(c) => {
+            app.session.pending_question_input.push(c);
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Route a key to the permission dialog when a permission request is queued.
+///
+/// # Arguments
+/// * `app` - application state; the front permission request may be answered.
+/// * `key` - the key press: `y`, `a` or `n`.
+///
+/// # Returns
+/// `KeyResult::Done(None)` while a request is queued (every key is consumed);
+/// [`KeyResult::Pass`] otherwise.
+fn permission_key(app: &mut App, key: KeyInput) -> KeyResult {
+    // If permission dialog is active, intercept keys
+    if app.session.permission_queue.is_empty() {
+        return KeyResult::Pass;
+    }
+    // Standard permission dialog: y/a/n only. An answer counts only once
+    // the front request has been shown for the answer delay, so a double
+    // press cannot grant the next request unread; the answered request
+    // leaves the queue at once (see `App::answer_front_permission`).
+    let (decision, verb) = match key.key {
+        Key::Char('y') => (
+            codemason_agent::permission::PermissionDecision::Once,
+            "grant",
+        ),
+        Key::Char('a') => (
+            codemason_agent::permission::PermissionDecision::Always,
+            "grant (always)",
+        ),
+        Key::Char('n') => (
+            codemason_agent::permission::PermissionDecision::Deny,
+            "deny",
+        ),
+        _ => return KeyResult::Done(None),
+    };
+    app.note_permission_front();
+    if app.permission_answerable() {
+        app.answer_front_permission(decision, verb);
+    }
+    KeyResult::Done(None)
+}
+
+/// Route a key to the notice dialog or to one of the two-option `Yes`/`No`
+/// confirmation dialogs: queue clear, memory clear, DB prune, then compaction
+/// prune.
+///
+/// # Arguments
+/// * `app` - application state; a dialog's `Yes`/`No` cursor may be toggled.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] with the dialog's action while one is open (every other
+/// key is swallowed); [`KeyResult::Pass`] otherwise.
+fn choice_confirm_key(app: &mut App, key: KeyInput) -> KeyResult {
     // The single-button notice dialog has nothing to decide: `Enter` and `Esc`
     // both close it, and every other key is swallowed so it cannot mutate the
     // editable input buffer behind the modal. Intercepted before the confirm
     // dialogs so a notice raised over one is not reachable through it.
     if app.notice_open {
-        match key.key {
-            Key::Enter | Key::Esc => return Some(InputAction::DismissNotice),
-            _ => return None,
-        }
+        return KeyResult::Done(match key.key {
+            Key::Enter | Key::Esc => Some(InputAction::DismissNotice),
+            _ => None,
+        });
     }
 
     // If the `Clear the input queue?` confirmation dialog (opened by the
@@ -688,21 +907,19 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // `No`, `Enter` selects, `Esc` dismisses. Every other key is swallowed so
     // it cannot mutate the editable input buffer (FR-035, FR-037).
     if app.queue_clear_confirm_open {
-        match key.key {
+        return KeyResult::Done(match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.queue_clear_confirm_toggle();
-                return None;
+                None
             }
-            Key::Enter => {
-                return Some(if app.queue_clear_confirm_is_yes() {
-                    InputAction::ConfirmQueueClear
-                } else {
-                    InputAction::CancelQueueClear
-                });
-            }
-            Key::Esc => return Some(InputAction::CancelQueueClear),
-            _ => return None,
-        }
+            Key::Enter => Some(if app.queue_clear_confirm_is_yes() {
+                InputAction::ConfirmQueueClear
+            } else {
+                InputAction::CancelQueueClear
+            }),
+            Key::Esc => Some(InputAction::CancelQueueClear),
+            _ => None,
+        });
     }
 
     // If the `Clear this project's memory?` confirmation dialog (opened by
@@ -711,81 +928,88 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // selects, `Esc` dismisses. Every other key is swallowed so it cannot mutate
     // the editable input buffer.
     if app.memory_clear_confirm_open {
-        match key.key {
+        return KeyResult::Done(match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.memory_clear_confirm_toggle();
-                return None;
+                None
             }
-            Key::Enter => {
-                return Some(if app.memory_clear_confirm_is_yes() {
-                    InputAction::ConfirmMemoryClear
-                } else {
-                    InputAction::CancelMemoryClear
-                });
-            }
-            Key::Esc => return Some(InputAction::CancelMemoryClear),
-            _ => return None,
-        }
+            Key::Enter => Some(if app.memory_clear_confirm_is_yes() {
+                InputAction::ConfirmMemoryClear
+            } else {
+                InputAction::CancelMemoryClear
+            }),
+            Key::Esc => Some(InputAction::CancelMemoryClear),
+            _ => None,
+        });
     }
 
     // If the `Prune messages older than N days?` confirmation dialog (opened by
     // `/db prune`) is active, intercept keys before any other dialog. Same
     // two-option shape as the memory dialog above.
     if app.db_prune_confirm_open {
-        match key.key {
+        return KeyResult::Done(match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.db_prune_confirm_toggle();
-                return None;
+                None
             }
-            Key::Enter => {
-                return Some(if app.db_prune_confirm_is_yes() {
-                    InputAction::ConfirmDbPrune
-                } else {
-                    InputAction::CancelDbPrune
-                });
-            }
-            Key::Esc => return Some(InputAction::CancelDbPrune),
-            _ => return None,
-        }
+            Key::Enter => Some(if app.db_prune_confirm_is_yes() {
+                InputAction::ConfirmDbPrune
+            } else {
+                InputAction::CancelDbPrune
+            }),
+            Key::Esc => Some(InputAction::CancelDbPrune),
+            _ => None,
+        });
     }
 
     // If the `Delete every compaction summary?` confirmation dialog (opened by
     // `/compact prune --all`) is active, intercept keys before any other
     // dialog. Same two-option shape as the dialogs above.
     if app.compact_prune_confirm_open {
-        match key.key {
+        return KeyResult::Done(match key.key {
             Key::Left | Key::Right | Key::Tab | Key::BackTab => {
                 app.compact_prune_confirm_toggle();
-                return None;
+                None
             }
-            Key::Enter => {
-                return Some(if app.compact_prune_confirm_is_yes() {
-                    InputAction::ConfirmCompactPrune
-                } else {
-                    InputAction::CancelCompactPrune
-                });
-            }
-            Key::Esc => return Some(InputAction::CancelCompactPrune),
-            _ => return None,
-        }
+            Key::Enter => Some(if app.compact_prune_confirm_is_yes() {
+                InputAction::ConfirmCompactPrune
+            } else {
+                InputAction::CancelCompactPrune
+            }),
+            Key::Esc => Some(InputAction::CancelCompactPrune),
+            _ => None,
+        });
     }
+    KeyResult::Pass
+}
 
+/// Route a key to a pending decision: router save, force cleanup, rollback,
+/// then plan approval.
+///
+/// # Arguments
+/// * `app` - application state, read for the pending decisions.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] with the decision's action while one is pending (every
+/// other key is swallowed); [`KeyResult::Pass`] otherwise.
+fn pending_decision_key(app: &App, key: KeyInput) -> KeyResult {
     // If a router save confirmation modal is active, intercept Enter/Esc
     if app.pending_router_save.is_some() {
-        match key.key {
-            Key::Enter => return Some(InputAction::ConfirmRouterSave),
-            Key::Esc => return Some(InputAction::CancelRouterSave),
-            _ => return None,
-        }
+        return KeyResult::Done(match key.key {
+            Key::Enter => Some(InputAction::ConfirmRouterSave),
+            Key::Esc => Some(InputAction::CancelRouterSave),
+            _ => None,
+        });
     }
 
     // If a forcecleanup confirmation modal is active, intercept Enter/Esc
     if app.session.pending_forcecleanup.is_some() {
-        match key.key {
-            Key::Enter => return Some(InputAction::ConfirmForceCleanup),
-            Key::Esc => return Some(InputAction::CancelForceCleanup),
-            _ => return None,
-        }
+        return KeyResult::Done(match key.key {
+            Key::Enter => Some(InputAction::ConfirmForceCleanup),
+            Key::Esc => Some(InputAction::CancelForceCleanup),
+            _ => None,
+        });
     }
 
     // If a rollback offer is pending after a terminated loop, intercept
@@ -793,216 +1017,262 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     // pre-loop snapshot, Esc keeps the changes. All other keys are consumed
     // so stray typing does not leak into the input box mid-decision.
     if app.session.pending_rollback.is_some() {
-        match key.key {
-            Key::Enter => return Some(InputAction::ConfirmRollback),
-            Key::Esc => return Some(InputAction::CancelRollback),
-            _ => return None,
-        }
+        return KeyResult::Done(match key.key {
+            Key::Enter => Some(InputAction::ConfirmRollback),
+            Key::Esc => Some(InputAction::CancelRollback),
+            _ => None,
+        });
     }
 
     // If a plan approval dialog is active, intercept keys
     if let Some(ref state) = app.session.plan_approval_pending {
         let cursor_approve = state.cursor_approve;
-        match key.key {
+        return KeyResult::Done(match key.key {
             Key::Enter => {
                 if cursor_approve {
-                    return Some(InputAction::ApprovePlan);
+                    Some(InputAction::ApprovePlan)
                 } else {
-                    return Some(InputAction::RejectPlan);
+                    Some(InputAction::RejectPlan)
                 }
             }
-            Key::Left | Key::Right => return Some(InputAction::TogglePlanCursor),
-            Key::Char('r') | Key::Esc => return Some(InputAction::RejectPlan),
-            _ => return None,
-        }
+            Key::Left | Key::Right => Some(InputAction::TogglePlanCursor),
+            Key::Char('r') | Key::Esc => Some(InputAction::RejectPlan),
+            _ => None,
+        });
     }
+    KeyResult::Pass
+}
 
+/// Lock the prompt while it is out in an external editor (`/editor`).
+///
+/// # Arguments
+/// * `app` - application state, read for the editor and turn state.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] while the editor is open: `CancelAgent` for `Esc` during
+/// a stoppable turn, `None` for any other key. [`KeyResult::Pass`] otherwise.
+fn external_editor_key(app: &App, key: KeyInput) -> KeyResult {
     // While the prompt is out in an external editor (`/editor`) nothing may
     // edit or submit it: the editor's result replaces it. Esc still stops a
     // running agent; the confirmation dialogs above keep their keys.
     if app.external_editor_open {
-        return (key.key == Key::Esc && app.session.is_processing && app.esc_stops_turn)
-            .then_some(InputAction::CancelAgent);
+        return KeyResult::Done(
+            (key.key == Key::Esc && app.session.is_processing && app.esc_stops_turn)
+                .then_some(InputAction::CancelAgent),
+        );
     }
+    KeyResult::Pass
+}
 
+/// Route a key to the slash-command menu or the file menu when one is open.
+///
+/// # Arguments
+/// * `app` - application state; the open menu and the input buffer are mutated.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] with the menu's action while a menu is open;
+/// [`KeyResult::Pass`] otherwise.
+fn input_menu_key(app: &mut App, key: KeyInput) -> KeyResult {
     // If slash menu is active, intercept navigation keys
     if app.slash_menu.is_some() {
-        match key.key {
-            Key::Up => {
-                if let Some(ref mut menu) = app.slash_menu {
-                    if !menu.matches.is_empty() {
-                        menu.selected = if menu.selected == 0 {
-                            menu.matches.len() - 1
-                        } else {
-                            menu.selected - 1
-                        };
-                    }
-                }
-                return None;
-            }
-            Key::Down => {
-                if let Some(ref mut menu) = app.slash_menu {
-                    if !menu.matches.is_empty() {
-                        menu.selected = (menu.selected + 1) % menu.matches.len();
-                    }
-                }
-                return None;
-            }
-            Key::Enter => {
-                // Slash commands are queueable like plain messages (FR-017
-                // amendment): a `SlashCommand` action is emitted while the agent
-                // executes and the submit handler enqueues it. No busy refusal.
-                // Select the highlighted command, or use the typed text.
-                // If the user typed more than just the trigger, preserve the full
-                // input so subcommands and arguments are not lost.
-                let command = {
-                    let menu = app.slash_menu.as_ref()?;
-                    let raw = app.session.input.trim_end().to_string();
-                    if let Some(entry) = menu.matches.get(menu.selected) {
-                        let with_slash = format!("/{}", entry.trigger);
-                        // Raw input extends beyond the matched trigger with a space -> use raw
-                        if raw.starts_with(&with_slash)
-                            && raw.len() > with_slash.len()
-                            && raw.as_bytes().get(with_slash.len()) == Some(&b' ')
-                        {
-                            raw
-                        } else {
-                            format!("/{}", entry.trigger)
-                        }
-                    } else {
-                        menu.filter.clone()
-                    }
-                };
-                return Some(InputAction::SlashCommand(command));
-            }
-            Key::Tab => {
-                app.accept_slash_menu_selection();
-                return None;
-            }
-            Key::Esc => {
-                app.slash_menu = None;
-                app.set_cursor_char_index_clamped(app.input_len_chars());
-                return None;
-            }
-            Key::Char(c) => {
-                app.insert_char_at_cursor(c);
-                return None;
-            }
-            Key::Backspace => {
-                app.delete_prev_char();
-                return None;
-            }
-            _ => return None,
-        }
+        return KeyResult::Done(slash_menu_key(app, key));
     }
 
     // If file menu is active, intercept navigation keys while still allowing
     // normal in-line editing and cursor motion.
     if app.file_menu.is_some() {
-        match key.key {
-            Key::Up => {
-                if let Some(ref mut menu) = app.file_menu
-                    && !menu.matches.is_empty()
-                {
+        return KeyResult::Done(file_menu_key(app, key));
+    }
+    KeyResult::Pass
+}
+
+/// Handle a key while the slash-command menu is open.
+///
+/// # Arguments
+/// * `app` - application state with `slash_menu` open; the menu selection and
+///   the input buffer are mutated.
+/// * `key` - the key press: `Up`/`Down` move the selection, `Enter` runs the
+///   command, `Tab` accepts the selection, `Esc` closes the menu, and
+///   characters and `Backspace` edit the input.
+///
+/// # Returns
+/// `SlashCommand` for `Enter`; `None` for every other key.
+fn slash_menu_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
+    match key.key {
+        Key::Up => {
+            if let Some(ref mut menu) = app.slash_menu {
+                if !menu.matches.is_empty() {
                     menu.selected = if menu.selected == 0 {
                         menu.matches.len() - 1
                     } else {
                         menu.selected - 1
                     };
-                    const FILE_MENU_VISIBLE_ROWS: usize = 8;
-                    if menu.selected < menu.scroll_offset {
-                        menu.scroll_offset = menu.selected;
-                    } else if menu.selected + 1 < FILE_MENU_VISIBLE_ROWS {
-                        menu.scroll_offset = 0;
-                    }
                 }
-                return None;
             }
-            Key::Down => {
-                if let Some(ref mut menu) = app.file_menu
-                    && !menu.matches.is_empty()
-                {
-                    menu.selected = (menu.selected + 1) % menu.matches.len();
-                    const FILE_MENU_VISIBLE_ROWS: usize = 8;
-                    if menu.selected >= menu.scroll_offset + FILE_MENU_VISIBLE_ROWS {
-                        menu.scroll_offset = menu.selected + 1 - FILE_MENU_VISIBLE_ROWS;
-                    }
-                }
-                return None;
-            }
-            Key::Tab => {
-                // If the menu is showing a directory, Tab navigates into it;
-                // if it is a file, insert it and close the menu.
-                let _ = app.accept_file_menu_selection(); // INTENTIONAL: acceptance flag, not a fallible error
-                return None;
-            }
-            Key::Enter => {
-                // Accept selection only. Sending is a separate Enter after menu closes.
-                let _ = app.accept_file_menu_selection(); // INTENTIONAL: acceptance flag, not a fallible error
-                return None;
-            }
-            Key::Esc => {
-                app.file_menu = None;
-                return None;
-            }
-            Key::Char('\\') if key.mods.contains(Modifiers::CTRL) => {
-                app.file_menu_show_hidden = !app.file_menu_show_hidden;
-                app.refresh_input_menus();
-                return None;
-            }
-            Key::Char('a') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorHome);
-            }
-            Key::Char('e') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorEnd);
-            }
-            Key::Char('b') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorLeft);
-            }
-            Key::Char('f') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorRight);
-            }
-            Key::Char('w') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::DeletePrevWord);
-            }
-            Key::Char('k') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::DeleteToLineEnd);
-            }
-            Key::Char('u') if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::ClearLine);
-            }
-            Key::Left if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorWordLeft);
-            }
-            Key::Right if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorWordRight);
-            }
-            Key::Home if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorHome);
-            }
-            Key::End if key.mods.contains(Modifiers::CTRL) => {
-                return Some(InputAction::MoveCursorEnd);
-            }
-            Key::Left => return Some(InputAction::MoveCursorLeft),
-            Key::Right => return Some(InputAction::MoveCursorRight),
-            Key::Home => return Some(InputAction::MoveCursorHome),
-            Key::End => return Some(InputAction::MoveCursorEnd),
-            Key::Delete => return Some(InputAction::Delete),
-            Key::Char(c) => {
-                app.insert_char_at_cursor(c);
-                return None;
-            }
-            Key::Backspace => {
-                app.delete_prev_char();
-                return None;
-            }
-            _ => return None,
+            None
         }
+        Key::Down => {
+            if let Some(ref mut menu) = app.slash_menu {
+                if !menu.matches.is_empty() {
+                    menu.selected = (menu.selected + 1) % menu.matches.len();
+                }
+            }
+            None
+        }
+        Key::Enter => {
+            // Slash commands are queueable like plain messages (FR-017
+            // amendment): a `SlashCommand` action is emitted while the agent
+            // executes and the submit handler enqueues it. No busy refusal.
+            // Select the highlighted command, or use the typed text.
+            // If the user typed more than just the trigger, preserve the full
+            // input so subcommands and arguments are not lost.
+            let command = {
+                let menu = app.slash_menu.as_ref()?;
+                let raw = app.session.input.trim_end().to_string();
+                if let Some(entry) = menu.matches.get(menu.selected) {
+                    let with_slash = format!("/{}", entry.trigger);
+                    // Raw input extends beyond the matched trigger with a space -> use raw
+                    if raw.starts_with(&with_slash)
+                        && raw.len() > with_slash.len()
+                        && raw.as_bytes().get(with_slash.len()) == Some(&b' ')
+                    {
+                        raw
+                    } else {
+                        format!("/{}", entry.trigger)
+                    }
+                } else {
+                    menu.filter.clone()
+                }
+            };
+            Some(InputAction::SlashCommand(command))
+        }
+        Key::Tab => {
+            app.accept_slash_menu_selection();
+            None
+        }
+        Key::Esc => {
+            app.slash_menu = None;
+            app.set_cursor_char_index_clamped(app.input_len_chars());
+            None
+        }
+        Key::Char(c) => {
+            app.insert_char_at_cursor(c);
+            None
+        }
+        Key::Backspace => {
+            app.delete_prev_char();
+            None
+        }
+        _ => None,
     }
+}
 
+/// Handle a key while the file menu is open.
+///
+/// # Arguments
+/// * `app` - application state with `file_menu` open; the menu selection and
+///   the input buffer are mutated.
+/// * `key` - the key press: `Up`/`Down` move the selection, `Tab`/`Enter`
+///   accept it, `Esc` closes the menu, `Ctrl+\` toggles hidden files, and the
+///   editing and cursor-motion keys keep working on the input.
+///
+/// # Returns
+/// The cursor-motion or editing action for those keys; `None` otherwise.
+fn file_menu_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
+    match key.key {
+        Key::Up => {
+            if let Some(ref mut menu) = app.file_menu
+                && !menu.matches.is_empty()
+            {
+                menu.selected = if menu.selected == 0 {
+                    menu.matches.len() - 1
+                } else {
+                    menu.selected - 1
+                };
+                const FILE_MENU_VISIBLE_ROWS: usize = 8;
+                if menu.selected < menu.scroll_offset {
+                    menu.scroll_offset = menu.selected;
+                } else if menu.selected + 1 < FILE_MENU_VISIBLE_ROWS {
+                    menu.scroll_offset = 0;
+                }
+            }
+            None
+        }
+        Key::Down => {
+            if let Some(ref mut menu) = app.file_menu
+                && !menu.matches.is_empty()
+            {
+                menu.selected = (menu.selected + 1) % menu.matches.len();
+                const FILE_MENU_VISIBLE_ROWS: usize = 8;
+                if menu.selected >= menu.scroll_offset + FILE_MENU_VISIBLE_ROWS {
+                    menu.scroll_offset = menu.selected + 1 - FILE_MENU_VISIBLE_ROWS;
+                }
+            }
+            None
+        }
+        Key::Tab => {
+            // If the menu is showing a directory, Tab navigates into it;
+            // if it is a file, insert it and close the menu.
+            let _ = app.accept_file_menu_selection(); // INTENTIONAL: acceptance flag, not a fallible error
+            None
+        }
+        Key::Enter => {
+            // Accept selection only. Sending is a separate Enter after menu closes.
+            let _ = app.accept_file_menu_selection(); // INTENTIONAL: acceptance flag, not a fallible error
+            None
+        }
+        Key::Esc => {
+            app.file_menu = None;
+            None
+        }
+        Key::Char('\\') if key.mods.contains(Modifiers::CTRL) => {
+            app.file_menu_show_hidden = !app.file_menu_show_hidden;
+            app.refresh_input_menus();
+            None
+        }
+        Key::Char('a') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorHome),
+        Key::Char('e') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorEnd),
+        Key::Char('b') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorLeft),
+        Key::Char('f') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorRight),
+        Key::Char('w') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::DeletePrevWord),
+        Key::Char('k') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::DeleteToLineEnd),
+        Key::Char('u') if key.mods.contains(Modifiers::CTRL) => Some(InputAction::ClearLine),
+        Key::Left if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorWordLeft),
+        Key::Right if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorWordRight),
+        Key::Home if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorHome),
+        Key::End if key.mods.contains(Modifiers::CTRL) => Some(InputAction::MoveCursorEnd),
+        Key::Left => Some(InputAction::MoveCursorLeft),
+        Key::Right => Some(InputAction::MoveCursorRight),
+        Key::Home => Some(InputAction::MoveCursorHome),
+        Key::End => Some(InputAction::MoveCursorEnd),
+        Key::Delete => Some(InputAction::Delete),
+        Key::Char(c) => {
+            app.insert_char_at_cursor(c);
+            None
+        }
+        Key::Backspace => {
+            app.delete_prev_char();
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Route a key to the research, memory or output viewer when one is open.
+///
+/// # Arguments
+/// * `app` - application state; `Esc` closes the open viewer.
+/// * `key` - the key press.
+///
+/// # Returns
+/// [`KeyResult::Done`] with the viewer's scroll action while a viewer is open
+/// (every other key is swallowed); [`KeyResult::Pass`] otherwise.
+fn viewer_key(app: &mut App, key: KeyInput) -> KeyResult {
     // Research markdown viewer: intercept scroll/close keys.
     if app.research_view.is_some() {
-        return match key.key {
+        return KeyResult::Done(match key.key {
             Key::PageUp if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::ResearchViewToStart)
             }
@@ -1018,11 +1288,11 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                 None
             }
             _ => None,
-        };
+        });
     }
 
     if app.memory_view.is_some() {
-        return match key.key {
+        return KeyResult::Done(match key.key {
             Key::PageUp if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::MemoryViewToStart)
             }
@@ -1038,11 +1308,11 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                 None
             }
             _ => None,
-        };
+        });
     }
 
     if app.output_view.is_some() {
-        return match key.key {
+        return KeyResult::Done(match key.key {
             Key::PageUp if key.mods.contains(Modifiers::CTRL) => {
                 Some(InputAction::OutputViewToStart)
             }
@@ -1059,15 +1329,26 @@ pub async fn handle_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
                 None
             }
             _ => None,
-        };
+        });
     }
+    KeyResult::Pass
+}
 
-    // Session sidebar (spec MULTISESSION M5): its global shortcuts, and every
-    // key while it has focus, after all modal dialogs had their chance.
-    if crate::sessions_sidebar_state::handle_key(app, key) {
-        return None;
-    }
-
+/// Handle a key in normal prompt mode, once no menu, dialog or panel owns it:
+/// editing, submission, cursor motion, scrolling and the Alt toggles.
+///
+/// Kept as one `match` because its arms rely on their order (guarded arms
+/// before the plain ones) and splitting it would force extra wildcard arms.
+///
+/// # Arguments
+/// * `app` - application state; the input buffer, keyboard selection, status
+///   and shortcuts panel may be mutated.
+/// * `key` - the key press.
+///
+/// # Returns
+/// The [`InputAction`] bound to the key, or `None` when it is handled inline
+/// or unbound.
+fn prompt_key(app: &mut App, key: KeyInput) -> Option<InputAction> {
     match key.key {
         Key::Enter if key.mods.contains(Modifiers::SHIFT) || key.mods.contains(Modifiers::ALT) => {
             // Shift+Enter (Kitty protocol) or Alt+Enter (universal fallback):

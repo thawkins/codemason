@@ -496,7 +496,15 @@ fn parse_header_value(line: &str, prefix: &str) -> Result<String> {
     if rest.is_empty() {
         bail!("Missing path in patch header: {line}");
     }
-    if Path::new(rest).is_absolute() {
+    // A root or a drive prefix both leave the base directory; on Windows
+    // `/etc/passwd` and `C:x` are not `is_absolute()`.
+    let target = Path::new(rest);
+    if target.has_root()
+        || matches!(
+            target.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+    {
         bail!("Patch paths must be relative, got absolute path: {rest}");
     }
     Ok(rest.to_string())

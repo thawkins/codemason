@@ -85,7 +85,7 @@ Dev-dependencies: tempfile, criterion, proptest, async-trait, codemason-specs.
 
 ### Dependencies
 
-- **ResearchDependency** / **ResearchDependencyError** / **parse_research_dependencies** / **parse_spec_frontmatter_research** / **research_dependency_names** — Plan dependencies.
+- **ResearchDependency** / **ResearchDependencyError** / **parse_research_dependencies** / **research_dependency_names** — Plan dependencies.
 
 ### CLI
 

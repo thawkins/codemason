@@ -381,213 +381,254 @@ impl LlmClient for AnthropicClient {
             bail!("Anthropic API error ({status}): {body}");
         }
 
-        let rate_limit_event = parse_anthropic_rate_limit_headers(response.headers());
-        let stream = response.bytes_stream();
+        Ok(messages_event_stream(response, ANTHROPIC_STREAM_LABELS))
+    }
+}
 
-        let event_stream = async_stream::stream! {
-            // PERF-063: pre-size the SSE accumulation buffer so a long stream does
-            // not repeatedly realloc/copy as it grows.
-            let mut buffer = String::with_capacity(8 * 1024);
-            // FUNC-033: hold an incomplete trailing multibyte character from the
-            // previous chunk so a UTF-8 sequence split across TCP chunks is not
-            // corrupted.
-            let mut pending_utf8: Vec<u8> = Vec::new();
-            let mut current_event_type = String::new();
-            // FR-004: one accumulator for every open `tool_use` block, keyed by
-            // the SSE content-block index the frame carries. Iterating a map with
-            // `.last()` attributed `input_json_delta` arguments and `content_block_stop`
-            // to an arbitrary open block when more than one block streamed in
-            // parallel; the index keys each frame to its own call.
-            let mut acc = ToolCallAccumulator::new(ANTHROPIC_MESSAGES, "anthropic");
+/// Names a provider in the errors and logs of an Anthropic Messages stream
+/// (CO-13): the Anthropic API and an Azure resource serving the same shape
+/// share [`messages_event_stream`] and differ only in these labels.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MessagesStreamLabels {
+    /// Prefix of the stall and oversized-line errors (`"Anthropic"`).
+    pub(crate) stream: &'static str,
+    /// Tool-call accumulator source (`"anthropic"`).
+    pub(crate) source: &'static str,
+    /// Prefix of the malformed-frame warning (`"Anthropic"`).
+    pub(crate) log: &'static str,
+}
 
-            if let Some(ev) = rate_limit_event {
-                yield ev;
-            }
+/// Labels for the Anthropic API itself.
+const ANTHROPIC_STREAM_LABELS: MessagesStreamLabels = MessagesStreamLabels {
+    stream: "Anthropic",
+    source: "anthropic",
+    log: "Anthropic",
+};
 
-            futures::pin_mut!(stream);
+/// Turn a successful Anthropic Messages response into the event stream: the
+/// rate-limit headers first, then one event per SSE frame (CO-13).
+pub(crate) fn messages_event_stream(
+    response: reqwest::Response,
+    labels: MessagesStreamLabels,
+) -> Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>> {
+    let rate_limit_event = parse_anthropic_rate_limit_headers(response.headers());
+    let stream = response.bytes_stream();
 
-            loop {
-                let chunk = match super::http_client::next_chunk_or_stall(&mut stream, "Anthropic").await {
-                    Ok(Some(r)) => match r {
-                        Ok(c) => c,
-                        Err(e) => {
-                            yield StreamEvent::Error { message: e.to_string() };
-                            break;
-                        }
-                    },
-                    Ok(None) => break,
-                    Err(message) => {
-                        yield StreamEvent::Error { message };
+    let event_stream = async_stream::stream! {
+        // PERF-063: pre-size the SSE accumulation buffer so a long stream does
+        // not repeatedly realloc/copy as it grows.
+        let mut buffer = String::with_capacity(8 * 1024);
+        // FUNC-033: hold an incomplete trailing multibyte character from the
+        // previous chunk so a UTF-8 sequence split across TCP chunks is not
+        // corrupted.
+        let mut pending_utf8: Vec<u8> = Vec::new();
+        let mut current_event_type = String::new();
+        // FR-004: one accumulator for every open `tool_use` block, keyed by
+        // the SSE content-block index the frame carries. Iterating a map with
+        // `.last()` attributed `input_json_delta` arguments and `content_block_stop`
+        // to an arbitrary open block when more than one block streamed in
+        // parallel; the index keys each frame to its own call.
+        let mut acc = ToolCallAccumulator::new(ANTHROPIC_MESSAGES, labels.source);
+
+        if let Some(ev) = rate_limit_event {
+            yield ev;
+        }
+
+        futures::pin_mut!(stream);
+
+        loop {
+            let chunk = match super::http_client::next_chunk_or_stall(&mut stream, labels.stream).await {
+                Ok(Some(r)) => match r {
+                    Ok(c) => c,
+                    Err(e) => {
+                        yield StreamEvent::Error { message: e.to_string() };
                         break;
                     }
+                },
+                Ok(None) => break,
+                Err(message) => {
+                    yield StreamEvent::Error { message };
+                    break;
+                }
+            };
+
+            // SEC-codemason-llm-004 (SECTASKS T-028): fail the stream when a
+
+            // peer dribbles bytes without ever emitting a newline instead
+
+            // of letting the accumulation buffer grow without bound.
+
+            if let Err(e) = super::http_client::append_chunk_guarded(
+
+                &mut buffer,
+
+                &mut pending_utf8,
+
+                &chunk,
+
+                labels.stream,
+
+            ) {
+
+                yield StreamEvent::Error {
+
+                    message: e.to_string(),
+
                 };
 
-                // SEC-codemason-llm-004 (SECTASKS T-028): fail the stream when a
+                return;
 
-                // peer dribbles bytes without ever emitting a newline instead
+            }
 
-                // of letting the accumulation buffer grow without bound.
-
-                if let Err(e) = super::http_client::append_chunk_guarded(
-
-                    &mut buffer,
-
-                    &mut pending_utf8,
-
-                    &chunk,
-
-                    "Anthropic",
-
-                ) {
-
-                    yield StreamEvent::Error {
-
-                        message: e.to_string(),
-
-                    };
-
-                    return;
-
+            while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
                 }
 
-                while let Some(line) = super::http_client::take_sse_line(&mut buffer) {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
+                if let Some(event_type) = line.strip_prefix("event: ") {
+                    current_event_type = event_type.trim().to_string();
+                    continue;
+                }
+
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        yield StreamEvent::Finish { reason: FinishReason::Stop };
+                        return;
                     }
 
-                    if let Some(event_type) = line.strip_prefix("event: ") {
-                        current_event_type = event_type.trim().to_string();
-                        continue;
-                    }
+                    let parsed: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // FUNC-032: a corrupt frame must be logged, not
+                            // silently dropped - it can carry tool-call
+                            // deltas.
+                            // SEC-codemason-llm-020: redact secrets and cap the
+                            // raw frame before logging.
+                            tracing::warn!(
+                                error = %e,
+                                frame = %crate::provider::http_client::redact_frame(data),
+                                "{}: dropping malformed SSE data frame",
+                                    labels.log
+                            );
+                            continue;
+                        }
+                    };
 
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        let data = data.trim();
-                        if data == "[DONE]" {
-                            yield StreamEvent::Finish { reason: FinishReason::Stop };
+                    match current_event_type.as_str() {
+                        "content_block_start" => {
+                            let content_block = &parsed["content_block"];
+                            let block_index = parsed["index"].as_u64().unwrap_or(0);
+                            match content_block["type"].as_str() {
+                                Some("text") => {}
+                                Some("thinking") => {
+                                    yield StreamEvent::ReasoningStart;
+                                }
+                                Some("tool_use") => {
+                                    let id = content_block["id"].as_str().unwrap_or("");
+                                    let name = content_block["name"].as_str().unwrap_or("");
+                                    if let Some(event) =
+                                        acc.open(StreamKey::Index(block_index), Some(id), name)
+                                    {
+                                        yield event;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        "content_block_delta" => {
+                            let delta = &parsed["delta"];
+                            let block_index = parsed["index"].as_u64().unwrap_or(0);
+                            match delta["type"].as_str() {
+                                Some("text_delta") => {
+                                    if let Some(text) = delta["text"].as_str() {
+                                        yield StreamEvent::TextDelta { text: text.to_string() };
+                                    }
+                                }
+                                Some("thinking_delta") => {
+                                    if let Some(text) = delta["thinking"].as_str() {
+                                        yield StreamEvent::ReasoningDelta { text: text.to_string() };
+                                    }
+                                }
+                                // FR-011: the signed-thinking block carries
+                                // its signature in this delta, and the block
+                                // has to be echoed back with it. It is
+                                // surfaced as its own event rather than
+                                // appended to the reasoning text, so the
+                                // record keeps the two apart.
+                                Some("signature_delta") => {
+                                    if let Some(signature) = delta["signature"].as_str() {
+                                        yield StreamEvent::ReasoningSignature {
+                                            signature: signature.to_string(),
+                                        };
+                                    }
+                                }
+                                Some("input_json_delta") => {
+                                    if let Some(json_str) = delta["partial_json"].as_str()
+                                        && let Some(event) =
+                                            acc.delta(&StreamKey::Index(block_index), json_str)
+                                    {
+                                        yield event;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        "content_block_stop" => {
+                            // Close the block named by this event's index (an
+                            // unnamed block, or one whose start never opened a
+                            // call, closes nothing).
+                            let block_index = parsed["index"].as_u64().unwrap_or(0);
+                            if let Some(event) = acc.end(&StreamKey::Index(block_index)) {
+                                yield event;
+                            }
+                        }
+                        "message_delta" => {
+                            if let Some(usage) = parsed.get("usage") {
+                                let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0);
+                                yield StreamEvent::Usage {
+                                    input_tokens: 0,
+                                    output_tokens,
+                                };
+                            }
+                            if let Some(stop_reason) = parsed["delta"]["stop_reason"].as_str() {
+                                let reason = match stop_reason {
+                                    "tool_use" => FinishReason::ToolUse,
+                                    "max_tokens" => FinishReason::Length,
+                                    _ => FinishReason::Stop,
+                                };
+                                yield StreamEvent::Finish { reason };
+                            }
+                        }
+                        "message_start" => {
+                            if let Some(usage) = parsed["message"].get("usage") {
+                                let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0);
+                                yield StreamEvent::Usage {
+                                    input_tokens,
+                                    output_tokens: 0,
+                                };
+                            }
+                        }
+                        // CO-05: a mid-stream `event: error` frame (e.g.
+                        // `overloaded_error`) ends the turn with the
+                        // provider's message instead of a silent truncation.
+                        "error" => {
+                            let message = parsed["error"]["message"]
+                                .as_str()
+                                .unwrap_or("Anthropic stream error")
+                                .to_string();
+                            yield StreamEvent::Error { message };
                             return;
                         }
-
-                        let parsed: Value = match serde_json::from_str(data) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                // FUNC-032: a corrupt frame must be logged, not
-                                // silently dropped - it can carry tool-call
-                                // deltas.
-                                // SEC-codemason-llm-020: redact secrets and cap the
-                                // raw frame before logging.
-                                tracing::warn!(
-                                    error = %e,
-                                    frame = %crate::provider::http_client::redact_frame(data),
-                                    "Anthropic: dropping malformed SSE data frame"
-                                );
-                                continue;
-                            }
-                        };
-
-                        match current_event_type.as_str() {
-                            "content_block_start" => {
-                                let content_block = &parsed["content_block"];
-                                let block_index = parsed["index"].as_u64().unwrap_or(0);
-                                match content_block["type"].as_str() {
-                                    Some("text") => {}
-                                    Some("thinking") => {
-                                        yield StreamEvent::ReasoningStart;
-                                    }
-                                    Some("tool_use") => {
-                                        let id = content_block["id"].as_str().unwrap_or("");
-                                        let name = content_block["name"].as_str().unwrap_or("");
-                                        if let Some(event) =
-                                            acc.open(StreamKey::Index(block_index), Some(id), name)
-                                        {
-                                            yield event;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            "content_block_delta" => {
-                                let delta = &parsed["delta"];
-                                let block_index = parsed["index"].as_u64().unwrap_or(0);
-                                match delta["type"].as_str() {
-                                    Some("text_delta") => {
-                                        if let Some(text) = delta["text"].as_str() {
-                                            yield StreamEvent::TextDelta { text: text.to_string() };
-                                        }
-                                    }
-                                    Some("thinking_delta") => {
-                                        if let Some(text) = delta["thinking"].as_str() {
-                                            yield StreamEvent::ReasoningDelta { text: text.to_string() };
-                                        }
-                                    }
-                                    // FR-011: the signed-thinking block carries
-                                    // its signature in this delta, and the block
-                                    // has to be echoed back with it. It is
-                                    // surfaced as its own event rather than
-                                    // appended to the reasoning text, so the
-                                    // record keeps the two apart.
-                                    Some("signature_delta") => {
-                                        if let Some(signature) = delta["signature"].as_str() {
-                                            yield StreamEvent::ReasoningSignature {
-                                                signature: signature.to_string(),
-                                            };
-                                        }
-                                    }
-                                    Some("input_json_delta") => {
-                                        if let Some(json_str) = delta["partial_json"].as_str()
-                                            && let Some(event) =
-                                                acc.delta(&StreamKey::Index(block_index), json_str)
-                                        {
-                                            yield event;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            "content_block_stop" => {
-                                // Close the block named by this event's index (an
-                                // unnamed block, or one whose start never opened a
-                                // call, closes nothing).
-                                let block_index = parsed["index"].as_u64().unwrap_or(0);
-                                if let Some(event) = acc.end(&StreamKey::Index(block_index)) {
-                                    yield event;
-                                }
-                            }
-                            "message_delta" => {
-                                if let Some(usage) = parsed.get("usage") {
-                                    let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0);
-                                    yield StreamEvent::Usage {
-                                        input_tokens: 0,
-                                        output_tokens,
-                                    };
-                                }
-                                if let Some(stop_reason) = parsed["delta"]["stop_reason"].as_str() {
-                                    let reason = match stop_reason {
-                                        "tool_use" => FinishReason::ToolUse,
-                                        "max_tokens" => FinishReason::Length,
-                                        _ => FinishReason::Stop,
-                                    };
-                                    yield StreamEvent::Finish { reason };
-                                }
-                            }
-                            "message_start" => {
-                                if let Some(usage) = parsed["message"].get("usage") {
-                                    let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0);
-                                    yield StreamEvent::Usage {
-                                        input_tokens,
-                                        output_tokens: 0,
-                                    };
-                                }
-                            }
-                            _ => {}
-                        }
+                        _ => {}
                     }
                 }
             }
-        };
+        }
+    };
 
-        Ok(Box::pin(event_stream))
-    }
+    Box::pin(event_stream)
 }
 
 /// Parses Anthropic rate-limit response headers into a `StreamEvent::RateLimit`.
@@ -609,8 +650,7 @@ pub(crate) fn parse_anthropic_rate_limit_headers(
     let tok_limit = header_u64("anthropic-ratelimit-tokens-limit");
     let tok_remaining = header_u64("anthropic-ratelimit-tokens-remaining");
 
-    // NOTE: intentional duplication, reviewed and kept; do not merge.
-    // Two distinct streaming closures with different capture sets.
+    // The request and token buckets use the same percentage formula.
     let requests_used_pct = req_limit.zip(req_remaining).map(|(limit, remaining)| {
         if limit == 0 {
             0.0f32

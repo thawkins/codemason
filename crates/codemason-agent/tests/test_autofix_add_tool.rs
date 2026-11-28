@@ -79,7 +79,7 @@ fn fixture(name: &str) -> (PathBuf, PathBuf) {
         &work,
         &["remote", "add", "origin", "https://github.com/acme/app.git"],
     );
-    let bare_url = bare.canonicalize().expect("bare path");
+    let bare_url = dunce::canonicalize(&bare).expect("bare path");
     git(
         &work,
         &[
@@ -100,7 +100,7 @@ fn fixture(name: &str) -> (PathBuf, PathBuf) {
             "refs/remotes/origin/main",
         ],
     );
-    (work.canonicalize().expect("work path"), bare_url)
+    (dunce::canonicalize(&work).expect("work path"), bare_url)
 }
 
 fn ctx(storage: Arc<Storage>, dir: PathBuf) -> ToolContext {

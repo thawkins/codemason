@@ -47,7 +47,7 @@ impl Fixture {
             bp_dir.join("task-seed.json"),
             json!([{
                 "tool": "Bash",
-                "args": { "command": format!("touch {}", marker.display()) }
+                "args": { "command": format!("touch '{}'", marker.display().to_string().replace('\\', "/")) }
             }])
             .to_string(),
         )

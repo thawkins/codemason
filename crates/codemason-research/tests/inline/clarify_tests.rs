@@ -40,3 +40,11 @@ fn version_number_without_dot_is_concrete() {
     assert!(needs_clarification("postgres version 16 upgrade notes").is_none());
     assert!(needs_clarification("postgres version 16.2 upgrade notes").is_none());
 }
+
+/// RS-14: a five-digit number is not a year; only a whole-word year counts
+/// as a concrete identifier.
+#[test]
+fn five_digit_number_is_not_a_year() {
+    assert!(needs_clarification("model 20251 specs").is_some());
+    assert!(needs_clarification("model 2025 specs").is_none());
+}

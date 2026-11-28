@@ -37,6 +37,8 @@ html2text = { workspace = true }
 similar = { workspace = true }
 futures = { workspace = true }
 dirs = { workspace = true }
+dunce = "1.0"
+which = "8.0"
 regex = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
@@ -93,18 +95,15 @@ version = "3.5"
 chrono = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 # Only the `#[cfg(test)]` compaction-runner tests and `tests/` use it.
 tokio-stream = { workspace = true }
 # Builds the text PDF for the ranged `@file.pdf#a-b` mention test.
 lopdf = { workspace = true }
-anyhow = { workspace = true }
 tempfile = "3.5"
 # SERIALISES process-global-state tests (perf profiling atomics); the inline
 # perf tests mutate static atomics shared across every test thread.
 serial_test = "4"
-# Team runtime / coordination-tool integration tests (relocated from the
-# retired codemason-team crate in ANTIPAT M7.8) exercise BashTool/CommandCatalog.
-codemason-tools-core = { path = "../codemason-tools-core" }
 criterion = { workspace = true, features = ["async_tokio"] }
 axum = { workspace = true }
 # Local mock GitHub/GitLab API for the pull/merge request count service

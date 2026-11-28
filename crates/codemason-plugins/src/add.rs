@@ -40,7 +40,7 @@
 //! renamed into place so a failure never leaves a half-written plugin in the
 //! store.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use sha2::Digest as _;
 
@@ -50,6 +50,9 @@ use crate::descriptor::detect_dialect;
 use crate::error::{IoError, PluginError};
 use crate::manifest::{ParsedManifest, parse_plugin_dir};
 use crate::store::{StoreDirs, StoreLedger};
+use codemason_surface::archive::{ArchiveKind, ExtractError, ExtractLimits};
+
+pub use codemason_surface::git_source::{GitSource, parse_git_source};
 
 /// Maximum accepted archive size: 50 MiB (FR-010 size cap).
 pub const MAX_ARCHIVE_BYTES: u64 = 50 * 1024 * 1024;
@@ -60,6 +63,19 @@ pub const MAX_ARCHIVE_BYTES: u64 = 50 * 1024 * 1024;
 /// just-under-the-cap entries wrote unbounded data into the store. The running
 /// total across all entries is bounded by this value.
 pub const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Maximum entries (files, directories, links) read from one archive (RS-05).
+///
+/// The byte caps do not bound the entry count: zero-byte entries cost nothing
+/// against them, yet each one is a file created in the store.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
+/// The caps every plugin archive extraction enforces (RS-10).
+const EXTRACT_LIMITS: ExtractLimits = ExtractLimits {
+    max_entry_bytes: MAX_ARCHIVE_BYTES,
+    max_total_bytes: MAX_EXTRACTED_BYTES,
+    max_entries: MAX_ARCHIVE_ENTRIES,
+};
 
 /// Wall-clock budget for one plugin archive download (ANTIPAT M19).
 ///
@@ -76,26 +92,30 @@ pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(5);
 /// Bytes of a `git` command's stderr kept for its error message.
 const GIT_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
-/// Test-only override of [`GIT_TIMEOUT`] and of the cloned-tree size cap
-/// ([`MAX_EXTRACTED_BYTES`]); set once per process by
-/// [`set_git_limits_override`].
-static GIT_LIMITS_OVERRIDE: std::sync::OnceLock<(std::time::Duration, u64)> =
-    std::sync::OnceLock::new();
+thread_local! {
+    /// Test-only override of [`GIT_TIMEOUT`] and of the cloned-tree size cap
+    /// ([`MAX_EXTRACTED_BYTES`]); set per thread by
+    /// [`set_git_limits_override`].
+    ///
+    /// Thread-local, so a limit test does not shrink the cap under an unrelated
+    /// install test running on another thread of the same test binary (an
+    /// `add` runs its `git` invocations on the calling thread).
+    static GIT_LIMITS_OVERRIDE: std::cell::Cell<Option<(std::time::Duration, u64)>> =
+        const { std::cell::Cell::new(None) };
+}
 
-/// Override the `git+` install limits for this process (tests only), so a
-/// timeout or an oversized clone can be exercised without waiting minutes or
-/// writing hundreds of MiB. The first call wins.
+/// Override the `git+` install limits for the calling thread (tests only), so
+/// a timeout or an oversized clone can be exercised without waiting minutes or
+/// writing hundreds of MiB.
 #[doc(hidden)]
 pub fn set_git_limits_override(timeout: std::time::Duration, max_tree_bytes: u64) {
-    // INTENTIONAL: a second call is a no-op by design (first call wins).
-    let _ = GIT_LIMITS_OVERRIDE.set((timeout, max_tree_bytes));
+    GIT_LIMITS_OVERRIDE.with(|cell| cell.set(Some((timeout, max_tree_bytes))));
 }
 
 /// The effective `(timeout, max cloned-tree bytes)` for a `git+` install.
 fn git_limits() -> (std::time::Duration, u64) {
     GIT_LIMITS_OVERRIDE
-        .get()
-        .copied()
+        .with(std::cell::Cell::get)
         .unwrap_or((GIT_TIMEOUT, MAX_EXTRACTED_BYTES))
 }
 
@@ -396,115 +416,10 @@ fn classify_extract_failure(err: ExtractError) -> AddError {
         ExtractError::UnsafePath(p) => AddError::UnsafePath(p),
         ExtractError::Io(io) => AddError::Io(IoError::new(io)),
         ExtractError::Message(msg) => AddError::Io(IoError::message(msg)),
+        ExtractError::EntryTooLarge { format, name, .. } => AddError::Io(IoError::message(
+            format!("{format} entry {name} decompressed past the size cap"),
+        )),
     }
-}
-
-/// A parsed `git+<https-url>#<ref>[:<subpath>]` source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitSource {
-    /// The `https` repository remote.
-    pub url: String,
-    /// The ref to check out; `None` uses the remote default branch (HEAD).
-    pub ref_name: Option<String>,
-    /// A repository-relative subdirectory to install; `None` installs the root.
-    pub subpath: Option<String>,
-}
-
-/// Parse a `git+<https-url>#<ref>[:<subpath>]` source string.
-///
-/// Only `https://` remotes are accepted for a store-supplied source; a
-/// `file://` remote is additionally accepted so a local git mirror can be
-/// installed, mirroring the local-directory source the same command already
-/// accepts. Every other scheme (ssh, git, http) returns `None`, so it can never
-/// reach the clone (FR-024).
-///
-/// An unsafe ref is dropped (the default branch is used instead), but an
-/// unsafe `:<subpath>` (leading `/` or `-`, a `..` segment, or a character
-/// outside `[A-Za-z0-9._/-]`) refuses the whole source with `None`.
-#[must_use]
-pub fn parse_git_source(source: &str) -> Option<GitSource> {
-    let rest = source.strip_prefix("git+")?;
-    let (url, fragment) = match rest.split_once('#') {
-        Some((url, fragment)) => (url, Some(fragment)),
-        None => (rest, None),
-    };
-    if url.trim().is_empty() || !(url.starts_with("https://") || url.starts_with("file://")) {
-        return None;
-    }
-    let (ref_name, subpath) = match fragment {
-        None => (None, None),
-        Some(fragment) => match fragment.split_once(':') {
-            Some((r, path)) => {
-                let subpath = git_subpath(path);
-                // A subpath that was given but fails validation refuses the
-                // whole source: dropping it would mean "install the entire
-                // repository", which is not what the source asked for.
-                if subpath.is_none() && !path.trim().trim_start_matches("./").is_empty() {
-                    return None;
-                }
-                (git_ref(r), subpath)
-            }
-            None => (git_ref(fragment), None),
-        },
-    };
-    Some(GitSource {
-        url: url.to_string(),
-        ref_name,
-        subpath,
-    })
-}
-
-/// A git ref, treating an empty value or `HEAD` as "the default branch".
-///
-/// The ref is validated against a safe charset before it can reach `git`:
-/// a `git+` source is untrusted content (it is emitted from a marketplace
-/// document fetched over the network or typed by a social-engineered user),
-/// and `git` parses a leading `-` as an *option*, not a positional. Options
-/// such as `--upload-pack=<cmd>` execute a program, which escapes the plugin
-/// sandbox entirely (SEC-codemason-plugins-001). Anything that is not
-/// `[A-Za-z0-9._/-]+` - and anything beginning with `-` - is refused.
-fn git_ref(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("HEAD") {
-        None
-    } else if is_safe_git_argument(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-/// A repository-relative subpath, normalised without a leading `./`.
-///
-/// Validated with the same charset as [`git_ref`]: the subpath reaches
-/// `git sparse-checkout set <subpath>`, where a leading `-` would again be
-/// parsed as an option (SEC-codemason-plugins-001). An absolute subpath is
-/// dropped too: `repo_dir.join("/x")` would name `/x` itself, outside the
-/// clone.
-fn git_subpath(raw: &str) -> Option<String> {
-    let trimmed = raw.trim().trim_start_matches("./");
-    if trimmed.is_empty() {
-        None
-    } else if is_safe_git_argument(trimmed) && !trimmed.contains("..") && !trimmed.starts_with('/')
-    {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-/// Return `true` when `value` is safe to hand to `git` as a positional
-/// argument: a non-empty `[A-Za-z0-9._/-]` string that does not begin with
-/// `-` (which git would parse as an option) and contains no `..` segment.
-///
-/// See SEC-codemason-plugins-001: without this gate, a `git+` ref of
-/// `--upload-pack=/bin/sh -c true` reaches `Command::new("git")` and executes
-/// a program with the user's privileges.
-///
-/// Delegates to the shared [`codemason_tools_core::guard::is_safe_operand`]
-/// (SECTASKS MS-05 T-068) and adds this crate's stricter `..` rule.
-fn is_safe_git_argument(value: &str) -> bool {
-    codemason_tools_core::guard::is_safe_operand(value) && !value.contains("..")
 }
 
 /// Materialise a marketplace-inline manifest for a manifest-less stub.
@@ -558,13 +473,21 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
     // manifest found` (e.g. a marketplace entry of `{"source":"./"}` for a repo
     // published at its root). Omitting `--sparse` there keeps the checkout
     // complete for the manifest probe.
-    let mut clone_args: Vec<&str> = vec!["clone", "--depth", "1"];
+    //
+    // `--template=` (empty) skips git's template directory: its sample hooks
+    // are dead weight in an installed plugin and would otherwise count
+    // against the in-flight size cap below before a single object arrives.
+    let mut clone_args: Vec<&str> = vec!["clone", "--template=", "--depth", "1"];
     if spec.subpath.is_some() {
         clone_args.push("--sparse");
     }
     clone_args.push(spec.url.as_str());
     clone_args.push(repo.as_str());
-    git_run(&clone_args, None)?;
+    // RS-04: the size cap is polled while git runs, so an oversized clone is
+    // killed as it grows instead of being measured only once it is on disk.
+    let max = git_limits().1;
+    let watch = Some((repo_dir.as_path(), max));
+    git_run(&clone_args, None, watch)?;
     if let Some(ref_name) = spec.ref_name.as_deref() {
         // `--` terminates option parsing for the fetch: `git_ref` already
         // rejects a leading `-`, and the separator keeps that invariant enforced
@@ -573,16 +496,21 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
         git_run(
             &["fetch", "--depth", "1", "--", "origin", ref_name],
             Some(&repo_dir),
+            watch,
         )?;
         // No `--` here: for `git checkout` the separator turns the argument
         // into a *pathspec* file filter, not a commit-ish, so it refuses with
         // `pathspec 'FETCH_HEAD' did not match any file(s)`. `FETCH_HEAD` is a
         // name we supply ourselves and the ref that filled it was already
         // validated to not start with `-`, so option injection is impossible.
-        git_run(&["checkout", "FETCH_HEAD"], Some(&repo_dir))?;
+        git_run(&["checkout", "FETCH_HEAD"], Some(&repo_dir), watch)?;
     }
     if let Some(subpath) = spec.subpath.as_deref() {
-        git_run(&["sparse-checkout", "set", "--", subpath], Some(&repo_dir))?;
+        git_run(
+            &["sparse-checkout", "set", "--", subpath],
+            Some(&repo_dir),
+            watch,
+        )?;
     }
 
     let root = match spec.subpath.as_deref() {
@@ -594,7 +522,6 @@ fn git_clone_stage(source: &str, staging: &Path) -> Result<PathBuf, AddError> {
     }
     // The archive path caps what it extracts; a clone gets the same total cap
     // on the tree it is about to install.
-    let max = git_limits().1;
     let size = tree_size(&root, max).map_err(io_err)?;
     if size > max {
         return Err(AddError::TooLarge { size, max });
@@ -657,7 +584,12 @@ fn confined_dest_dir(store: &Path, id: &str) -> Result<PathBuf, AddError> {
 /// child blocked on a full pipe would otherwise never exit. Stalled HTTP
 /// transfers are also aborted by git itself (`GIT_HTTP_LOW_SPEED_*`), so the
 /// remote helper does not outlive a killed `git`.
-fn git_run(args: &[&str], cwd: Option<&Path>) -> Result<(), AddError> {
+///
+/// `watch` is an optional `(directory, max bytes)` pair: while git runs, the
+/// directory's size ([`tree_size`]) is polled and git is killed with
+/// [`AddError::TooLarge`] once it passes the cap (RS-04), so an oversized
+/// repository is not fully written to disk before it is refused.
+fn git_run(args: &[&str], cwd: Option<&Path>, watch: Option<(&Path, u64)>) -> Result<(), AddError> {
     use std::io::Read as _;
 
     let verb = args.first().copied().unwrap_or("git");
@@ -705,10 +637,29 @@ fn git_run(args: &[&str], cwd: Option<&Path>) -> Result<(), AddError> {
 
     let timeout = git_limits().0;
     let deadline = std::time::Instant::now() + timeout;
+    let mut tick: u32 = 0;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| git_err(e.to_string()))? {
             break status;
         }
+        // Walk the tree every 5th tick (250 ms): often enough to stop a
+        // growing clone early, rare enough that the walk stays cheap.
+        if let Some((dir, max)) = watch
+            && tick.is_multiple_of(5)
+        {
+            // INTENTIONAL: an unreadable or not-yet-created directory (git
+            // creates it after spawning) counts as empty; the final check in
+            // the caller still measures the finished tree.
+            let size = tree_size(dir, max).unwrap_or(0);
+            if size > max {
+                // INTENTIONAL: the child may already have exited; either way it is gone.
+                let _ = child.kill();
+                // INTENTIONAL: reap the killed child; its status is irrelevant.
+                let _ = child.wait();
+                return Err(AddError::TooLarge { size, max });
+            }
+        }
+        tick = tick.wrapping_add(1);
         if std::time::Instant::now() >= deadline {
             // INTENTIONAL: the child may already have exited; either way it is gone.
             let _ = child.kill();
@@ -737,7 +688,6 @@ fn download_and_extract(url: &str, staging: &Path) -> Result<PathBuf, AddError> 
     };
 
     std::fs::create_dir_all(staging).map_err(io_err)?;
-    let archive_path = staging.join("download.archive");
 
     let client = reqwest::blocking::Client::builder()
         // SEC-codemason-plugins-005 (SECTASKS T-062): `Policy::limited` follows an
@@ -786,47 +736,9 @@ fn download_and_extract(url: &str, staging: &Path) -> Result<PathBuf, AddError> 
         }
         bytes.extend_from_slice(&chunk[..read]);
     }
-    std::fs::write(&archive_path, &bytes).map_err(io_err)?;
-
-    extract_archive(&bytes, kind, staging, Some(&archive_path)).map_err(classify_extract_failure)
-}
-
-/// Which archive format a package uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArchiveKind {
-    Zip,
-    TarGz,
-}
-
-impl ArchiveKind {
-    fn from_path(name: &str) -> Option<Self> {
-        let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".tar.gz") {
-            return Some(Self::TarGz);
-        }
-        match Path::new(&lower)
-            .extension()
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref()
-            .and_then(|e| e.to_str())
-        {
-            Some("zip") => Some(Self::Zip),
-            Some("tgz") => Some(Self::TarGz),
-            _ => None,
-        }
-    }
-}
-
-/// Extraction failure (converted to [`AddError`] at the module boundary).
-///
-/// The `Io` arm keeps the structured [`std::io::Error`] so its source chain
-/// survives the conversion to [`AddError::Io`] (ANTIPAT M15); a failure that
-/// only has an already-formatted detail uses `Message`.
-#[derive(Debug)]
-enum ExtractError {
-    UnsafePath(String),
-    Io(std::io::Error),
-    Message(String),
+    // RS-17: extract straight from memory; the archive used to be written to
+    // `staging/download.archive` and deleted unread.
+    extract_archive(&bytes, kind, staging).map_err(classify_extract_failure)
 }
 
 /// Extract a local archive file into `staging`, returning the extraction root.
@@ -844,7 +756,7 @@ fn extract_archive_into(file: &Path, staging: &Path) -> Result<PathBuf, ExtractE
         )));
     }
     let bytes = std::fs::read(file).map_err(ExtractError::Io)?;
-    extract_archive(&bytes, kind, staging, None)
+    extract_archive(&bytes, kind, staging)
 }
 
 /// Extract `bytes` (a zip or tar.gz archive) into `staging`, enforcing the
@@ -853,7 +765,6 @@ fn extract_archive(
     bytes: &[u8],
     kind: ArchiveKind,
     staging: &Path,
-    remove_after: Option<&Path>,
 ) -> Result<PathBuf, ExtractError> {
     if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
         return Err(ExtractError::Message(format!(
@@ -862,134 +773,9 @@ fn extract_archive(
         )));
     }
     std::fs::create_dir_all(staging).map_err(ExtractError::Io)?;
-    let result = match kind {
-        ArchiveKind::Zip => extract_zip(bytes, staging),
-        ArchiveKind::TarGz => extract_tar_gz(bytes, staging),
-    };
-    if let Some(path) = remove_after {
-        let _ = std::fs::remove_file(path); // INTENTIONAL: best-effort temp cleanup
-    }
-    result.map(|_| staging.to_path_buf())
-}
-
-fn extract_zip(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
-    use std::io::{Cursor, Read as _};
-
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
-        .map_err(|e| ExtractError::Message(format!("zip open: {e}")))?;
-    // ANTIPAT M17: the per-entry cap does not bound the total, so track a
-    // running total across every entry and abort past MAX_EXTRACTED_BYTES.
-    let mut total: u64 = 0;
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| ExtractError::Message(format!("zip entry {i}: {e}")))?;
-        let name = entry
-            .name()
-            .map_err(|e| ExtractError::Message(format!("zip entry {i} name: {e}")))?
-            .to_string();
-        if entry.is_dir() {
-            continue;
-        }
-        let rel = safe_relative_path(&name)?;
-        let dest = staging.join(&rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(ExtractError::Io)?;
-        }
-        // Bound the read itself: the per-entry cap or the remaining total
-        // headroom, plus one byte so an oversized entry is detected without
-        // first decompressing all of it into memory.
-        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
-        let mut body = Vec::new();
-        (&mut entry)
-            .take(MAX_ARCHIVE_BYTES.min(remaining).saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|e| ExtractError::Message(format!("zip entry {name}: {e}")))?;
-        if body.len() as u64 > MAX_ARCHIVE_BYTES {
-            return Err(ExtractError::Message(format!(
-                "zip entry {name} decompressed past the size cap"
-            )));
-        }
-        total = total.saturating_add(body.len() as u64);
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(ExtractError::Message(format!(
-                "archive decompressed past the {MAX_EXTRACTED_BYTES} byte total cap"
-            )));
-        }
-        std::fs::write(&dest, &body).map_err(ExtractError::Io)?;
-    }
-    Ok(())
-}
-
-fn extract_tar_gz(bytes: &[u8], staging: &Path) -> Result<(), ExtractError> {
-    use std::io::{Cursor, Read as _};
-
-    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
-    let mut archive = tar::Archive::new(decoder);
-    let entries = archive
-        .entries()
-        .map_err(|e| ExtractError::Message(format!("tar entries: {e}")))?;
-    // ANTIPAT M17: bound the total decompressed size across all entries.
-    let mut total: u64 = 0;
-    for entry in entries {
-        let mut entry = entry.map_err(|e| ExtractError::Message(format!("tar entry: {e}")))?;
-        let path = entry
-            .path()
-            .map_err(|e| ExtractError::Message(format!("tar entry path: {e}")))?
-            .to_path_buf();
-        let name = path.to_string_lossy().replace('\\', "/");
-        let rel = safe_relative_path(&name)?;
-        if !(entry.header().entry_type().is_file()) {
-            continue;
-        }
-        let dest = staging.join(&rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(ExtractError::Io)?;
-        }
-        // Bound the read itself: the per-entry cap or the remaining total
-        // headroom, plus one byte so an oversized entry is detected without
-        // first decompressing all of it into memory.
-        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(total);
-        let mut body = Vec::new();
-        (&mut entry)
-            .take(MAX_ARCHIVE_BYTES.min(remaining).saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|e| ExtractError::Message(format!("tar entry {name}: {e}")))?;
-        if body.len() as u64 > MAX_ARCHIVE_BYTES {
-            return Err(ExtractError::Message(format!(
-                "tar entry {name} decompressed past the size cap"
-            )));
-        }
-        total = total.saturating_add(body.len() as u64);
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(ExtractError::Message(format!(
-                "archive decompressed past the {MAX_EXTRACTED_BYTES} byte total cap"
-            )));
-        }
-        std::fs::write(&dest, &body).map_err(ExtractError::Io)?;
-    }
-    Ok(())
-}
-
-/// Reject absolute paths and any path containing a `..` component; normalise
-/// separators. Returns the sanitised relative path on success.
-fn safe_relative_path(name: &str) -> Result<PathBuf, ExtractError> {
-    let normalised = name.replace('\\', "/");
-    let rel = Path::new(&normalised);
-    if rel.is_absolute() {
-        return Err(ExtractError::UnsafePath(name.to_string()));
-    }
-    for component in rel.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            // ParentDir escapes the store; RootDir/Prefix are absolute
-            // (handled above, but keep the match exhaustive).
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(ExtractError::UnsafePath(name.to_string()));
-            }
-        }
-    }
-    Ok(rel.to_path_buf())
+    // RS-10: the shared bounded extractor (codemason-surface).
+    codemason_surface::archive::extract(bytes, kind, staging, EXTRACT_LIMITS)
+        .map(|()| staging.to_path_buf())
 }
 
 /// When an archive wraps the plugin in one top-level folder with no manifest

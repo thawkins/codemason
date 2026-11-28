@@ -24,17 +24,12 @@ sha2 = { workspace = true }
 tar = "0.4"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tracing = "0.1"
+tracing = { workspace = true }
 url = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
-flate2 = "1"
-serde_json = { workspace = true }
-tar = "0.4"
-tokio = { workspace = true }
-zip = { workspace = true }
+ctor = { workspace = true }
 
 [lints]
 workspace = true

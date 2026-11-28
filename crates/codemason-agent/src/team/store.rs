@@ -104,10 +104,26 @@ pub fn slugify_team_name(raw: &str) -> String {
 
 /// Walk up from `working_dir` to find the nearest project `.codemason/` directory,
 /// returning `[PROJECT]/.codemason/teams/`.
+///
+/// The walk stops below the user's home folder: `~/.codemason` is codemason's
+/// legacy global directory, not a project, so a project under home without a
+/// `.codemason/` of its own has no project teams directory. Both the OS home
+/// and an overriding `HOME` count as home.
 #[must_use]
 pub fn find_project_teams_dir(working_dir: &Path) -> Option<PathBuf> {
+    // Compared in canonical form: on Windows the same folder can be spelled
+    // with an 8.3 short name (`C:\Users\TIMHAW~1`), as `%TEMP%` often is.
+    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let homes: Vec<PathBuf> = [dirs::home_dir(), codemason_config::user_dirs::home_dir()]
+        .into_iter()
+        .flatten()
+        .map(|home| canonical(&home))
+        .collect();
     let mut current = working_dir;
     loop {
+        if homes.contains(&canonical(current)) {
+            return None;
+        }
         let candidate = current.join(".codemason");
         if candidate.is_dir() {
             return Some(candidate.join("teams"));
@@ -408,7 +424,8 @@ impl TeamStore {
         let tmp_path = team_dir.join(format!(".{file_name}.{}", uuid::Uuid::new_v4()));
         fs::write(&tmp_path, json).with_context(|| format!("write {}", tmp_path.display()))?;
         let result: Result<()> = (|| {
-            let temp = OpenOptions::new().read(true).open(&tmp_path)?;
+            // Write access: Windows `FlushFileBuffers` refuses a read-only handle.
+            let temp = OpenOptions::new().write(true).open(&tmp_path)?;
             temp.sync_all()
                 .with_context(|| format!("sync temp file {}", tmp_path.display()))?;
             fs::rename(&tmp_path, &config_path).with_context(|| {
@@ -522,9 +539,30 @@ impl TeamStore {
     fn initialised_task_store(&self) -> Result<TaskStore> {
         let task_path = self.dir.join("tasks.json");
         if !task_path.exists() {
+            // Publish the empty list in one step, and only if no other
+            // creator got there first. A plain `fs::write` here ran outside
+            // the store lock, so two first writers could interleave and a
+            // reader under the lock could see half a file ("tasks.json is
+            // malformed"). `hard_link` fails when the target exists, so a
+            // late creator never replaces a list another writer has already
+            // added to.
             let initial = TaskList::new(&self.config.name);
-            fs::write(&task_path, serde_json::to_string_pretty(&initial)?)
+            let temp = self
+                .dir
+                .join(format!(".tasks.json.{}.init", uuid::Uuid::new_v4()));
+            fs::write(&temp, serde_json::to_string_pretty(&initial)?)
                 .with_context(|| format!("initialise {}", task_path.display()))?;
+            let published = fs::hard_link(&temp, &task_path);
+            // INTENTIONAL: the temp file is scratch; a failed removal leaves a
+            // dot-file that no reader opens.
+            let _ = fs::remove_file(&temp);
+            match published {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(e).with_context(|| format!("initialise {}", task_path.display()));
+                }
+            }
         }
         self.task_store()
     }

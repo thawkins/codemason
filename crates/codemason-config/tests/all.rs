@@ -79,6 +79,9 @@ mod test_gcf_config;
 #[path = "test_github_token.rs"]
 mod test_github_token;
 
+#[path = "test_global_config_dir_xdg.rs"]
+mod test_global_config_dir_xdg;
+
 #[path = "test_i18n_catalog.rs"]
 mod test_i18n_catalog;
 
@@ -96,6 +99,11 @@ mod test_loop_config;
 
 #[path = "test_merge_project_privileged.rs"]
 mod test_merge_project_privileged;
+
+#[path = "test_merge_six_sections.rs"]
+mod test_merge_six_sections;
+#[path = "test_provider_client_options.rs"]
+mod test_provider_client_options;
 
 #[path = "test_mcp_type_default.rs"]
 mod test_mcp_type_default;
@@ -167,3 +175,7 @@ mod test_yolo_persistence;
 mod test_config_load_for;
 #[path = "test_retention_config.rs"]
 mod test_retention_config;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

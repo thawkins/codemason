@@ -2115,6 +2115,59 @@ impl ResearchSession {
 mod fallback;
 mod topic;
 
+/// Mutable per-run state threaded through the stages of [`ResearchSession::run`].
+///
+/// `sources` holds the gathered corpus until the synthesize stage, which
+/// replaces it with the (optionally capped) synthesis sources that every later
+/// stage and the final [`RunOutcome`] use.
+struct RunState {
+    /// Validated research item name.
+    name: ResearchName,
+    /// Resolved research topic.
+    topic: String,
+    /// Title recorded for the on-disk item.
+    item_title: String,
+    /// Research brief handed to the synthesis and supervisor engines.
+    effective_brief: Option<String>,
+    /// Gathered sources (synthesis sources once the synthesize stage ran).
+    sources: Vec<Source>,
+    /// Web queries issued so far.
+    web_queries: Vec<String>,
+    /// Sources excluded by the gather filters.
+    excluded_count: usize,
+    /// PDF sources counted by the gather phase.
+    pdf_count: usize,
+    /// YouTube sources counted by the gather phase.
+    youtube_count: usize,
+}
+
+/// Results of the deterministic analysis steps that run between gathering and
+/// synthesis in [`ResearchSession::run`].
+struct AnalysisArtifacts {
+    contradiction_graph: Option<ContradictionGraph>,
+    loci: crate::locus::LocusSet,
+    depth_investigation: Vec<crate::locus::DepthInvestigation>,
+    cross_locus_reconcile: crate::reconcile::CrossLocusReconcile,
+    source_tensions: crate::reconcile::SourceTensions,
+    evidence_digest: crate::digest::EvidenceDigest,
+    corpus_critic: crate::corpus_critic::CorpusCriticReport,
+    gap_fetch: GapFetchResult,
+    triple_draft: crate::digest::TripleDraft,
+}
+
+/// The synthesized narrative plus the audit, patch, cite-check, polish and
+/// readability results produced from it in [`ResearchSession::run`].
+struct SynthesisArtifacts {
+    analysis: AnalysisResult,
+    synth_outcome: SynthesizeOutcome,
+    final_model_label: Option<String>,
+    synthesis_audit: crate::synthesis::SynthesisAudit,
+    patch_result: PatchResult,
+    cite_check: CitationCheckResult,
+    polish_result: PolishResult,
+    readability_audit: ReadabilityAudit,
+}
+
 impl ResearchSession {
     /// Append a structured event to the JSONL run log, when one is attached.
     /// Failures are best-effort: they are reported via `tracing::warn` and never
@@ -2164,6 +2217,126 @@ impl ResearchSession {
         let name = ResearchName::try_new(name_str).map_err(ResearchError::InvalidName)?;
         let project_root = project_root_for(self.manager.root()).to_path_buf();
 
+        Self::emit_setup_events(config, &observer);
+        let mut state = Self::new_run_state(name, title, config);
+        self.ensure_provider_available()?;
+        self.collect_seed_inputs(config, &observer, &mut state)
+            .await?;
+        let (item, stored_invocation) = self.open_research_item(name_str, config, &state).await?;
+        let (mut router, router_observer) = Self::init_router(name_str, config, &state, &observer);
+        let template_body =
+            load_template(self.manager.root(), config.output.template.as_deref()).await;
+        Self::apply_item_topic_fallback(config, &mut state, &item);
+        Self::check_scope_clarification(config, &observer, &state.topic)?;
+
+        // -- Supervisor / competitive multi-agent graph (FR-001, FR-009) ---
+        // For supervisor/competitive modes, delegate to the multi-agent graph
+        // instead of the tiered pipeline. The graph reuses the same synthesis
+        // and document-assembly helpers.
+        if config.engine.mode == ResearchMode::Supervisor
+            || config.engine.mode == ResearchMode::Competitive
+        {
+            return self
+                .run_supervisor(
+                    name_str,
+                    &state.item_title,
+                    &state.topic,
+                    &item,
+                    config,
+                    state.effective_brief.as_deref(),
+                    state.sources,
+                    state.web_queries,
+                    observer.clone(),
+                    &mut router,
+                    &router_observer,
+                )
+                .await;
+        }
+
+        self.gather_sources(
+            &project_root,
+            config,
+            &observer,
+            &mut state,
+            &mut router,
+            &router_observer,
+        )
+        .await;
+        let artifacts = self
+            .run_analysis(config, &observer, &mut state, &mut router, &router_observer)
+            .await;
+        let mut synth = self
+            .run_synthesize_step(
+                config,
+                &observer,
+                &mut state,
+                &artifacts,
+                &mut router,
+                &router_observer,
+            )
+            .await;
+        Self::critique_and_patch(
+            &observer,
+            &state.topic,
+            &artifacts.corpus_critic,
+            &mut synth,
+            &mut router,
+            &router_observer,
+        );
+        Self::verify_and_polish(
+            config,
+            &observer,
+            &state.sources,
+            &mut synth,
+            &mut router,
+            &router_observer,
+        )?;
+
+        // -- Concepts (spec researchcluster) ------------------------------
+        // Extract the cross-source concept list from the same gathered corpus
+        // the synthesis step consumed. The section renders directly above
+        // `## Findings` in `RESEARCH.md`. When no concepts engine is wired
+        // (or the extraction fails), the section is omitted entirely.
+        let concepts_section = self
+            .extract_concepts_section(
+                &state.name,
+                &state.sources,
+                &observer,
+                config.analysis.max_concepts,
+            )
+            .await;
+
+        // -- Assemble -----------------------------------------------------
+        observer.on_event(SessionEvent::Phase {
+            phase: SessionPhase::Assemble,
+        });
+        let synth_outcome = synth.synth_outcome;
+        let mut doc = Self::build_document(
+            config,
+            &state,
+            artifacts,
+            synth,
+            concepts_section,
+            template_body,
+            stored_invocation,
+        );
+        let final_title = self
+            .choose_final_title(&observer, &mut state, synth_outcome, &doc)
+            .await;
+        doc.item.set_title(&final_title);
+        let provider_tool_calls = self.attach_provider_stats(&observer, &mut doc);
+        let assembled = self.manager.write_document(&doc).await?;
+        Self::close_router(&observer, &router, &router_observer);
+        self.finish_run(name_str, &observer, state, assembled, provider_tool_calls)
+            .await
+    }
+
+    /// Emit the setup phase and the resolved-options snapshot.
+    ///
+    /// # Arguments
+    /// * `config` - the run configuration being snapshotted.
+    /// * `observer` - receives the `Phase::Setup` and `ConfigSnapshot` events.
+    fn emit_setup_events(config: &SessionConfig, observer: &Arc<dyn SessionObserver>) {
         observer.on_event(SessionEvent::Phase {
             phase: SessionPhase::Setup,
         });
@@ -2184,11 +2357,19 @@ impl ResearchSession {
                 .map(|p| p.display().to_string())
                 .collect(),
         });
-        let mut topic = config.input.topic.clone();
-        let mut sources = Vec::new();
-        let mut web_queries = Vec::new();
-        let mut item_title = title.to_string();
+    }
 
+    /// Build the initial [`RunState`] and resolve the effective research brief.
+    ///
+    /// # Arguments
+    /// * `name` - the validated research name.
+    /// * `title` - the caller-supplied item title.
+    /// * `config` - the run configuration (topic, brief, mode, format).
+    ///
+    /// # Returns
+    /// A state with empty sources, queries and counters.
+    fn new_run_state(name: ResearchName, title: &str, config: &SessionConfig) -> RunState {
+        let topic = config.input.topic.clone();
         // -- Resolve effective research brief (FR-004 / T-004) -------------
         // Use an explicit brief when supplied; otherwise auto-generate one for
         // supervisor/competitive modes so downstream agents have a concrete
@@ -2203,7 +2384,24 @@ impl ResearchSession {
                 Some(config.output.output_format),
             ))
         });
+        RunState {
+            name,
+            topic,
+            item_title: title.to_string(),
+            effective_brief,
+            sources: Vec::new(),
+            web_queries: Vec::new(),
+            excluded_count: 0,
+            pdf_count: 0,
+            youtube_count: 0,
+        }
+    }
 
+    /// Fail fast when an LLM engine is wired but its provider is unavailable.
+    ///
+    /// # Returns
+    /// `Err(ResearchError::ProviderNotAvailable)` when validation fails.
+    fn ensure_provider_available(&self) -> Result<()> {
         // Fail fast when an LLM engine is wired but its provider is not
         // registered. Without this check the run gathers sources for ~40s
         // before the synthesis step silently falls back to the mechanical
@@ -2213,36 +2411,74 @@ impl ResearchSession {
                 return Err(ResearchError::ProviderNotAvailable(e.to_string()));
             }
         }
+        Ok(())
+    }
 
+    /// Run the `--from-url` and `--from-file` seed pre-steps, in that order.
+    ///
+    /// # Arguments
+    /// * `config` - the run configuration listing the seed URLs and files.
+    /// * `observer` - receives the seed progress events.
+    /// * `state` - topic, sources, queries and title updated by the seeds.
+    ///
+    /// # Returns
+    /// The first seed error, which aborts the run.
+    async fn collect_seed_inputs(
+        &self,
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+    ) -> Result<()> {
         // -- --from-url pre-step ------------------------------------------
         self.fetch_from_url_seeds(
             config,
-            &observer,
-            &mut topic,
-            &mut sources,
-            &mut web_queries,
-            &mut item_title,
+            observer,
+            &mut state.topic,
+            &mut state.sources,
+            &mut state.web_queries,
+            &mut state.item_title,
         )
         .await?;
 
         // -- --from-file pre-step -----------------------------------------
         self.extract_from_file_seeds(
             config,
-            &observer,
-            &mut topic,
-            &mut sources,
-            &mut web_queries,
-            &mut item_title,
+            observer,
+            &mut state.topic,
+            &mut state.sources,
+            &mut state.web_queries,
+            &mut state.item_title,
         )
-        .await?;
+        .await
+    }
 
+    /// Create or load the on-disk item, mark it in progress and start gathering.
+    ///
+    /// # Arguments
+    /// * `name_str` - the raw research name.
+    /// * `config` - supplies the output format for a newly created item.
+    /// * `state` - supplies the resolved title and topic.
+    ///
+    /// # Returns
+    /// The item and the invocation stored in its frontmatter before this run.
+    async fn open_research_item(
+        &self,
+        name_str: &str,
+        config: &SessionConfig,
+        state: &RunState,
+    ) -> Result<(ResearchItem, Option<String>)> {
         // -- Create / load the on-disk item ------------------------------
-        let item_exists = ResearchIo::item_exists(self.manager.root(), &name).await;
+        let item_exists = ResearchIo::item_exists(self.manager.root(), &state.name).await;
         let mut item = if item_exists {
             self.manager.show(name_str).await?
         } else {
             self.manager
-                .create_with_format(name_str, &item_title, &topic, config.output.output_format)
+                .create_with_format(
+                    name_str,
+                    &state.item_title,
+                    &state.topic,
+                    config.output.output_format,
+                )
                 .await?
         };
         // Preserve the invocation recorded in an existing item's frontmatter
@@ -2251,72 +2487,112 @@ impl ResearchSession {
         let stored_invocation = item.invocation.clone();
         mark_in_progress(&mut item);
         self.manager.start_gathering(name_str).await?;
+        Ok((item, stored_invocation))
+    }
 
+    /// Create the mode-aware tier router and its session-event bridge.
+    ///
+    /// # Arguments
+    /// * `name_str` - the raw research name (also seeds the run tag).
+    /// * `config` - supplies the tier and mode.
+    /// * `state` - supplies the topic.
+    /// * `observer` - wrapped so router step events reach the session observer.
+    ///
+    /// # Returns
+    /// The router and the observer to pass to its step methods.
+    fn init_router(
+        name_str: &str,
+        config: &SessionConfig,
+        state: &RunState,
+        observer: &Arc<dyn SessionObserver>,
+    ) -> (TierRouter, TierRouterToSessionObserver) {
         // -- Initialize tier router (T-005) -------------------------------
         let run_tag = crate::tier_router::default_run_tag(name_str);
         // For supervisor/competitive modes, create a mode-aware router so the
         // run manifest records the graph steps instead of the tiered pipeline.
         // The router is passed into  and driven there.
-        let mut router = TierRouter::new_with_mode(
+        let router = TierRouter::new_with_mode(
             &run_tag,
             name_str,
-            &topic,
+            &state.topic,
             config.engine.tier,
             config.engine.mode,
         );
         let router_observer = TierRouterToSessionObserver::new(observer.clone());
-        let template_body =
-            load_template(self.manager.root(), config.output.template.as_deref()).await;
+        (router, router_observer)
+    }
 
+    /// Fall back to the stored item topic when no topic or seed was supplied.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the seed URL and file lists.
+    /// * `state` - its topic is replaced when empty.
+    /// * `item` - the on-disk item whose topic is the fallback.
+    fn apply_item_topic_fallback(
+        config: &SessionConfig,
+        state: &mut RunState,
+        item: &ResearchItem,
+    ) {
         // If we didn't have an explicit topic and no from-url/from-file was
         // supplied, fall back to whatever topic is stored on the pre-existing
         // item.
 
-        if topic.trim().is_empty()
+        if state.topic.trim().is_empty()
             && config.input.from_urls.is_empty()
             && config.input.from_files.is_empty()
         {
-            topic = item.topic.clone();
+            state.topic = item.topic.clone();
         }
+    }
 
+    /// Ask a clarifying question when the topic is ambiguous and clarify is on.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the `clarify` flag.
+    /// * `observer` - receives the `NeedsClarification` event.
+    /// * `topic` - the resolved topic.
+    ///
+    /// # Returns
+    /// `Err(ResearchError::NeedsClarification)` when the run must stop.
+    fn check_scope_clarification(
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        topic: &str,
+    ) -> Result<()> {
         // -- Scope clarification (FR-005, FR-017) -------------------------
         // Ask a single clarifying question before performing any web searches
         // when the topic is ambiguous and clarification is enabled. This check
         // deliberately runs after seed pre-steps so derived topics are also
         // considered, but before any web-search phase begins.
         if config.clarify {
-            if let Some(question) = crate::needs_clarification(&topic) {
+            if let Some(question) = crate::needs_clarification(topic) {
                 observer.on_event(SessionEvent::NeedsClarification {
                     question: question.clone(),
                 });
                 return Err(ResearchError::NeedsClarification { question });
             }
         }
+        Ok(())
+    }
 
-        // -- Supervisor / competitive multi-agent graph (FR-001, FR-009) ---
-        // For supervisor/competitive modes, delegate to the multi-agent graph
-        // instead of the tiered pipeline. The graph reuses the same synthesis
-        // and document-assembly helpers.
-        if config.engine.mode == ResearchMode::Supervisor
-            || config.engine.mode == ResearchMode::Competitive
-        {
-            return self
-                .run_supervisor(
-                    name_str,
-                    &item_title,
-                    &topic,
-                    &item,
-                    config,
-                    effective_brief.as_deref(),
-                    sources,
-                    web_queries,
-                    observer.clone(),
-                    &mut router,
-                    &router_observer,
-                )
-                .await;
-        }
-
+    /// Run the gather phase: the router's decompose step, then either the
+    /// iterative engine or the overlapped web + local gather.
+    ///
+    /// # Arguments
+    /// * `project_root` - root searched by the local gatherer.
+    /// * `config` - selects the engine and the PDF web-source policy.
+    /// * `observer` - receives the gather progress events.
+    /// * `state` - gathered sources, queries and counters are added here.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    async fn gather_sources(
+        &self,
+        project_root: &Path,
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) {
         // -- Decide single-pass vs. iterative engine ---------------------
         let engine_cfg = config.engine_config();
         let use_iterative =
@@ -2329,42 +2605,13 @@ impl ResearchSession {
             .iter()
             .any(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")));
         let allow_pdf_web_sources = config.web.use_pdf_web_sources || from_file_pdf;
-        let mut excluded_count = 0usize;
-        let mut pdf_count = 0usize;
-        let mut youtube_count = 0usize;
         let gather_start = Instant::now();
 
         // Decompose is the first step for every tier except dissertation.
-        router.run_step_if(RunStep::Decompose, &router_observer, || {});
+        router.run_step_if(RunStep::Decompose, router_observer, || {});
 
         if use_iterative && engine_cfg.max_iterations > 1 {
-            observer.on_event(SessionEvent::Phase {
-                phase: SessionPhase::Web,
-            });
-            match self
-                .run_iterative_pass(&topic, config, observer.clone())
-                .instrument(tracing::info_span!("research_phase", phase = "web"))
-                .await
-            {
-                Ok((iter_sources, iter_queries, iterations, iter_excluded)) => {
-                    web_queries.extend(iter_queries);
-                    excluded_count += iter_excluded;
-                    sources.extend(iter_sources);
-                    tracing::info!(
-                        name = %name,
-                        iterations = iterations,
-                        sources = sources.len(),
-                        excluded_count = iter_excluded,
-                        "research: iterative pass complete"
-                    );
-                }
-                Err(e) => {
-                    observer.on_event(SessionEvent::WebSearchFailed {
-                        error: e.to_string(),
-                    });
-                    tracing::warn!(error = %e, "research: iterative pass failed; continuing with remaining sources");
-                }
-            }
+            self.gather_iterative(config, observer, state).await;
         } else {
             // -- Overlapped gather step (Milestone D-001) -----------------
             //
@@ -2373,87 +2620,202 @@ impl ResearchSession {
             // phases still emit their own diagnostic events so the UI shows
             // progress separately. The combined result is the union of web,
             // local, and spec sources.
-            let (web_r, local_r) = self
-                .overlapped_gather(
-                    &project_root,
-                    &topic,
-                    config,
-                    allow_pdf_web_sources,
-                    &observer,
-                )
+            self.gather_overlapped(project_root, config, allow_pdf_web_sources, observer, state)
                 .await;
-            if let Ok(result) = web_r {
-                web_queries.extend(result.queries);
-                excluded_count += result.excluded_count;
-                pdf_count += result.pdf_count;
-                youtube_count += result.youtube_count;
-                sources.extend(result.sources);
-            }
-
-            if let Ok(local_sources) = local_r {
-                for src in &local_sources {
-                    if let Source::Local {
-                        path, relevance, ..
-                    } = src
-                    {
-                        let score = relevance
-                            .split_whitespace()
-                            .next()
-                            .and_then(|n| n.parse::<usize>().ok())
-                            .unwrap_or(1);
-                        observer.on_event(SessionEvent::LocalCaptured {
-                            path: path.clone(),
-                            score,
-                        });
-                    }
-                }
-                observer.on_event(SessionEvent::Phase {
-                    phase: SessionPhase::Specs,
-                });
-                for src in &local_sources {
-                    if let Source::Spec { spec_id, .. } = src {
-                        observer.on_event(SessionEvent::SpecCaptured {
-                            spec_id: spec_id.clone(),
-                        });
-                    }
-                }
-                sources.extend(local_sources);
-            } else if let Err(e) = local_r {
-                tracing::warn!(error = %e, "research: local phase failed; continuing");
-            }
         }
         tracing::info!(
             phase = "gather",
             elapsed_ms = gather_start.elapsed().as_millis(),
-            web_sources = sources
+            web_sources = state
+                .sources
                 .iter()
                 .filter(|s| matches!(s, Source::Web { .. }))
                 .count(),
-            local_sources = sources
+            local_sources = state
+                .sources
                 .iter()
                 .filter(|s| matches!(s, Source::Local { .. }))
                 .count(),
-            spec_sources = sources
+            spec_sources = state
+                .sources
                 .iter()
                 .filter(|s| matches!(s, Source::Spec { .. }))
                 .count(),
             "research: gather phase complete"
         );
+    }
 
+    /// Gather with the iterative engine; a failure is reported and the run
+    /// continues with the sources already held.
+    ///
+    /// # Arguments
+    /// * `config` - the run configuration.
+    /// * `observer` - receives the web phase and any `WebSearchFailed` event.
+    /// * `state` - iterative sources, queries and exclusions are added here.
+    async fn gather_iterative(
+        &self,
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+    ) {
+        observer.on_event(SessionEvent::Phase {
+            phase: SessionPhase::Web,
+        });
+        match self
+            .run_iterative_pass(&state.topic, config, observer.clone())
+            .instrument(tracing::info_span!("research_phase", phase = "web"))
+            .await
+        {
+            Ok((iter_sources, iter_queries, iterations, iter_excluded)) => {
+                state.web_queries.extend(iter_queries);
+                state.excluded_count += iter_excluded;
+                state.sources.extend(iter_sources);
+                tracing::info!(
+                    name = %state.name,
+                    iterations = iterations,
+                    sources = state.sources.len(),
+                    excluded_count = iter_excluded,
+                    "research: iterative pass complete"
+                );
+            }
+            Err(e) => {
+                observer.on_event(SessionEvent::WebSearchFailed {
+                    error: e.to_string(),
+                });
+                tracing::warn!(error = %e, "research: iterative pass failed; continuing with remaining sources");
+            }
+        }
+    }
+
+    /// Run the concurrent web + local gather and merge both results.
+    ///
+    /// # Arguments
+    /// * `project_root` - root searched by the local gatherer.
+    /// * `config` - the run configuration.
+    /// * `allow_pdf_web_sources` - whether PDF web sources are gathered.
+    /// * `observer` - receives the local/spec capture events.
+    /// * `state` - web and local sources, queries and counters are added here.
+    async fn gather_overlapped(
+        &self,
+        project_root: &Path,
+        config: &SessionConfig,
+        allow_pdf_web_sources: bool,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+    ) {
+        let (web_r, local_r) = self
+            .overlapped_gather(
+                project_root,
+                &state.topic,
+                config,
+                allow_pdf_web_sources,
+                observer,
+            )
+            .await;
+        if let Ok(result) = web_r {
+            state.web_queries.extend(result.queries);
+            state.excluded_count += result.excluded_count;
+            state.pdf_count += result.pdf_count;
+            state.youtube_count += result.youtube_count;
+            state.sources.extend(result.sources);
+        }
+
+        if let Ok(local_sources) = local_r {
+            for src in &local_sources {
+                if let Source::Local {
+                    path, relevance, ..
+                } = src
+                {
+                    let score = relevance
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .unwrap_or(1);
+                    observer.on_event(SessionEvent::LocalCaptured {
+                        path: path.clone(),
+                        score,
+                    });
+                }
+            }
+            observer.on_event(SessionEvent::Phase {
+                phase: SessionPhase::Specs,
+            });
+            for src in &local_sources {
+                if let Source::Spec { spec_id, .. } = src {
+                    observer.on_event(SessionEvent::SpecCaptured {
+                        spec_id: spec_id.clone(),
+                    });
+                }
+            }
+            state.sources.extend(local_sources);
+        } else if let Err(e) = local_r {
+            tracing::warn!(error = %e, "research: local phase failed; continuing");
+        }
+    }
+
+    /// Run the deterministic analysis steps between gathering and synthesis:
+    /// the corpus analyses, the gap-fill fetch, the triple draft, and the
+    /// stub-step skips.
+    ///
+    /// # Arguments
+    /// * `config` - the run configuration.
+    /// * `observer` - receives one analysis event per step that runs.
+    /// * `state` - gap-fill sources are appended to its sources.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    ///
+    /// # Returns
+    /// Every analysis result (empty for steps the tier skips).
+    async fn run_analysis(
+        &self,
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) -> AnalysisArtifacts {
+        let mut artifacts = Self::analyze_corpus(config, observer, state, router, router_observer);
+        artifacts.gap_fetch = self
+            .run_gap_fetch(config, observer, state, &artifacts, router, router_observer)
+            .await;
+        artifacts.triple_draft =
+            Self::run_triple_draft(observer, &state.topic, &artifacts, router, router_observer);
+        Self::skip_stub_steps(config, router, router_observer);
+        artifacts
+    }
+
+    /// Run the width-sweep through corpus-critic router steps over the
+    /// gathered sources.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the optional contradiction configuration.
+    /// * `observer` - receives one analysis event per step that runs.
+    /// * `state` - supplies the sources and topic.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    ///
+    /// # Returns
+    /// The analysis results, with an empty gap fetch and triple draft.
+    fn analyze_corpus(
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &RunState,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) -> AnalysisArtifacts {
+        let sources = &state.sources;
         // -- Synthesize -----------------------------------------------------
         // Advance the tier router to mark WidthSweep/DepthInvestigation-style
         // steps as completed. Full tier: we keep adversarial steps as
         // skipped-stubs until T-006..T-015 implement them.
-        router.run_step_if(RunStep::WidthSweep, &router_observer, || {});
+        router.run_step_if(RunStep::WidthSweep, router_observer, || {});
         // -- Contradiction Graph (T-007) ------------------------------------
         // Run the deterministic contradiction-graph step for tiers that
         // include it, emit the result as a session event, and keep the graph
         // for the assembled document.
         let contradiction_graph: Option<ContradictionGraph> =
-            router.run_step_if(RunStep::ContradictionGraph, &router_observer, || {
+            router.run_step_if(RunStep::ContradictionGraph, router_observer, || {
                 let graph = match &config.analysis.contradiction {
-                    Some(cfg) => build_contradiction_graph_with(&sources, cfg),
-                    None => build_contradiction_graph(&sources),
+                    Some(cfg) => build_contradiction_graph_with(sources, cfg),
+                    None => build_contradiction_graph(sources),
                 };
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::ContradictionGraph {
                     sources_scanned: sources.len(),
@@ -2464,8 +2826,8 @@ impl ResearchSession {
 
         // -- Loci Analysis (T-008) ------------------------------------------
         let loci = router
-            .run_step_if(RunStep::LociAnalysis, &router_observer, || {
-                let loci = analyze_loci(&sources);
+            .run_step_if(RunStep::LociAnalysis, router_observer, || {
+                let loci = analyze_loci(sources);
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::LociAnalysis {
                     sources_scanned: sources.len(),
                     loci: loci.clone(),
@@ -2476,7 +2838,7 @@ impl ResearchSession {
 
         // -- Depth Investigation (T-008) ------------------------------------
         let depth_investigation = router
-            .run_step_if(RunStep::DepthInvestigation, &router_observer, || {
+            .run_step_if(RunStep::DepthInvestigation, router_observer, || {
                 let investigations = investigate_depth(&loci);
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::DepthInvestigation {
                     investigations: investigations.clone(),
@@ -2487,7 +2849,7 @@ impl ResearchSession {
 
         // -- Cross-Locus Reconcile (T-009) ---------------------------------
         let cross_locus_reconcile = router
-            .run_step_if(RunStep::CrossLocusReconcile, &router_observer, || {
+            .run_step_if(RunStep::CrossLocusReconcile, router_observer, || {
                 let reconcile =
                     build_cross_locus_reconcile(&loci, contradiction_graph.as_ref(), sources.len());
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::CrossLocusReconcile {
@@ -2499,8 +2861,8 @@ impl ResearchSession {
 
         // -- Source Tensions (T-009) -----------------------------------------
         let source_tensions = router
-            .run_step_if(RunStep::SourceTensions, &router_observer, || {
-                let tensions = build_source_tensions(&loci, contradiction_graph.as_ref(), &sources);
+            .run_step_if(RunStep::SourceTensions, router_observer, || {
+                let tensions = build_source_tensions(&loci, contradiction_graph.as_ref(), sources);
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::SourceTensions {
                     tensions: tensions.clone(),
                 }));
@@ -2510,9 +2872,9 @@ impl ResearchSession {
 
         // -- Evidence Digest (T-011) ----------------------------------------
         let evidence_digest = router
-            .run_step_if(RunStep::EvidenceDigest, &router_observer, || {
+            .run_step_if(RunStep::EvidenceDigest, router_observer, || {
                 let digest = build_evidence_digest(
-                    &sources,
+                    sources,
                     &loci,
                     &depth_investigation,
                     contradiction_graph.as_ref(),
@@ -2526,15 +2888,15 @@ impl ResearchSession {
 
         // Corpus Critic (T-010)
         let corpus_critic = router
-            .run_step_if(RunStep::CorpusCritic, &router_observer, || {
+            .run_step_if(RunStep::CorpusCritic, router_observer, || {
                 let report = build_corpus_critic(
-                    &sources,
+                    sources,
                     &loci,
                     &evidence_digest,
                     &source_tensions,
                     contradiction_graph.as_ref(),
                     None,
-                    &topic,
+                    &state.topic,
                 );
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::CorpusCritic {
                     report: report.clone(),
@@ -2543,13 +2905,47 @@ impl ResearchSession {
             })
             .unwrap_or_else(crate::corpus_critic::CorpusCriticReport::empty);
 
+        AnalysisArtifacts {
+            contradiction_graph,
+            loci,
+            depth_investigation,
+            cross_locus_reconcile,
+            source_tensions,
+            evidence_digest,
+            corpus_critic,
+            gap_fetch: GapFetchResult::empty(),
+            triple_draft: crate::digest::TripleDraft::empty(),
+        }
+    }
+
+    /// Run the gap-fill fetch step when it is the router's next step.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the web budget.
+    /// * `observer` - receives the `GapFetch` event and forwarded gather events.
+    /// * `state` - fetched sources are appended to its sources.
+    /// * `artifacts` - supplies the corpus-critic report and loci.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    ///
+    /// # Returns
+    /// The gap-fetch result (empty when the step does not run).
+    async fn run_gap_fetch(
+        &self,
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+        artifacts: &AnalysisArtifacts,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) -> GapFetchResult {
         // Gap-Fill Fetch (T-010)
         let mut gap_fetch = GapFetchResult::empty();
         if let Some(step) = router.next_step()
             && step == RunStep::GapFetch
         {
-            router.start_step(RunStep::GapFetch, &router_observer);
-            let gap_queries = derive_gap_queries(&corpus_critic, &loci, &topic);
+            router.start_step(RunStep::GapFetch, router_observer);
+            let gap_queries =
+                derive_gap_queries(&artifacts.corpus_critic, &artifacts.loci, &state.topic);
             if !gap_queries.is_empty() {
                 if let Some(web) = &self.web {
                     let budget = config.effective_web_budget().clamp(3, 10);
@@ -2565,7 +2961,7 @@ impl ResearchSession {
                             gap_fetch.new_sources = result.sources.len();
                             gap_fetch.queries = gap_queries.clone();
                             gap_fetch.attempted = true;
-                            sources.extend(result.sources);
+                            state.sources.extend(result.sources);
                         }
                         Err(e) => {
                             gap_fetch.failed_queries = gap_queries.len();
@@ -2580,20 +2976,50 @@ impl ResearchSession {
             observer.on_event(SessionEvent::Analysis(AnalysisEvent::GapFetch {
                 result: gap_fetch.clone(),
             }));
-            router.finish_step(RunStep::GapFetch, &router_observer);
+            router.finish_step(RunStep::GapFetch, router_observer);
         }
+        gap_fetch
+    }
 
+    /// Run the triple-draft router step from the evidence digest.
+    ///
+    /// # Arguments
+    /// * `observer` - receives the `TripleDraft` event.
+    /// * `topic` - the research topic.
+    /// * `artifacts` - supplies the evidence digest.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    ///
+    /// # Returns
+    /// The triple draft (empty when the step does not run).
+    fn run_triple_draft(
+        observer: &Arc<dyn SessionObserver>,
+        topic: &str,
+        artifacts: &AnalysisArtifacts,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) -> crate::digest::TripleDraft {
         // Triple Draft (T-011)
-        let triple_draft = router
-            .run_step_if(RunStep::TripleDraft, &router_observer, || {
-                let draft = build_triple_draft(&evidence_digest, &topic);
+        router
+            .run_step_if(RunStep::TripleDraft, router_observer, || {
+                let draft = build_triple_draft(&artifacts.evidence_digest, topic);
                 observer.on_event(SessionEvent::Analysis(AnalysisEvent::TripleDraft {
                     draft: draft.clone(),
                 }));
                 draft
             })
-            .unwrap_or_else(crate::digest::TripleDraft::empty);
+            .unwrap_or_else(crate::digest::TripleDraft::empty)
+    }
 
+    /// Mark the pending not-yet-implemented steps skipped.
+    ///
+    /// # Arguments
+    /// * `config` - the tier decides the skip detail text.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    fn skip_stub_steps(
+        config: &SessionConfig,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) {
         // Mark remaining full-only steps skipped for `light`; for `full` they
         // are also skipped-stubs until later tasks implement them. This
         // satisfies FR-008 and FR-005's step-list contract.
@@ -2613,8 +3039,33 @@ impl ResearchSession {
             } else {
                 Some("step not yet implemented; skipped".to_string())
             };
-            router.skip_step(step, detail, &router_observer);
+            router.skip_step(step, detail, router_observer);
         }
+    }
+
+    /// Run the synthesize step: cap the sources, synthesize with the
+    /// final-report engine, fill empty fields from the mechanical fallback,
+    /// and run the deterministic 4-critic audit.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the source cap and final-report model.
+    /// * `observer` - receives the synthesis phase, result and audit events.
+    /// * `state` - its sources are replaced by the synthesis sources.
+    /// * `artifacts` - the analysis results the audit reads.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    ///
+    /// # Returns
+    /// The synthesis results, with empty patch, cite-check, polish and
+    /// readability results.
+    async fn run_synthesize_step(
+        &self,
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+        artifacts: &AnalysisArtifacts,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) -> SynthesisArtifacts {
         // -- Synthesize (T-012) --------------------------------------------
         // The synthesize step runs the LLM (or deterministic fallback) and,
         // immediately after, runs the deterministic 4-critic audit. Both are
@@ -2623,32 +3074,13 @@ impl ResearchSession {
         if let Some(step) = router.next_step()
             && step == RunStep::Synthesize
         {
-            router.start_step(RunStep::Synthesize, &router_observer);
+            router.start_step(RunStep::Synthesize, router_observer);
         }
 
         observer.on_event(SessionEvent::Phase {
             phase: SessionPhase::Synthesize,
         });
-        // E-003: apply the max_synthesis_sources cap when configured. Select
-        // the highest-relevance sources so the LLM sees the most valuable
-        // evidence. `--use-low-relevance` sources are already in the pool
-        // when `use_low_relevance` is true; the cap just picks the top N by
-        // relevance rank.
-        let synthesis_sources: Vec<Source> =
-            if let Some(cap) = config.analysis.max_synthesis_sources {
-                if sources.len() > cap {
-                    tracing::info!(
-                        total = sources.len(),
-                        cap,
-                        "research: applying max_synthesis_sources cap"
-                    );
-                    select_top_relevance_sources(&sources, cap)
-                } else {
-                    std::mem::take(&mut sources)
-                }
-            } else {
-                std::mem::take(&mut sources)
-            };
+        state.sources = Self::select_synthesis_sources(config, std::mem::take(&mut state.sources));
         // Decide which fallback path we'll take *before* calling the engine
         // so we can attribute the resulting summary correctly in the UI.
         // FR-013: resolve the final-report engine once, so the outcome is
@@ -2659,17 +3091,108 @@ impl ResearchSession {
         self.log_run_event(
             "synthesize_start",
             serde_json::json!({
-                "sources": synthesis_sources.len(),
+                "sources": state.sources.len(),
                 "has_llm_engine": has_llm_engine,
             }),
         );
-        let (mut analysis, synth_outcome, synth_detail) = match self
+        let (mut analysis, synth_outcome, synth_detail) = self
+            .synthesize_with_outcome(state, &final_engine, has_llm_engine)
+            .await;
+        observer.on_event(SessionEvent::Synthesis(SynthesisEvent::SynthesizeResult {
+            outcome: synth_outcome,
+            detail: synth_detail.clone(),
+        }));
+
+        // Persist the synthesis outcome to the run log so offline post-mortems
+        // can see whether the LLM engine failed and why.
+        self.log_run_event(
+            "synthesize_result",
+            serde_json::json!({
+                "outcome": synth_outcome.as_str(),
+                "detail": synth_detail,
+                "sources": state.sources.len(),
+            }),
+        );
+
+        Self::fill_fallback_analysis(
+            &mut analysis,
+            &state.sources,
+            &state.topic,
+            synth_outcome,
+            synth_detail.as_deref(),
+        );
+        let synthesis_audit = self.audit_synthesis(observer, state, artifacts, &analysis);
+
+        if let Some(step) = router.next_step()
+            && step == RunStep::Synthesize
+        {
+            router.finish_step(RunStep::Synthesize, router_observer);
+        }
+
+        SynthesisArtifacts {
+            analysis,
+            synth_outcome,
+            final_model_label,
+            synthesis_audit,
+            patch_result: PatchResult::empty(),
+            cite_check: CitationCheckResult::empty(),
+            polish_result: PolishResult::empty(),
+            readability_audit: ReadabilityAudit::empty(),
+        }
+    }
+
+    /// Apply the optional `max_synthesis_sources` cap.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the cap.
+    /// * `sources` - the gathered sources.
+    ///
+    /// # Returns
+    /// The top sources by relevance when over the cap, otherwise `sources`.
+    fn select_synthesis_sources(config: &SessionConfig, sources: Vec<Source>) -> Vec<Source> {
+        // E-003: apply the max_synthesis_sources cap when configured. Select
+        // the highest-relevance sources so the LLM sees the most valuable
+        // evidence. `--use-low-relevance` sources are already in the pool
+        // when `use_low_relevance` is true; the cap just picks the top N by
+        // relevance rank.
+        if let Some(cap) = config.analysis.max_synthesis_sources {
+            if sources.len() > cap {
+                tracing::info!(
+                    total = sources.len(),
+                    cap,
+                    "research: applying max_synthesis_sources cap"
+                );
+                select_top_relevance_sources(&sources, cap)
+            } else {
+                sources
+            }
+        } else {
+            sources
+        }
+    }
+
+    /// Synthesize the sources and classify the outcome for the UI.
+    ///
+    /// # Arguments
+    /// * `state` - supplies the name, topic, synthesis sources and brief.
+    /// * `final_engine` - the final-report analysis engine.
+    /// * `has_llm_engine` - `false` when the engine is the no-op marker.
+    ///
+    /// # Returns
+    /// The analysis, its outcome, and the error text when synthesis failed.
+    async fn synthesize_with_outcome(
+        &self,
+        state: &RunState,
+        final_engine: &Arc<dyn AnalysisEngine>,
+        has_llm_engine: bool,
+    ) -> (AnalysisResult, SynthesizeOutcome, Option<String>) {
+        match self
             .synthesize(
-                &name,
-                &topic,
-                &synthesis_sources,
-                effective_brief.as_deref(),
-                &final_engine,
+                &state.name,
+                &state.topic,
+                &state.sources,
+                state.effective_brief.as_deref(),
+                final_engine,
             )
             .await
         {
@@ -2704,23 +3227,25 @@ impl ResearchSession {
                     Some(e.to_string()),
                 )
             }
-        };
-        observer.on_event(SessionEvent::Synthesis(SynthesisEvent::SynthesizeResult {
-            outcome: synth_outcome,
-            detail: synth_detail.clone(),
-        }));
+        }
+    }
 
-        // Persist the synthesis outcome to the run log so offline post-mortems
-        // can see whether the LLM engine failed and why.
-        self.log_run_event(
-            "synthesize_result",
-            serde_json::json!({
-                "outcome": synth_outcome.as_str(),
-                "detail": synth_detail,
-                "sources": synthesis_sources.len(),
-            }),
-        );
-
+    /// Populate empty analysis fields with deterministic fallback content and
+    /// prefix the summary with the engine error when synthesis failed.
+    ///
+    /// # Arguments
+    /// * `analysis` - the synthesized analysis, filled in place.
+    /// * `sources` - the synthesis sources.
+    /// * `topic` - the research topic.
+    /// * `synth_outcome` - the synthesis outcome.
+    /// * `synth_detail` - the synthesis error text, if any.
+    fn fill_fallback_analysis(
+        analysis: &mut AnalysisResult,
+        sources: &[Source],
+        topic: &str,
+        synth_outcome: SynthesizeOutcome,
+        synth_detail: Option<&str>,
+    ) {
         // Populate empty analysis fields with deterministic fallback content
         // before the audit and patcher run. The mechanical digest is the
         // narrative that actually ships when the LLM engine fails or is not
@@ -2728,21 +3253,21 @@ impl ResearchSession {
         // contradicted the document (FINDINGS.md P0).
         let had_llm_analysis = synth_outcome == SynthesizeOutcome::Llm;
         if analysis.summary.is_empty() {
-            analysis.summary = default_summary(&synthesis_sources, &topic);
+            analysis.summary = default_summary(sources, topic);
         }
         if analysis.findings.is_empty() {
-            analysis.findings = default_findings(&synthesis_sources, &topic);
+            analysis.findings = default_findings(sources, topic);
         }
         if analysis.cross_references.is_empty() {
-            analysis.cross_references = cross_references_from(&synthesis_sources);
+            analysis.cross_references = cross_references_from(sources);
         }
         if analysis.open_questions.is_empty() && !had_llm_analysis {
-            analysis.open_questions = default_open_questions(&synthesis_sources, &topic);
+            analysis.open_questions = default_open_questions(sources, topic);
         }
         if analysis.top_implications.is_empty() && !had_llm_analysis {
-            analysis.top_implications = default_top_implications(&analysis.findings, &topic);
+            analysis.top_implications = default_top_implications(&analysis.findings, topic);
         }
-        if let Some(err) = &synth_detail {
+        if let Some(err) = synth_detail {
             analysis.summary = format!(
                 "_Synthesis engine failed ({}): {} - the fallback mechanical digest is shown below._\n\n{}",
                 synth_outcome.as_str(),
@@ -2750,17 +3275,35 @@ impl ResearchSession {
                 analysis.summary
             );
         }
+    }
 
+    /// Run the deterministic 4-critic audit against the final narrative.
+    ///
+    /// # Arguments
+    /// * `observer` - receives the `SynthesisAudit` event.
+    /// * `state` - supplies the synthesis sources and topic.
+    /// * `artifacts` - the analysis results the audit reads.
+    /// * `analysis` - the synthesized narrative.
+    ///
+    /// # Returns
+    /// The audit, which is also written to the run log.
+    fn audit_synthesis(
+        &self,
+        observer: &Arc<dyn SessionObserver>,
+        state: &RunState,
+        artifacts: &AnalysisArtifacts,
+        analysis: &AnalysisResult,
+    ) -> crate::synthesis::SynthesisAudit {
         // Run the deterministic 4-critic audit against the final narrative and
         // emit the structured report for the UI and the assembled document.
         let synthesis_audit = crate::synthesis::build_synthesis_audit(
-            &synthesis_sources,
-            &evidence_digest,
-            &triple_draft,
-            &topic,
-            &loci,
-            contradiction_graph.as_ref(),
-            Some(&analysis),
+            &state.sources,
+            &artifacts.evidence_digest,
+            &artifacts.triple_draft,
+            &state.topic,
+            &artifacts.loci,
+            artifacts.contradiction_graph.as_ref(),
+            Some(analysis),
         );
         observer.on_event(SessionEvent::Synthesis(SynthesisEvent::SynthesisAudit {
             audit: synthesis_audit.clone(),
@@ -2774,18 +3317,31 @@ impl ResearchSession {
                 "critic_reports": synthesis_audit.critic_reports.len(),
             }),
         );
+        synthesis_audit
+    }
 
-        if let Some(step) = router.next_step()
-            && step == RunStep::Synthesize
-        {
-            router.finish_step(RunStep::Synthesize, &router_observer);
-        }
-
+    /// Run the critics and surgical-patcher router steps; the patched
+    /// analysis replaces the synthesized one.
+    ///
+    /// # Arguments
+    /// * `observer` - receives the `CriticResult` and `SurgicalPatch` events.
+    /// * `topic` - the research topic.
+    /// * `corpus_critic` - the corpus-critic report the patcher reads.
+    /// * `synth` - the synthesis results, patched in place.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    fn critique_and_patch(
+        observer: &Arc<dyn SessionObserver>,
+        topic: &str,
+        corpus_critic: &crate::corpus_critic::CorpusCriticReport,
+        synth: &mut SynthesisArtifacts,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) {
         // -- Critics (T-012) ------------------------------------------------
         // Emit one CriticResult event per critic report so the UI can see the
         // 4-critic audit subagents individually.
-        router.run_step_if(RunStep::Critics, &router_observer, || {
-            for report in &synthesis_audit.critic_reports {
+        router.run_step_if(RunStep::Critics, router_observer, || {
+            for report in &synth.synthesis_audit.critic_reports {
                 observer.on_event(SessionEvent::Synthesis(SynthesisEvent::CriticResult {
                     score: Some(report.score),
                     gaps: report.gaps.clone(),
@@ -2797,33 +3353,57 @@ impl ResearchSession {
         // Apply deterministic revisions to the draft based on the 4-critic
         // audit and corpus-critic gaps. The patched analysis replaces the
         // original synthesis output for downstream document assembly.
-        let mut patch_result = PatchResult::empty();
-        if let Some(pr) = router.run_step_if(RunStep::Patcher, &router_observer, || {
-            let pr = build_surgical_patches(&synthesis_audit, &corpus_critic, &topic, &analysis);
+        if let Some(pr) = router.run_step_if(RunStep::Patcher, router_observer, || {
+            let pr = build_surgical_patches(
+                &synth.synthesis_audit,
+                corpus_critic,
+                topic,
+                &synth.analysis,
+            );
             observer.on_event(SessionEvent::Synthesis(SynthesisEvent::SurgicalPatch {
                 result: pr.clone(),
             }));
             pr
         }) {
-            patch_result = pr;
-            analysis = patch_result.patched_analysis.clone();
+            synth.patch_result = pr;
+            synth.analysis = synth.patch_result.patched_analysis.clone();
         }
+    }
 
+    /// Run the cite-check, polish and readability-audit router steps, then
+    /// cap the findings.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the findings limit.
+    /// * `observer` - receives the cite-check, polish and readability events.
+    /// * `sources` - the synthesis sources.
+    /// * `synth` - the synthesis results, updated in place.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    ///
+    /// # Returns
+    /// `Err(ResearchError::CiteCheckFailed)` when the cite-check gate closes.
+    fn verify_and_polish(
+        config: &SessionConfig,
+        observer: &Arc<dyn SessionObserver>,
+        sources: &[Source],
+        synth: &mut SynthesisArtifacts,
+        router: &mut TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) -> Result<()> {
         // -- Cite Check (T-014) -------------------------------------------
         // Verify that every `[#N]` citation in the patched draft is backed by a
         // source in the gathered corpus. If the failure gate closes, abort
         // before writing the report so unsupported citations are not shipped.
-        let mut cite_check = CitationCheckResult::empty();
         if let Some(step) = router.next_step()
             && step == RunStep::CiteCheck
         {
-            router.start_step(RunStep::CiteCheck, &router_observer);
-            cite_check = check_citations(
-                &analysis.summary,
-                &analysis.findings,
-                &analysis.top_implications,
-                &analysis.open_questions,
-                &synthesis_sources,
+            router.start_step(RunStep::CiteCheck, router_observer);
+            let cite_check = check_citations(
+                &synth.analysis.summary,
+                &synth.analysis.findings,
+                &synth.analysis.top_implications,
+                &synth.analysis.open_questions,
+                sources,
             );
             observer.on_event(SessionEvent::Synthesis(SynthesisEvent::CiteCheck {
                 result: cite_check.clone(),
@@ -2837,36 +3417,35 @@ impl ResearchSession {
                     claims: cite_check.failed_claims,
                 });
             }
-            router.finish_step(RunStep::CiteCheck, &router_observer);
+            router.finish_step(RunStep::CiteCheck, router_observer);
+            synth.cite_check = cite_check;
         }
 
         // -- Polish (T-015) -----------------------------------------------
         // Apply deterministic final edits to the narrative before assembly:
         // strip control characters, normalize whitespace, and remove empty
         // paragraphs. This runs for every tier that includes the step.
-        let mut polish_result = PolishResult::empty();
-        if let Some(pr) = router.run_step_if(RunStep::Polish, &router_observer, || {
-            let pr = polish_analysis(&mut analysis);
+        if let Some(pr) = router.run_step_if(RunStep::Polish, router_observer, || {
+            let pr = polish_analysis(&mut synth.analysis);
             observer.on_event(SessionEvent::Synthesis(SynthesisEvent::Polish {
                 result: pr.clone(),
             }));
             pr
         }) {
-            polish_result = pr;
+            synth.polish_result = pr;
         }
 
         // -- Readability Audit (T-015) ----------------------------------
         // Run a final deterministic readability audit on the polished draft
         // and surface the score in the assembled document.
-        let mut readability_audit = ReadabilityAudit::empty();
-        if let Some(ra) = router.run_step_if(RunStep::ReadabilityAudit, &router_observer, || {
-            let ra = audit_readability(&analysis);
+        if let Some(ra) = router.run_step_if(RunStep::ReadabilityAudit, router_observer, || {
+            let ra = audit_readability(&synth.analysis);
             observer.on_event(SessionEvent::Synthesis(SynthesisEvent::ReadabilityAudit {
                 result: ra.clone(),
             }));
             ra
         }) {
-            readability_audit = ra;
+            synth.readability_audit = ra;
         }
 
         // -- Finding cap (spec researchmax; FR-003, FR-010, FR-020, FR-022) --
@@ -2874,32 +3453,62 @@ impl ResearchSession {
         // so the cap runs last: order by reverse relevance against the same
         // sources the References Index uses, truncate to the effective limit,
         // and renumber the survivors contiguously.
-        analysis.findings = crate::analysis::cap_findings_to_limit(
-            analysis.findings,
+        synth.analysis.findings = crate::analysis::cap_findings_to_limit(
+            std::mem::take(&mut synth.analysis.findings),
             config.analysis.max_findings,
-            &synthesis_sources,
+            sources,
         );
+        Ok(())
+    }
 
-        // -- Concepts (spec researchcluster) ------------------------------
-        // Extract the cross-source concept list from the same gathered corpus
-        // the synthesis step consumed. The section renders directly above
-        // `## Findings` in `RESEARCH.md`. When no concepts engine is wired
-        // (or the extraction fails), the section is omitted entirely.
-        let concepts_section = self
-            .extract_concepts_section(
-                &name,
-                &synthesis_sources,
-                &observer,
-                config.analysis.max_concepts,
-            )
-            .await;
-
-        // -- Assemble -----------------------------------------------------
-        observer.on_event(SessionEvent::Phase {
-            phase: SessionPhase::Assemble,
-        });
-        let mut item_with_sources = ResearchItem::new(name.clone(), &item_title, &topic);
-        item_with_sources.set_queries(web_queries.clone());
+    /// Build the `RESEARCH.md` document from the run state and every stage
+    /// result, falling back to mechanical content for empty sections.
+    ///
+    /// # Arguments
+    /// * `config` - supplies the output format and frontmatter flags.
+    /// * `state` - supplies the name, title, topic, queries and sources.
+    /// * `artifacts` - the analysis results.
+    /// * `synth` - the synthesis results.
+    /// * `concepts_section` - the rendered concepts section, if any.
+    /// * `template_body` - the optional template body.
+    /// * `stored_invocation` - the invocation stored on the existing item.
+    ///
+    /// # Returns
+    /// The document, titled from the topic until the final title is chosen.
+    fn build_document(
+        config: &SessionConfig,
+        state: &RunState,
+        artifacts: AnalysisArtifacts,
+        synth: SynthesisArtifacts,
+        concepts_section: Option<String>,
+        template_body: Option<String>,
+        stored_invocation: Option<String>,
+    ) -> ResearchDocument {
+        let AnalysisArtifacts {
+            contradiction_graph,
+            loci,
+            depth_investigation,
+            cross_locus_reconcile,
+            source_tensions,
+            evidence_digest,
+            corpus_critic,
+            gap_fetch,
+            triple_draft,
+        } = artifacts;
+        let SynthesisArtifacts {
+            analysis,
+            synth_outcome: _,
+            final_model_label,
+            synthesis_audit,
+            patch_result,
+            cite_check,
+            polish_result,
+            readability_audit,
+        } = synth;
+        let synthesis_sources = &state.sources;
+        let topic = &state.topic;
+        let mut item_with_sources = ResearchItem::new(state.name.clone(), &state.item_title, topic);
+        item_with_sources.set_queries(state.web_queries.clone());
         if let Some(model) = final_model_label {
             item_with_sources.model = Some(model);
         }
@@ -2912,7 +3521,7 @@ impl ResearchSession {
         item_with_sources.open_access_recovery = config.resilience.open_access_recovery;
         item_with_sources.url_cloak = config.output.url_cloak;
         item_with_sources.invocation = config.invocation.clone().or(stored_invocation);
-        for s in &synthesis_sources {
+        for s in synthesis_sources {
             item_with_sources.add_source(s.clone());
         }
         let llm_produced_summary = !analysis.summary.is_empty()
@@ -2920,11 +3529,10 @@ impl ResearchSession {
             || !analysis.top_implications.is_empty()
             || !analysis.cross_references.is_empty()
             || !analysis.open_questions.is_empty();
-        use crate::item::truncate_title;
-        let mut doc = ResearchDocument {
+        ResearchDocument {
             item: item_with_sources,
             summary: if analysis.summary.is_empty() {
-                default_summary(&synthesis_sources, &topic)
+                default_summary(synthesis_sources, topic)
             } else {
                 analysis.summary
             },
@@ -2935,7 +3543,7 @@ impl ResearchSession {
                     // Surface ranked implications from the mechanical
                     // fallback so the section is never empty when no LLM
                     // analysis was available.
-                    default_top_implications(&analysis.findings, &topic)
+                    default_top_implications(&analysis.findings, topic)
                 }
             } else {
                 analysis.top_implications
@@ -2948,12 +3556,12 @@ impl ResearchSession {
                 // It only triggers if a custom `AnalysisEngine`
                 // implementation returns `Ok` with empty findings AND the
                 // `Llm` outcome (the built-in `LlmAnalysisEngine` never                  // does). `default_findings` keeps RESEARCH.md usable.
-                default_findings(&synthesis_sources, &topic)
+                default_findings(synthesis_sources, topic)
             } else {
                 analysis.findings
             },
             cross_references: if analysis.cross_references.is_empty() {
-                cross_references_from(&synthesis_sources)
+                cross_references_from(synthesis_sources)
             } else {
                 analysis.cross_references
             },
@@ -2963,7 +3571,7 @@ impl ResearchSession {
                 } else {
                     // Surface suggested open questions from the mechanical
                     // fallback so the section is never empty when no LLM                      // analysis was available.
-                    default_open_questions(&synthesis_sources, &topic)
+                    default_open_questions(synthesis_sources, topic)
                 }
             } else {
                 analysis.open_questions
@@ -3033,37 +3641,71 @@ impl ResearchSession {
             },
             template_body,
             brief: None,
-            decomposed_queries: web_queries.clone(),
+            decomposed_queries: state.web_queries.clone(),
             output_format: config.output.output_format,
             comparison_table: None,
             evaluation_scorecard: None,
             provider_stats: None,
-        };
+        }
+    }
+
+    /// Choose the frontmatter title for the assembled document.
+    ///
+    /// # Arguments
+    /// * `observer` - forwarded to the title-derivation engine call.
+    /// * `state` - supplies the topic; its item title is taken as the fallback.
+    /// * `synth_outcome` - only an `Llm` outcome derives a new title.
+    /// * `doc` - supplies the final summary.
+    ///
+    /// # Returns
+    /// The derived title, or the topic-derived item title.
+    async fn choose_final_title(
+        &self,
+        observer: &Arc<dyn SessionObserver>,
+        state: &mut RunState,
+        synth_outcome: SynthesizeOutcome,
+        doc: &ResearchDocument,
+    ) -> String {
+        use crate::item::truncate_title;
         // The frontmatter `title` should be a reduced-length version of the
         // final summary (max 80 chars) so the displayed headline reflects the
         // synthesis rather than the original prompt.  When the synthesis fell
         // back to the mechanical path (malformed model output, engine error, or
         // no LLM engine), the summary is a diagnostic placeholder - not a
         // meaningful headline - so we keep the topic-derived title instead.
-        let final_title =
-            if synth_outcome == SynthesizeOutcome::Llm && !doc.summary.trim().is_empty() {
-                self.derive_report_title(
-                    &topic,
-                    &doc.summary,
-                    truncate_title(&doc.summary),
-                    &observer,
-                )
-                .await
-            } else {
-                item_title
-            };
-        doc.item.set_title(&final_title);
+        if synth_outcome == SynthesizeOutcome::Llm && !doc.summary.trim().is_empty() {
+            self.derive_report_title(
+                &state.topic,
+                &doc.summary,
+                truncate_title(&doc.summary),
+                observer,
+            )
+            .await
+        } else {
+            std::mem::take(&mut state.item_title)
+        }
+    }
+
+    /// Report the per-provider search-request counts and embed the summary
+    /// table in the document.
+    ///
+    /// # Arguments
+    /// * `observer` - receives the provider-stats event.
+    /// * `doc` - its `provider_stats` section is set when non-empty.
+    ///
+    /// # Returns
+    /// The per-provider request counts.
+    fn attach_provider_stats(
+        &self,
+        observer: &Arc<dyn SessionObserver>,
+        doc: &mut ResearchDocument,
+    ) -> Vec<(String, usize)> {
         // -- Per-provider search-request summary ----------------------------
         // Report how many search requests each provider received across the
         // whole run (default pipeline, tiered iterations, and every
         // supervisor/competitive researcher combined) and embed the table in
         // the assembled document.
-        let provider_tool_calls = self.report_provider_stats(&observer);
+        let provider_tool_calls = self.report_provider_stats(observer);
         let provider_stats_md =
             crate::document::render_provider_stats_summary(&provider_tool_calls);
         doc.provider_stats = if provider_stats_md.is_empty() {
@@ -3071,7 +3713,19 @@ impl ResearchSession {
         } else {
             Some(provider_stats_md)
         };
-        let assembled = self.manager.write_document(&doc).await?;
+        provider_tool_calls
+    }
+
+    /// Emit the finalize phase and close the router manifest.
+    ///
+    /// # Arguments
+    /// * `observer` - receives the `Phase::Finalize` event.
+    /// * `router` / `router_observer` - the tier router and its event bridge.
+    fn close_router(
+        observer: &Arc<dyn SessionObserver>,
+        router: &TierRouter,
+        router_observer: &TierRouterToSessionObserver,
+    ) {
         // -- Finalize -----------------------------------------------------
         observer.on_event(SessionEvent::Phase {
             phase: SessionPhase::Finalize,
@@ -3081,11 +3735,33 @@ impl ResearchSession {
         // manifest so resumability records the correct terminal state.
         let (completed, skipped, failed) = router.counts();
         router_observer.on_done(completed, skipped, failed);
+    }
+
+    /// Mark the item complete, emit `Done`, and build the run outcome.
+    ///
+    /// # Arguments
+    /// * `name_str` - the raw research name.
+    /// * `observer` - receives the `Done` event.
+    /// * `state` - supplies the name, synthesis sources, queries and counters.
+    /// * `assembled` - the document written to disk.
+    /// * `provider_tool_calls` - the per-provider request counts.
+    ///
+    /// # Returns
+    /// The run outcome, or the error from completing the item.
+    async fn finish_run(
+        &self,
+        name_str: &str,
+        observer: &Arc<dyn SessionObserver>,
+        state: RunState,
+        assembled: crate::document::AssembledDocument,
+        provider_tool_calls: Vec<(String, usize)>,
+    ) -> Result<RunOutcome> {
         self.manager.complete_gathering(name_str).await?;
-        let total_sources = synthesis_sources.len();
-        let finalize_counts = MediaCounts::of(&synthesis_sources);
-        let pdf_count = pdf_count.max(finalize_counts.pdf);
-        let youtube_count = youtube_count.max(finalize_counts.youtube);
+        let total_sources = state.sources.len();
+        let finalize_counts = MediaCounts::of(&state.sources);
+        let pdf_count = state.pdf_count.max(finalize_counts.pdf);
+        let youtube_count = state.youtube_count.max(finalize_counts.youtube);
+        let excluded_count = state.excluded_count;
         observer.on_event(SessionEvent::Done {
             total_sources,
             pdf_count,
@@ -3094,7 +3770,7 @@ impl ResearchSession {
         });
 
         info!(
-            name = %name,
+            name = %state.name,
             total = total_sources,
             pdf_count,
             youtube_count,
@@ -3103,10 +3779,10 @@ impl ResearchSession {
         );
 
         Ok(RunOutcome {
-            research_name: name.to_string(),
-            sources: synthesis_sources,
+            research_name: state.name.to_string(),
+            sources: state.sources,
             document: assembled,
-            web_queries,
+            web_queries: state.web_queries,
             pdf_count,
             youtube_count,
             excluded_count,

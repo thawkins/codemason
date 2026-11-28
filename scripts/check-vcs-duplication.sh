@@ -27,7 +27,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 TOOLS_DUP_DIR="crates/codemason-agent/src/tool"
-PLUGIN_ADD="crates/codemason-plugins/src/add.rs"
+# RS-24: the whole plugins crate, not only add.rs.
+PLUGIN_SRC="crates/codemason-plugins/src"
 VCS_SRC="crates/codemason-tools-vcs/src"
 
 # Helper functions that must have exactly one definition, in `helpers.rs`.
@@ -47,8 +48,9 @@ run_checks() {
     done
 
     # ── 2. Single git-argument guard ────────────────────────────────────────
-    if [ -f "$PLUGIN_ADD" ] && grep -qF "value.starts_with('-')" "$PLUGIN_ADD"; then
-        echo "ERROR: $PLUGIN_ADD re-implements the leading-dash git-argument check."
+    dash_hits="$(grep -rlF --include='*.rs' "value.starts_with('-')" "$PLUGIN_SRC" || true)"
+    if [ -n "$dash_hits" ]; then
+        echo "ERROR: $dash_hits re-implements the leading-dash git-argument check."
         echo "       Delegate to codemason_types::guard::reject_option_like /"
         echo "       is_safe_operand (via codemason_tools_core::guard) instead"
         echo "       (SECTASKS MS-05 T-068)."
@@ -108,12 +110,11 @@ if [ "${1:-}" = "--self-test" ]; then
     fi
 
     # Second half: a re-introduced leading-dash check in codemason-plugins must be
-    # caught. We seed it into a scratch copy the guard reads.
+    # caught in any file of the crate, not only add.rs.
     seed_plugin="crates/codemason-plugins/src/__selftest_add_dupe.rs"
     printf "fn f(value: &str) -> bool { value.starts_with('-') }\n" > "$seed_plugin"
     set +e
-    # Point the guard at the seeded file for this run only.
-    PLUGIN_ADD="$seed_plugin" run_checks >/dev/null 2>&1
+    run_checks >/dev/null 2>&1
     rc=$?
     set -e
     rm -f "$seed_plugin"

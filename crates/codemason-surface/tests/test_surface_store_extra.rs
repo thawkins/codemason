@@ -4,6 +4,7 @@
 //! live-environment `store_dirs` wrapper.
 
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
 
 use codemason_surface::store::{

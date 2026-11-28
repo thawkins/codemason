@@ -1014,12 +1014,10 @@ fn truncate(s: &str, max_chars: usize) -> (String, bool) {
     if char_count <= max_chars {
         return (s.to_string(), false);
     }
-    let end = s
-        .char_indices()
-        .map(|(i, _)| i)
-        .take(max_chars)
-        .last()
-        .unwrap_or(0);
+    // TL-25: the byte index of char `max_chars` is the end of the first
+    // `max_chars` chars (taking the last of the first `max_chars` start
+    // indices kept one char too few).
+    let end = s.char_indices().nth(max_chars).map_or(s.len(), |(i, _)| i);
     let mut truncated = s[..end].to_string();
     truncated.push_str("\n\n[Content truncated]");
     (truncated, true)

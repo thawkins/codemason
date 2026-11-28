@@ -17,22 +17,33 @@
 //! `#[cfg(unix)]` guards the script fixtures; every fixture lives in its own
 //! `tempfile::tempdir()`, so nothing is written into the repository.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
+use codemason_agent::tool::team_task_complete::TeamTaskCompleteTool;
+use codemason_agent::tool::{TeamManagerInterface, Tool};
+
+// Used only by the hook tests, which run `sh` and are Unix-only.
+#[cfg(unix)]
+use std::{path::PathBuf, sync::Arc};
+
+#[cfg(unix)]
 use codemason_agent::team::{
     HookEntry, HookEvent, MemberStatus, Task, TaskStatus, TaskStore, TeamStore,
 };
-use codemason_agent::tool::team_task_complete::TeamTaskCompleteTool;
-use codemason_agent::tool::{TeamContext, TeamManagerInterface, Tool, ToolContext};
+#[cfg(unix)]
+use codemason_agent::tool::{TeamContext, ToolContext};
+#[cfg(unix)]
 use codemason_types::event::EventBus;
+#[cfg(unix)]
 use serde_json::{Value, json};
+#[cfg(unix)]
 use tempfile::TempDir;
 
 #[path = "manager_support/mod.rs"]
 mod manager_support;
 
 /// The text the vetoing hook prints, which the tool result must carry.
+#[cfg(unix)]
 const FEEDBACK: &str = "static analysis reported 3 issues";
 
 /// A team named `name` under a fresh workspace, with one `in_progress` task
@@ -90,6 +101,7 @@ fn install_vetoing_hook(team_dir: &Path) {
 
 /// A `ToolContext` acting as `agent_id` in team `team_name`, optionally with a
 /// real `TeamManager` attached (the runtime path).
+#[cfg(unix)]
 fn tool_context(
     workspace: &Path,
     team_name: &str,
@@ -127,6 +139,7 @@ fn tool_context(
 }
 
 /// The task's persisted status, or `None` when it is not in the list.
+#[cfg(unix)]
 fn status_of(team_dir: &Path, id: &str) -> Option<TaskStatus> {
     TaskStore::open(team_dir)
         .expect("open task store")
@@ -139,6 +152,7 @@ fn status_of(team_dir: &Path, id: &str) -> Option<TaskStatus> {
 }
 
 /// The tool's metadata field `key`, if present.
+#[cfg(unix)]
 fn meta_string(out: &codemason_agent::tool::ToolOutput, key: &str) -> Option<String> {
     out.metadata
         .as_ref()

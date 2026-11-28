@@ -611,7 +611,8 @@ async fn test_project_command_session_new_refuses_a_project_outside_permitted_ro
     // must not widen access to the repository root above it.
     support::allow_session_root(&app, &allowed_subdir);
     app.execute_slash_command(&format!(
-        "/session new {} --branch feature/x",
+        // Quoted: the checkout path may contain spaces.
+        "/session new \"{}\" --branch feature/x",
         allowed_subdir.display()
     ))
     .await;

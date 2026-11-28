@@ -127,7 +127,14 @@ impl SessionProcessor {
                 .await?;
             Arc::from(
                 provider
-                    .create_client(&api_key, None, &std::collections::HashMap::new())
+                    .create_client(
+                        &api_key,
+                        None,
+                        &cfg.provider_client_options(
+                            &effective_model_ref.provider_id,
+                            &effective_model_ref.model_id,
+                        ),
+                    )
                     .await
                     .map_err(|e| {
                         anyhow::anyhow!(

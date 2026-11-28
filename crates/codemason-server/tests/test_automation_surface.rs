@@ -136,7 +136,8 @@ async fn runs_requires_auth_and_is_empty_initially() {
 
 #[tokio::test]
 async fn webhook_ingress_is_public_and_rejects_unknown_automations() {
-    // FR-013: the ingress is public; an unknown automation is a 404.
+    // FR-013: the ingress is public; an unknown automation is refused like a
+    // wrong credential (RS-07: no id enumeration).
     let app = router(automation_state("tok"));
     let resp = app
         .oneshot(
@@ -149,7 +150,7 @@ async fn webhook_ingress_is_public_and_rejects_unknown_automations() {
         )
         .await
         .expect("oneshot");
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 const WEBHOOK_SECRET_ENV: &str = "CODEMASON_TEST_ON_ISSUE_WEBHOOK_SECRET";
@@ -302,4 +303,72 @@ async fn webhook_ingress_accepts_the_bearer_scheme_in_any_case() {
         StatusCode::UNAUTHORIZED,
         "the secret stays case-sensitive"
     );
+}
+
+/// `POST /auto/{id}` through `app` with a bearer credential.
+async fn post_auto(app: &axum::Router, id: &str, bearer: &str) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/auto/{id}"))
+                .header("Content-Type", "application/json")
+                .header("Authorization", bearer)
+                .body(Body::from(WEBHOOK_BODY))
+                .unwrap(),
+        )
+        .await
+        .expect("oneshot")
+}
+
+/// RS-07: an unknown automation id answers exactly like a wrong secret, so the
+/// public ingress cannot be used to enumerate automation ids.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn webhook_ingress_unknown_id_is_indistinguishable_from_a_wrong_secret() {
+    let _secret = SecretEnv::set(Some(WEBHOOK_SECRET));
+    let app = router(automation_state("tok"));
+    let unknown = post_auto(&app, "nosuch", "Bearer not-the-secret").await;
+    let wrong = post_auto(&app, "on-issue", "Bearer not-the-secret").await;
+    assert_eq!(unknown.status(), wrong.status());
+    assert_eq!(body_json(unknown).await, body_json(wrong).await);
+}
+
+/// RS-07: the webhook rate limit is per automation id, so flooding one id does
+/// not lock every other automation out.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn webhook_ingress_rate_limit_is_per_automation_id() {
+    let _secret = SecretEnv::set(Some(WEBHOOK_SECRET));
+    let app = router(automation_state("tok"));
+    let mut limited = false;
+    for _ in 0..200 {
+        if post_auto(&app, "flood-a", "Bearer x").await.status() == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "flooding one id must hit the rate limit");
+    let other = post_auto(&app, "on-issue", "Bearer not-the-secret").await;
+    assert_ne!(
+        other.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "another automation id must not share the exhausted bucket"
+    );
+}
+
+/// RS-08: an automation runs in the project the server state was built for
+/// (the parent of its research root), not the process's launch directory,
+/// which stays put when a session in another project is resumed.
+#[test]
+fn automation_runs_in_the_state_project_root_not_the_process_cwd() {
+    let mut state = crate::support::test_state("tok");
+    let project =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/temp/rs08-project");
+    state.research_root = std::sync::Arc::new(project.join("research"));
+
+    let dir = codemason_server::routes::automation::working_dir(&state);
+
+    assert_eq!(dir, project);
+    assert_ne!(dir, std::env::current_dir().expect("cwd"));
 }

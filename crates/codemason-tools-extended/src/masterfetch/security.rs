@@ -251,14 +251,15 @@ fn validate_host(host: HostKind) -> SecurityResult {
                 return Err(SecurityError::Localhost(domain));
             }
 
-            // 9. Reject cloud metadata endpoints.
-            if CLOUD_METADATA_HOSTS.contains(&host_lower.as_str()) {
+            // 9. Reject cloud metadata endpoints. TL-07: every name check uses
+            // `host_norm`, so a trailing dot cannot bypass it.
+            if CLOUD_METADATA_HOSTS.contains(&host_norm) {
                 return Err(SecurityError::CloudMetadata(domain));
             }
 
             // 10. Reject DNS rebinding service suffixes.
             for suffix in DNS_REBINDING_SUFFIXES {
-                if host_lower.ends_with(suffix) {
+                if host_norm.ends_with(suffix) {
                     return Err(SecurityError::DnsRebinding(domain));
                 }
             }
@@ -267,7 +268,7 @@ fn validate_host(host: HostKind) -> SecurityResult {
             //     (octal, hex, decimal, short-form). The `url` crate would have
             //     returned an `Ipv4`/`Ipv6` Host variant for standard notation,
             //     so we only need to check alternate notations here.
-            if let Some(normalised_ip) = normalise_ip_notation(&host_lower) {
+            if let Some(normalised_ip) = normalise_ip_notation(host_norm) {
                 let ip_addr = std::net::IpAddr::V4(normalised_ip);
                 check_ip_range(&ip_addr)?;
             }
@@ -296,6 +297,7 @@ fn check_ip_range(ip: &std::net::IpAddr) -> SecurityResult {
 /// - `0.0.0.0/8` (this network)
 /// - `10.0.0.0/8` (private)
 /// - `127.0.0.0/8` (loopback)
+/// - `100.64.0.0/10` (carrier-grade NAT; Alibaba Cloud metadata is `100.100.100.200`)
 /// - `169.254.0.0/16` (link-local, includes cloud metadata `169.254.169.254`)
 /// - `172.16.0.0/12` (private)
 /// - `192.168.0.0/16` (private)
@@ -309,6 +311,7 @@ fn check_ipv4_range(ip: std::net::Ipv4Addr) -> SecurityResult {
         || (octets[0] == 192 && octets[1] == 168) // 192.168.0.0/16
         || (octets[0] == 127) // 127.0.0.0/8
         || (octets[0] == 0) // 0.0.0.0/8
+        || (octets[0] == 100 && (octets[1] & 0xc0) == 64) // 100.64.0.0/10
         || (octets[0] == 169 && octets[1] == 254) // 169.254.0.0/16
         || (octets[0] & 0xf0) == 224 // 224.0.0.0/4 (multicast)
         || (octets[0] & 0xf0) == 240; // 240.0.0.0/4 (reserved)
@@ -329,6 +332,7 @@ fn check_ipv4_range(ip: std::net::Ipv4Addr) -> SecurityResult {
 /// - `fe80::/10` (link-local)
 /// - `ff00::/8` (multicast)
 /// - IPv4-mapped IPv6 (`::ffff:a.b.c.d`) - the embedded IPv4 is checked too
+/// - NAT64 (`64:ff9b::/96`) - the embedded IPv4 is checked too
 fn check_ipv6_range(ip: std::net::Ipv6Addr) -> SecurityResult {
     let segments = ip.segments();
 
@@ -355,6 +359,15 @@ fn check_ipv6_range(ip: std::net::Ipv6Addr) -> SecurityResult {
     // ff00::/8 (multicast) - top 8 bits
     if (segments[0] & 0xff00) == 0xff00 {
         return Err(SecurityError::PrivateRange(ip.to_string()));
+    }
+
+    // NAT64 64:ff9b::/96 (TL-07): a translator reaches the embedded IPv4
+    // address, so it is checked like a mapped one.
+    if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        let [.., hi, lo] = segments;
+        return check_ipv4_range(std::net::Ipv4Addr::from(
+            (u32::from(hi) << 16) | u32::from(lo),
+        ));
     }
 
     // IPv4-mapped IPv6: ::ffff:a.b.c.d - check the embedded IPv4 address.
@@ -491,4 +504,41 @@ fn parse_ip_octet(part: &str) -> Option<u32> {
 
     // Decimal
     part.parse::<u32>().ok()
+}
+
+/// A DNS resolver that never hands reqwest a private or reserved address
+/// (TL-07).
+///
+/// [`validate_url`] checks the URL's host as written; a public name whose DNS
+/// record points at `169.254.169.254` or a LAN address passed it, and the
+/// address checked was not necessarily the one connected to. This resolver
+/// filters the resolved addresses through the same range checks, so the
+/// connection can only go to an address that passed them; a name that
+/// resolves only to blocked addresses fails to resolve.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SsrfSafeResolver;
+
+impl reqwest::dns::Resolve for SsrfSafeResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let resolved: Vec<std::net::SocketAddr> =
+                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let allowed: Vec<std::net::SocketAddr> = if ssrf_test_skip() {
+                resolved
+            } else {
+                resolved
+                    .into_iter()
+                    .filter(|addr| check_ip_range(&addr.ip()).is_ok())
+                    .collect()
+            };
+            if allowed.is_empty() {
+                return Err(Box::new(SecurityError::PrivateRange(format!(
+                    "{host} resolves only to private or reserved addresses"
+                )))
+                    as Box<dyn std::error::Error + Send + Sync>);
+            }
+            Ok(Box::new(allowed.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
 }

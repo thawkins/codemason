@@ -103,11 +103,15 @@ fn last_message(app: &App) -> String {
 
 /// Install an enabled plugin that declares `servers` inline under `mcpServers`.
 fn install_plugin(temp: &tempfile::TempDir, plugin_id: &str, servers_json: &str) {
-    let store = temp.path().join(".config/codemason/plugins");
+    let store = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("plugins");
     let plugin = store.join(plugin_id);
     std::fs::create_dir_all(plugin.join(".claude-plugin")).expect("manifest dir");
     std::fs::write(
-        plugin.join(".claude-plugin/plugin.json"),
+        plugin.join(".claude-plugin").join("plugin.json"),
         format!(r#"{{"name":"{plugin_id}","version":"1.0.0","mcpServers":{servers_json}}}"#),
     )
     .expect("write manifest");
@@ -121,7 +125,7 @@ fn install_plugin(temp: &tempfile::TempDir, plugin_id: &str, servers_json: &str)
 
 /// Install an enabled connector declaring one `http` server `main`.
 fn install_connector(temp: &tempfile::TempDir, connector_id: &str) {
-    let store = temp.path().join(".codemason/connectors");
+    let store = temp.path().join(".codemason").join("connectors");
     let dir = store.join(connector_id);
     std::fs::create_dir_all(&dir).expect("connector dir");
     std::fs::write(
@@ -161,7 +165,10 @@ async fn mcp_list_includes_a_connector_bridged_server_and_its_owner() {
     );
     let manifest = temp
         .path()
-        .join(".codemason/connectors/demo/connector.json");
+        .join(".codemason")
+        .join("connectors")
+        .join("demo")
+        .join("connector.json");
     assert!(
         report.contains(&manifest.display().to_string()),
         "the connector manifest must be the reported source: {report}"
@@ -204,7 +211,11 @@ async fn mcp_list_keeps_configured_servers_ahead_of_a_colliding_bridge() {
     // A configured server wins the id, so the connector bridge refuses its own.
     // `Config::merge_project` strips a project-local `mcp` section (SEC-001), so
     // the configured server lives in the user-global file.
-    let global = temp.path().join(".config/codemason/codemason.json");
+    let global = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json");
     std::fs::create_dir_all(global.parent().expect("parent")).expect("create global dir");
     std::fs::write(
         &global,
@@ -330,7 +341,11 @@ async fn toggling_a_bridged_row_writes_only_the_ledger() {
     );
 
     // The global ledger holds the choice; no `mcp` section was invented.
-    let global = temp.path().join(".config/codemason/codemason.json");
+    let global = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json");
     let config: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&global).unwrap_or_else(|_| "{}".to_string()),
     )
@@ -364,7 +379,10 @@ async fn mcp_remove_refuses_a_connector_bridged_server() {
     install_connector(&temp, "demo");
     let manifest = temp
         .path()
-        .join(".codemason/connectors/demo/connector.json");
+        .join(".codemason")
+        .join("connectors")
+        .join("demo")
+        .join("connector.json");
     let before = std::fs::read_to_string(&manifest).expect("read manifest");
     let mut app = app();
 
@@ -433,7 +451,11 @@ async fn mcp_remove_still_removes_a_configured_server_when_a_bridge_exists() {
     // `Config::merge_project` strips a project-local `mcp` section (SEC-001), so
     // the configured server lives in the user-global file, exactly as the
     // connect loop reads it.
-    let global = temp.path().join(".config/codemason/codemason.json");
+    let global = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json");
     std::fs::create_dir_all(global.parent().expect("parent")).expect("create global dir");
     std::fs::write(
         &global,
@@ -500,7 +522,11 @@ async fn mcp_disconnect_records_a_plugin_bridged_server_in_the_ledger() {
         !codemason_agent::mcp::McpEnableLedger::load().is_enabled("weather.forecast"),
         "the disable must reach the global ledger"
     );
-    let global = temp.path().join(".config/codemason/codemason.json");
+    let global = temp
+        .path()
+        .join(".config")
+        .join("codemason")
+        .join("codemason.json");
     let config: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&global).unwrap_or_else(|_| "{}".to_string()),
     )

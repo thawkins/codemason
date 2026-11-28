@@ -3601,7 +3601,7 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                 // directory walk below.
                 let config = self.session_processor.load_config_for(&self.cwd_path);
                 // FUNC-015: the block_on runs inside block_in_place, which is
-                // what keeps the TUI runtime's other tasks live while this
+                // what keeps the runtime's other tasks live while this
                 // cached context read completes.
                 let (git_status, readme, agents_md, file_tree) = tokio::runtime::Handle::current()
                     .block_on(async { collect_prompt_context(&working_dir).await });
@@ -4890,452 +4890,26 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
     fn slash_config(&mut self, args: &str) -> std::ops::ControlFlow<()> {
         match args.trim() {
             "help" | "" => {
-                self.append_assistant_text(
-                        "From: /config help\n\n## /config - Configuration inspection and backup\n\n| Subcommand | Description |\n|---|---|\n| `/config show` | Display application paths and resolved config values (with source: global/project/env) |\n| `/config save` | Back up the global `codemason.json` into the config `saves/` directory |\n| `/config list` | Browse saved backups and restore one (interactive picker) |\n| `/config help` | Show this help |",
-                    );
-                self.status = "config: help".to_string();
+                self.config_help();
             }
             "show" => {
-                let cwd = self.cwd_path.clone();
-                let data_dir = codemason_config::user_dirs::global_state_dir().unwrap_or_default();
-                let config_dir =
-                    codemason_config::user_dirs::global_state_dir().unwrap_or_default();
-
-                // Determine active config file paths
-                let project_config = cwd.join(".codemason").join("codemason.json");
-                let global_config = config_dir.join("codemason.json");
-                let env_config = std::env::var("CODEMASON_CONFIG").ok();
-
-                let mut output =
-                    String::from("From: /config show\n\n[dir] **Application Paths**\n\n");
-
-                output.push_str(&crate::app::mdtable::table(
-                    &["Path", "Value"],
-                    vec![
-                        vec![
-                            "Working directory".to_string(),
-                            crate::app::mdtable::cell(&cwd.display().to_string()),
-                        ],
-                        vec![
-                            "Data directory".to_string(),
-                            crate::app::mdtable::cell(&data_dir.display().to_string()),
-                        ],
-                        vec![
-                            "Config directory".to_string(),
-                            crate::app::mdtable::cell(&config_dir.display().to_string()),
-                        ],
-                    ],
-                ));
-
-                output.push_str("\n[file] **Config Files**\n\n");
-
-                let project_exists = project_config.exists();
-                let global_exists = global_config.exists();
-
-                let mut rows = vec![
-                    vec![
-                        "Project config".to_string(),
-                        crate::app::mdtable::cell(&format!(
-                            "{} {}",
-                            project_config.display(),
-                            if project_exists { "[ok]" } else { "[x]" }
-                        )),
-                    ],
-                    vec![
-                        "Global config".to_string(),
-                        crate::app::mdtable::cell(&format!(
-                            "{} {}",
-                            global_config.display(),
-                            if global_exists { "[ok]" } else { "[x]" }
-                        )),
-                    ],
-                ];
-                rows.push(vec![
-                    "Env (CODEMASON_CONFIG)".to_string(),
-                    match &env_config {
-                        Some(env_path) => crate::app::mdtable::cell(&format!(
-                            "{} {}",
-                            env_path,
-                            if std::path::PathBuf::from(env_path).exists() {
-                                "[ok]"
-                            } else {
-                                "[x]"
-                            }
-                        )),
-                        None => "(not set)".to_string(),
-                    },
-                ]);
-                output.push_str(&crate::app::mdtable::table(&["Source", "File"], rows));
-
-                // -- Resolved configuration values with provenance -----------
-                // Reload the merged config and, for each top-level key, report
-                // the highest-precedence file that explicitly sets it. Source
-                // detection mirrors Config::load_for(&self.cwd_path) precedence: defaults <
-                // global < project < env file < CODEMASON_CONFIG_CONTENT. Fields
-                // with union/append/OR semantics are annotated "(union)".
-                output.push_str("\n[spin]  **Resolved Values**\n\n");
-
-                match codemason_agent::Config::load_for(&self.cwd_path) {
-                    Ok(cfg) => {
-                        let global_label = if global_config.exists() {
-                            "global".to_string()
-                        } else {
-                            "defaults".to_string()
-                        };
-                        let project_label = "project";
-
-                        // Highest-precedence source per top-level key.
-                        let mut key_source: std::collections::HashMap<String, String> =
-                            std::collections::HashMap::new();
-
-                        // 1. Defaults (lowest precedence).
-                        let defaults_json =
-                            serde_json::to_value(codemason_config::Config::default())
-                                .unwrap_or(serde_json::Value::Null);
-                        if let serde_json::Value::Object(map) = &defaults_json {
-                            for k in map.keys() {
-                                key_source.insert(k.clone(), "defaults".to_string());
-                            }
-                        }
-
-                        // 2. Global file.
-                        if global_config.exists() {
-                            if let Ok(raw) = std::fs::read_to_string(&global_config) {
-                                if let Ok(serde_json::Value::Object(map)) =
-                                    serde_json::from_str::<serde_json::Value>(&raw)
-                                {
-                                    for (k, v) in map {
-                                        if !v.is_null() {
-                                            key_source.insert(k, global_label.clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 3. Project file.
-                        if project_config.exists() {
-                            if let Ok(raw) = std::fs::read_to_string(&project_config) {
-                                if let Ok(serde_json::Value::Object(map)) =
-                                    serde_json::from_str::<serde_json::Value>(&raw)
-                                {
-                                    for (k, v) in map {
-                                        if !v.is_null() {
-                                            key_source.insert(k, project_label.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 4. CODEMASON_CONFIG env file (higher precedence).
-                        if let Some(ref env_path) = env_config {
-                            if let Ok(raw) = std::fs::read_to_string(env_path) {
-                                if let Ok(serde_json::Value::Object(map)) =
-                                    serde_json::from_str::<serde_json::Value>(&raw)
-                                {
-                                    for (k, v) in map {
-                                        if !v.is_null() {
-                                            key_source.insert(k, format!("env ({env_path})"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 5. CODEMASON_CONFIG_CONTENT inline JSON (highest).
-                        if let Ok(content) = std::env::var("CODEMASON_CONFIG_CONTENT") {
-                            if let Ok(serde_json::Value::Object(map)) =
-                                serde_json::from_str::<serde_json::Value>(&content)
-                            {
-                                for (k, v) in map {
-                                    if !v.is_null() {
-                                        key_source.insert(
-                                            k,
-                                            "env (CODEMASON_CONFIG_CONTENT)".to_string(),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        // Fields with union/append/OR semantics across layers.
-                        let union_fields = [
-                            "permission",
-                            "instructions",
-                            "skill_dirs",
-                            "hooks",
-                            "bash",
-                            "yolo",
-                            "edit_log",
-                            "sdd",
-                            "piegap",
-                            "experimental",
-                        ];
-
-                        let merged_json =
-                            serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
-                        if let serde_json::Value::Object(map) = &merged_json {
-                            let mut keys: Vec<&String> = map.keys().collect();
-                            keys.sort();
-                            let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
-                            for key in keys {
-                                let mut value = map.get(key).cloned().unwrap_or_default();
-                                // SEC: value-scan the whole subtree so a
-                                // credential under an innocuous key (nested
-                                // `mcp.*.env`/`headers`, `provider.*.api.headers`,
-                                // URL-userinfo secrets) is masked too, then fully
-                                // mask a top-level key whose *name* is credential-like.
-                                codemason_types::sanitize::redact_json_value(&mut value, 8);
-                                let is_secret_key =
-                                    codemason_types::sanitize::is_secret_json_key(key);
-                                let rendered = if is_secret_key {
-                                    codemason_types::sanitize::REDACTION_PLACEHOLDER.to_string()
-                                } else {
-                                    codemason_types::sanitize::redact_secrets(&value.to_string())
-                                };
-                                let source = key_source.get(key).map(String::as_str).unwrap_or(
-                                    if key == "config_paths" {
-                                        "runtime"
-                                    } else {
-                                        "defaults"
-                                    },
-                                );
-                                let both_files = global_config.exists() && project_config.exists();
-                                let source_label = if union_fields.contains(&key.as_str())
-                                    && both_files
-                                    && matches!(source, "global" | "project")
-                                {
-                                    "global + project (union)"
-                                } else {
-                                    source
-                                };
-                                rows.push(vec![
-                                    format!("`{}`", crate::app::mdtable::cell(key)),
-                                    crate::app::mdtable::cell(source_label),
-                                    format!("`{}`", crate::app::mdtable::cell(&rendered)),
-                                ]);
-                            }
-                            output.push_str(&crate::app::mdtable::table(
-                                &["Key", "Source", "Value"],
-                                rows,
-                            ));
-                        } else {
-                            output.push_str("(could not serialise merged config)\n");
-                        }
-                    }
-                    Err(e) => {
-                        output.push_str(&format!("[err] Failed to load config: {e}\n"));
-                    }
-                }
-
-                // Storage database
-                output.push_str(&format!(
-                    "\n[disk] **Storage**\n\n{}",
-                    crate::app::mdtable::table(
-                        &["Database", "Path"],
-                        vec![vec![
-                            "SQLite".to_string(),
-                            crate::app::mdtable::cell(&self.db_path.display().to_string()),
-                        ]],
-                    )
-                ));
-
-                // Code index
-                let codeindex_dir = cwd.join(".codemason").join("codeindex");
-                output.push_str("\n[search] **Code Index**\n\n");
-                output.push_str(&crate::app::mdtable::table(
-                    &["Directory", "Status"],
-                    vec![vec![
-                        crate::app::mdtable::cell(&codeindex_dir.display().to_string()),
-                        if codeindex_dir.exists() {
-                            "[ok] present"
-                        } else {
-                            "[x] missing"
-                        }
-                        .to_string(),
-                    ]],
-                ));
-
-                // Memory
-                let memory_dir = cwd.join(".codemason").join("memory");
-                let global_memory = codemason_config::user_dirs::global_memory_dir();
-                output.push_str("\n[brain] **Memory**\n\n");
-                let presence = |exists: bool| {
-                    if exists {
-                        "[ok] present"
-                    } else {
-                        "[x] missing"
-                    }
-                    .to_string()
-                };
-                let mut rows = vec![vec![
-                    "Project memory".to_string(),
-                    crate::app::mdtable::cell(&memory_dir.display().to_string()),
-                    presence(memory_dir.exists()),
-                ]];
-                rows.push(match &global_memory {
-                    Some(dir) => vec![
-                        "Global memory".to_string(),
-                        crate::app::mdtable::cell(&dir.display().to_string()),
-                        presence(dir.exists()),
-                    ],
-                    None => vec![
-                        "Global memory".to_string(),
-                        "(unavailable)".to_string(),
-                        "[x] missing".to_string(),
-                    ],
-                });
-                output.push_str(&crate::app::mdtable::table(
-                    &["Store", "Directory", "Status"],
-                    rows,
-                ));
-
-                // Agents
-                let project_agents = cwd.join(".codemason").join("agents");
-                let global_agents = codemason_config::user_dirs::global_agents_dir();
-                output.push_str("\n[agent] **Custom Agents**\n\n");
-                let mut rows = vec![vec![
-                    "Project agents".to_string(),
-                    crate::app::mdtable::cell(&project_agents.display().to_string()),
-                    presence(project_agents.exists()),
-                ]];
-                rows.push(match &global_agents {
-                    Some(dir) => vec![
-                        "Global agents".to_string(),
-                        crate::app::mdtable::cell(&dir.display().to_string()),
-                        presence(dir.exists()),
-                    ],
-                    None => vec![
-                        "Global agents".to_string(),
-                        "(unavailable)".to_string(),
-                        "[x] missing".to_string(),
-                    ],
-                });
-                output.push_str(&crate::app::mdtable::table(
-                    &["Directory", "Path", "Status"],
-                    rows,
-                ));
-
-                self.append_assistant_text(&output);
-                self.status = "config: show".to_string();
+                self.config_show();
             }
             // -- /config save --------------------------------------------
             // FR-003: snapshot the current global codemason.json into a
             // timestamped backup inside `saves/`. The helper creates the
             // `saves/` directory if needed and writes atomically.
-            "save" => match codemason_config::Config::backup_global_config(None) {
-                Ok(path) => {
-                    self.append_assistant_text(&format!(
-                        "From: /config save\n[ok] **Saved backup to:**\n  `{}`",
-                        path.display()
-                    ));
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!("config save: wrote backup to {}", path.display()),
-                    );
-                    self.status = "config: saved".to_string();
-                }
-                Err(e) => {
-                    self.append_assistant_text(&format!(
-                        "From: /config save\n[err] **Failed to back up global config:**\n  \
-                                 {e}\n\nNo changes were made."
-                    ));
-                    self.push_log_no_agent(LogLevel::Error, format!("config save: error: {e}"));
-                    self.status = "config: save error".to_string();
-                }
-            },
+            "save" => {
+                self.config_save();
+            }
             // -- /config list --------------------------------------------
             // FR-004 / FR-006: scan the `saves/` directory for backups. If
             // none exist, show a user-facing message instead of an empty
             // picker. Otherwise open the interactive picker (key handling
             // and rendering are wired up in T-006/T-007).
             "list" => {
-                let config_dir = match codemason_config::Config::global_config_dir() {
-                    Some(d) => d,
-                    None => {
-                        self.append_assistant_text(
-                            "From: /config list\n[err] **Cannot determine the global config \
-                                 directory for this platform.**",
-                        );
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            "config list: no global config directory".to_string(),
-                        );
-                        self.status = "config: list error".to_string();
-                        return std::ops::ControlFlow::Break(());
-                    }
-                };
-                let saves_dir = config_dir.join("saves");
-
-                // Collect files matching the `codemason.json.*` backup pattern,
-                // excluding the transient `.tmp` temp files written during
-                // atomic backup.
-                let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&saves_dir) {
-                    Ok(rd) => rd
-                        .filter_map(Result::ok)
-                        .filter_map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            let path = e.path();
-                            let is_tmp = std::path::Path::new(&name)
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"));
-                            if name.starts_with("codemason.json.") && !is_tmp && path.is_file() {
-                                Some(path)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                    Err(_) => Vec::new(),
-                };
-
-                if entries.is_empty() {
-                    // FR-006: no saved configurations available.
-                    self.append_assistant_text(&format!(
-                        "From: /config list\n[i]  **No saved configurations found.**\n\n\
-                             Backups are stored in:\n  `{}`\n\nUse `/config save` to create one.",
-                        saves_dir.display()
-                    ));
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!("config list: no saves in {}", saves_dir.display()),
-                    );
-                    self.status = "config: list empty".to_string();
-                } else {
-                    // Sort newest-first by modification time (FR-010).
-                    entries.sort_by(|a, b| {
-                        b.metadata()
-                            .and_then(|m| m.modified())
-                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                            .cmp(
-                                &a.metadata()
-                                    .and_then(|m| m.modified())
-                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                            )
-                    });
-                    let count = entries.len();
-                    self.config_save_picker = Some(ConfigSavePickerState {
-                        entries,
-                        selected: 0,
-                        scroll_offset: 0,
-                        config_dir: config_dir.clone(),
-                    });
-                    self.append_assistant_text(&format!(
-                        "From: /config list\n[notice] **{} saved configuration(s) found.**\n\n\
-                             Use ^/v (or k/j) to select a backup, Enter to restore, Esc to \
-                             cancel.",
-                        count
-                    ));
-                    self.push_log_no_agent(
-                        LogLevel::Info,
-                        format!(
-                            "config list: opened picker ({} backup(s) in {})",
-                            count,
-                            saves_dir.display()
-                        ),
-                    );
-                    self.status = "config: list".to_string();
+                if self.config_list().is_break() {
+                    return std::ops::ControlFlow::Break(());
                 }
             }
             _ => {
@@ -5344,6 +4918,521 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                     );
                 self.status = "config: usage".to_string();
             }
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Run `/config help` (also bare `/config`): print the sub-command table.
+    ///
+    /// Takes no arguments and returns nothing.
+    fn config_help(&mut self) {
+        self.append_assistant_text(
+                "From: /config help\n\n## /config - Configuration inspection and backup\n\n| Subcommand | Description |\n|---|---|\n| `/config show` | Display application paths and resolved config values (with source: global/project/env) |\n| `/config save` | Back up the global `codemason.json` into the config `saves/` directory |\n| `/config list` | Browse saved backups and restore one (interactive picker) |\n| `/config help` | Show this help |",
+            );
+        self.status = "config: help".to_string();
+    }
+
+    /// Run `/config show`: render application paths, config files, resolved
+    /// values with provenance, and the storage, code-index, memory and agent
+    /// locations.
+    ///
+    /// Takes no arguments and returns nothing.
+    fn config_show(&mut self) {
+        let cwd = self.cwd_path.clone();
+        let data_dir = codemason_config::user_dirs::global_state_dir().unwrap_or_default();
+        let config_dir = codemason_config::user_dirs::global_state_dir().unwrap_or_default();
+
+        // Determine active config file paths
+        let project_config = cwd.join(".codemason").join("codemason.json");
+        let global_config = config_dir.join("codemason.json");
+        let env_config = std::env::var("CODEMASON_CONFIG").ok();
+
+        let mut output = String::from("From: /config show\n\n[dir] **Application Paths**\n\n");
+
+        output.push_str(&crate::app::mdtable::table(
+            &["Path", "Value"],
+            vec![
+                vec![
+                    "Working directory".to_string(),
+                    crate::app::mdtable::cell(&cwd.display().to_string()),
+                ],
+                vec![
+                    "Data directory".to_string(),
+                    crate::app::mdtable::cell(&data_dir.display().to_string()),
+                ],
+                vec![
+                    "Config directory".to_string(),
+                    crate::app::mdtable::cell(&config_dir.display().to_string()),
+                ],
+            ],
+        ));
+
+        output.push_str("\n[file] **Config Files**\n\n");
+
+        let project_exists = project_config.exists();
+        let global_exists = global_config.exists();
+
+        let mut rows = vec![
+            vec![
+                "Project config".to_string(),
+                crate::app::mdtable::cell(&format!(
+                    "{} {}",
+                    project_config.display(),
+                    if project_exists { "[ok]" } else { "[x]" }
+                )),
+            ],
+            vec![
+                "Global config".to_string(),
+                crate::app::mdtable::cell(&format!(
+                    "{} {}",
+                    global_config.display(),
+                    if global_exists { "[ok]" } else { "[x]" }
+                )),
+            ],
+        ];
+        rows.push(vec![
+            "Env (CODEMASON_CONFIG)".to_string(),
+            match &env_config {
+                Some(env_path) => crate::app::mdtable::cell(&format!(
+                    "{} {}",
+                    env_path,
+                    if std::path::PathBuf::from(env_path).exists() {
+                        "[ok]"
+                    } else {
+                        "[x]"
+                    }
+                )),
+                None => "(not set)".to_string(),
+            },
+        ]);
+        output.push_str(&crate::app::mdtable::table(&["Source", "File"], rows));
+
+        // -- Resolved configuration values with provenance -----------
+        // Reload the merged config and, for each top-level key, report
+        // the highest-precedence file that explicitly sets it. Source
+        // detection mirrors Config::load_for(&self.cwd_path) precedence: defaults <
+        // global < project < env file < CODEMASON_CONFIG_CONTENT. Fields
+        // with union/append/OR semantics are annotated "(union)".
+        output.push_str("\n[spin]  **Resolved Values**\n\n");
+
+        self.config_show_resolved_values(
+            &mut output,
+            &global_config,
+            &project_config,
+            env_config.as_deref(),
+        );
+
+        self.config_show_locations(&mut output, &cwd);
+
+        self.append_assistant_text(&output);
+        self.status = "config: show".to_string();
+    }
+
+    /// Append the `/config show` "Resolved Values" table: every top-level key of
+    /// the merged config with its highest-precedence source and redacted value.
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - the report being built; the table (or the load error) is
+    ///   appended to it.
+    /// * `global_config` - path of the global `codemason.json`.
+    /// * `project_config` - path of the project `.codemason/codemason.json`.
+    /// * `env_config` - the `CODEMASON_CONFIG` file path, when set.
+    ///
+    /// Returns nothing.
+    fn config_show_resolved_values(
+        &self,
+        output: &mut String,
+        global_config: &std::path::Path,
+        project_config: &std::path::Path,
+        env_config: Option<&str>,
+    ) {
+        match codemason_agent::Config::load_for(&self.cwd_path) {
+            Ok(cfg) => {
+                let key_source =
+                    Self::config_key_sources(global_config, project_config, env_config);
+
+                // Fields with union/append/OR semantics across layers.
+                let union_fields = [
+                    "permission",
+                    "instructions",
+                    "skill_dirs",
+                    "hooks",
+                    "bash",
+                    "yolo",
+                    "edit_log",
+                    "sdd",
+                    "piegap",
+                    "experimental",
+                ];
+
+                let merged_json = serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
+                if let serde_json::Value::Object(map) = &merged_json {
+                    let mut keys: Vec<&String> = map.keys().collect();
+                    keys.sort();
+                    let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
+                    for key in keys {
+                        let mut value = map.get(key).cloned().unwrap_or_default();
+                        // SEC: value-scan the whole subtree so a
+                        // credential under an innocuous key (nested
+                        // `mcp.*.env`/`headers`, `provider.*.api.headers`,
+                        // URL-userinfo secrets) is masked too, then fully
+                        // mask a top-level key whose *name* is credential-like.
+                        codemason_types::sanitize::redact_json_value(&mut value, 8);
+                        let is_secret_key = codemason_types::sanitize::is_secret_json_key(key);
+                        let rendered = if is_secret_key {
+                            codemason_types::sanitize::REDACTION_PLACEHOLDER.to_string()
+                        } else {
+                            codemason_types::sanitize::redact_secrets(&value.to_string())
+                        };
+                        let source = key_source.get(key).map(String::as_str).unwrap_or(
+                            if key == "config_paths" {
+                                "runtime"
+                            } else {
+                                "defaults"
+                            },
+                        );
+                        let both_files = global_config.exists() && project_config.exists();
+                        let source_label = if union_fields.contains(&key.as_str())
+                            && both_files
+                            && matches!(source, "global" | "project")
+                        {
+                            "global + project (union)"
+                        } else {
+                            source
+                        };
+                        rows.push(vec![
+                            format!("`{}`", crate::app::mdtable::cell(key)),
+                            crate::app::mdtable::cell(source_label),
+                            format!("`{}`", crate::app::mdtable::cell(&rendered)),
+                        ]);
+                    }
+                    output.push_str(&crate::app::mdtable::table(
+                        &["Key", "Source", "Value"],
+                        rows,
+                    ));
+                } else {
+                    output.push_str("(could not serialise merged config)\n");
+                }
+            }
+            Err(e) => {
+                output.push_str(&format!("[err] Failed to load config: {e}\n"));
+            }
+        }
+    }
+
+    /// Map each top-level config key to the highest-precedence layer that sets it
+    /// (defaults < global < project < env file < `CODEMASON_CONFIG_CONTENT`).
+    ///
+    /// # Arguments
+    ///
+    /// * `global_config` - path of the global `codemason.json`.
+    /// * `project_config` - path of the project `.codemason/codemason.json`.
+    /// * `env_config` - the `CODEMASON_CONFIG` file path, when set.
+    ///
+    /// Returns the key-to-source-label map behind the "Source" column.
+    fn config_key_sources(
+        global_config: &std::path::Path,
+        project_config: &std::path::Path,
+        env_config: Option<&str>,
+    ) -> std::collections::HashMap<String, String> {
+        let global_label = if global_config.exists() {
+            "global".to_string()
+        } else {
+            "defaults".to_string()
+        };
+        let project_label = "project";
+
+        // Highest-precedence source per top-level key.
+        let mut key_source: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // 1. Defaults (lowest precedence).
+        let defaults_json = serde_json::to_value(codemason_config::Config::default())
+            .unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(map) = &defaults_json {
+            for k in map.keys() {
+                key_source.insert(k.clone(), "defaults".to_string());
+            }
+        }
+
+        // 2. Global file.
+        if global_config.exists() {
+            if let Ok(raw) = std::fs::read_to_string(global_config) {
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                {
+                    for (k, v) in map {
+                        if !v.is_null() {
+                            key_source.insert(k, global_label.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Project file.
+        if project_config.exists() {
+            if let Ok(raw) = std::fs::read_to_string(project_config) {
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                {
+                    for (k, v) in map {
+                        if !v.is_null() {
+                            key_source.insert(k, project_label.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. CODEMASON_CONFIG env file (higher precedence).
+        if let Some(ref env_path) = env_config {
+            if let Ok(raw) = std::fs::read_to_string(env_path) {
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                {
+                    for (k, v) in map {
+                        if !v.is_null() {
+                            key_source.insert(k, format!("env ({env_path})"));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. CODEMASON_CONFIG_CONTENT inline JSON (highest).
+        if let Ok(content) = std::env::var("CODEMASON_CONFIG_CONTENT") {
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_str::<serde_json::Value>(&content)
+            {
+                for (k, v) in map {
+                    if !v.is_null() {
+                        key_source.insert(k, "env (CODEMASON_CONFIG_CONTENT)".to_string());
+                    }
+                }
+            }
+        }
+        key_source
+    }
+
+    /// Append the `/config show` Storage, Code Index, Memory and Custom Agents
+    /// tables.
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - the report being built; the tables are appended to it.
+    /// * `cwd` - the working directory the project locations are resolved under.
+    ///
+    /// Returns nothing.
+    fn config_show_locations(&self, output: &mut String, cwd: &std::path::Path) {
+        // Storage database
+        output.push_str(&format!(
+            "\n[disk] **Storage**\n\n{}",
+            crate::app::mdtable::table(
+                &["Database", "Path"],
+                vec![vec![
+                    "SQLite".to_string(),
+                    crate::app::mdtable::cell(&self.db_path.display().to_string()),
+                ]],
+            )
+        ));
+
+        // Code index
+        let codeindex_dir = cwd.join(".codemason").join("codeindex");
+        output.push_str("\n[search] **Code Index**\n\n");
+        output.push_str(&crate::app::mdtable::table(
+            &["Directory", "Status"],
+            vec![vec![
+                crate::app::mdtable::cell(&codeindex_dir.display().to_string()),
+                if codeindex_dir.exists() {
+                    "[ok] present"
+                } else {
+                    "[x] missing"
+                }
+                .to_string(),
+            ]],
+        ));
+
+        // Memory
+        let memory_dir = cwd.join(".codemason").join("memory");
+        let global_memory = codemason_config::user_dirs::global_memory_dir();
+        output.push_str("\n[brain] **Memory**\n\n");
+        let presence = |exists: bool| {
+            if exists {
+                "[ok] present"
+            } else {
+                "[x] missing"
+            }
+            .to_string()
+        };
+        let mut rows = vec![vec![
+            "Project memory".to_string(),
+            crate::app::mdtable::cell(&memory_dir.display().to_string()),
+            presence(memory_dir.exists()),
+        ]];
+        rows.push(match &global_memory {
+            Some(dir) => vec![
+                "Global memory".to_string(),
+                crate::app::mdtable::cell(&dir.display().to_string()),
+                presence(dir.exists()),
+            ],
+            None => vec![
+                "Global memory".to_string(),
+                "(unavailable)".to_string(),
+                "[x] missing".to_string(),
+            ],
+        });
+        output.push_str(&crate::app::mdtable::table(
+            &["Store", "Directory", "Status"],
+            rows,
+        ));
+
+        // Agents
+        let project_agents = cwd.join(".codemason").join("agents");
+        let global_agents = codemason_config::user_dirs::global_agents_dir();
+        output.push_str("\n[agent] **Custom Agents**\n\n");
+        let mut rows = vec![vec![
+            "Project agents".to_string(),
+            crate::app::mdtable::cell(&project_agents.display().to_string()),
+            presence(project_agents.exists()),
+        ]];
+        rows.push(match &global_agents {
+            Some(dir) => vec![
+                "Global agents".to_string(),
+                crate::app::mdtable::cell(&dir.display().to_string()),
+                presence(dir.exists()),
+            ],
+            None => vec![
+                "Global agents".to_string(),
+                "(unavailable)".to_string(),
+                "[x] missing".to_string(),
+            ],
+        });
+        output.push_str(&crate::app::mdtable::table(
+            &["Directory", "Path", "Status"],
+            rows,
+        ));
+    }
+
+    /// Run `/config save`: back up the global `codemason.json` into `saves/`.
+    ///
+    /// Reports the backup path or the failure; returns nothing.
+    fn config_save(&mut self) {
+        match codemason_config::Config::backup_global_config(None) {
+            Ok(path) => {
+                self.append_assistant_text(&format!(
+                    "From: /config save\n[ok] **Saved backup to:**\n  `{}`",
+                    path.display()
+                ));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("config save: wrote backup to {}", path.display()),
+                );
+                self.status = "config: saved".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "From: /config save\n[err] **Failed to back up global config:**\n  \
+                             {e}\n\nNo changes were made."
+                ));
+                self.push_log_no_agent(LogLevel::Error, format!("config save: error: {e}"));
+                self.status = "config: save error".to_string();
+            }
+        }
+    }
+
+    /// Run `/config list`: open the saved-backup picker, or report that there are
+    /// no backups.
+    ///
+    /// Returns `Break` when the global config directory cannot be determined, so
+    /// `/config` returns early exactly as before; `Continue` otherwise.
+    fn config_list(&mut self) -> std::ops::ControlFlow<()> {
+        let config_dir = match codemason_config::Config::global_config_dir() {
+            Some(d) => d,
+            None => {
+                self.append_assistant_text(
+                    "From: /config list\n[err] **Cannot determine the global config \
+                         directory for this platform.**",
+                );
+                self.push_log_no_agent(
+                    LogLevel::Error,
+                    "config list: no global config directory".to_string(),
+                );
+                self.status = "config: list error".to_string();
+                return std::ops::ControlFlow::Break(());
+            }
+        };
+        let saves_dir = config_dir.join("saves");
+
+        // Collect files matching the `codemason.json.*` backup pattern,
+        // excluding the transient `.tmp` temp files written during
+        // atomic backup.
+        let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&saves_dir) {
+            Ok(rd) => rd
+                .filter_map(Result::ok)
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let path = e.path();
+                    let is_tmp = std::path::Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"));
+                    if name.starts_with("codemason.json.") && !is_tmp && path.is_file() {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        if entries.is_empty() {
+            // FR-006: no saved configurations available.
+            self.append_assistant_text(&format!(
+                "From: /config list\n[i]  **No saved configurations found.**\n\n\
+                     Backups are stored in:\n  `{}`\n\nUse `/config save` to create one.",
+                saves_dir.display()
+            ));
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!("config list: no saves in {}", saves_dir.display()),
+            );
+            self.status = "config: list empty".to_string();
+        } else {
+            // Sort newest-first by modification time (FR-010).
+            entries.sort_by(|a, b| {
+                b.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                    .cmp(
+                        &a.metadata()
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                    )
+            });
+            let count = entries.len();
+            self.config_save_picker = Some(ConfigSavePickerState {
+                entries,
+                selected: 0,
+                scroll_offset: 0,
+                config_dir: config_dir.clone(),
+            });
+            self.append_assistant_text(&format!(
+                "From: /config list\n[notice] **{} saved configuration(s) found.**\n\n\
+                     Use ^/v (or k/j) to select a backup, Enter to restore, Esc to \
+                     cancel.",
+                count
+            ));
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "config list: opened picker ({} backup(s) in {})",
+                    count,
+                    saves_dir.display()
+                ),
+            );
+            self.status = "config: list".to_string();
         }
         std::ops::ControlFlow::Continue(())
     }
@@ -5366,8 +5455,8 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
             // ~/Library/Application Support/codemason/codemason.json on macOS,
             // %APPDATA%\codemason\codemason.json on Windows).
             "config" => {
-                let config_dir = match dirs::config_dir() {
-                    Some(d) => d.join("codemason"),
+                let config_dir = match codemason_config::Config::global_config_dir() {
+                    Some(d) => d,
                     None => {
                         self.append_assistant_text(
                             "From: /init config\n[err] **Cannot determine the global config \
@@ -5438,7 +5527,14 @@ Usage: `/telemetry help|on|off|setup|counters|logs [<level>]`",
                     return std::ops::ControlFlow::Break(());
                 }
 
-                if let Err(e) = std::fs::write(&config_path, &json) {
+                // UI-06: `create_new`, so a file another process created after
+                // the `exists()` check above is never overwritten.
+                let written = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&config_path)
+                    .and_then(|mut file| std::io::Write::write_all(&mut file, json.as_bytes()));
+                if let Err(e) = written {
                     self.append_assistant_text(&format!(
                         "From: /init config\n[err] **Failed to write config file `{}`: {}**",
                         config_path.display(),
@@ -12398,9 +12494,11 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         .take(40)
                         .map(char::from)
                         .collect();
-                    // SEC-081: register the bearer token before it is
-                    // interpolated into the chat transcript (and thus the log
-                    // spool), so every render path masks it as `[REDACTED]`.
+                    // SEC-081: register the bearer token for redaction before
+                    // it is used, so text that goes through `redact_secrets`
+                    // (the log window, tracing output) masks it. The chat
+                    // transcript below shows it in full on purpose: the user
+                    // needs it to call the API (RS-28).
                     codemason_types::sanitize::register_secret(&token);
                     self.webapi_token = Some(token.clone());
                     let addr = self.webapi_addr.clone();
@@ -12694,38 +12792,10 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 self.codeindex_show();
             }
             "reindex" => {
-                if self.code_index.is_some() {
-                    self.append_assistant_text(
-                                "[sync] **Re-indexing codebase...** scanning files and extracting symbols. This runs in the background; watch the status bar for the indexing indicator.",
-                            );
-                    self.status = "[wait] codeindex: reindexing...".to_string();
-                    match self.spawn_codeindex_reindex() {
-                        Ok(()) => {}
-                        Err(reason) => {
-                            self.append_assistant_text(&format!("[err] {reason}"));
-                            self.status = "codeindex: reindex failed".to_string();
-                        }
-                    }
-                } else {
-                    self.append_assistant_text(
-                        "[warn] Code index is not active. Enable it first with `/codeindex on`.",
-                    );
-                    self.status = "codeindex: not active".to_string();
-                }
+                self.codeindex_reindex();
             }
             "lang" | "languages" => {
-                let languages = codemason_codeindex::scanner::SUPPORTED_LANGUAGES;
-                let mut output = String::from("## Supported Languages\n\n");
-                output.push_str("The code index supports the following languages:\n\n");
-                for (i, lang) in languages.iter().enumerate() {
-                    if i % 5 == 0 && i > 0 {
-                        output.push('\n');
-                    }
-                    output.push_str(&format!("`{lang}`  "));
-                }
-                output.push_str(&format!("\n\n**Total: {} languages**", languages.len()));
-                self.append_assistant_text(&output);
-                self.status = format!("codeindex: {} languages supported", languages.len());
+                self.codeindex_languages();
             }
             "graph" => {
                 // Parse the second word: build | export | lang
@@ -12733,19 +12803,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 match graph_sub {
                     "build" => {
                         if self.code_index.is_some() {
-                            self.append_assistant_text(
-                                        "\u{1f517} **Building semantic edge graph...** deriving typed edges from indexed symbols. This runs in the background; the status bar shows a graph indicator while it works.",
-                                    );
-                            self.status = "[wait] codeindex: building graph...".to_string();
-                            match self.spawn_codeindex_graph_build(None) {
-                                Ok(()) => {}
-                                Err(reason) => {
-                                    self.append_assistant_text(&format!(
-                                        "\u{274c} Graph build failed: {reason}"
-                                    ));
-                                    self.status = "codeindex: graph build failed".to_string();
-                                }
-                            }
+                            self.codeindex_graph_build();
                         } else {
                             self.append_assistant_text(
                                         "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
@@ -12766,19 +12824,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                             );
                             self.status = "codeindex: graph lang (usage)".to_string();
                         } else if self.code_index.is_some() {
-                            self.append_assistant_text(&format!(
-                                          "\u{1f517} **Building graph for language `{lang}`...** This runs in the background; the status bar shows a graph indicator while it works."
-                                      ));
-                            self.status = format!("[wait] codeindex: building graph ({lang})...");
-                            match self.spawn_codeindex_graph_build(Some(lang.to_string())) {
-                                Ok(()) => {}
-                                Err(reason) => {
-                                    self.append_assistant_text(&format!(
-                                        "\u{274c} Graph lang build failed: {reason}"
-                                    ));
-                                    self.status = "codeindex: graph lang failed".to_string();
-                                }
-                            }
+                            self.codeindex_graph_lang(lang);
                         } else {
                             self.append_assistant_text(
                                           "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
@@ -12812,32 +12858,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         );
                         self.status = "codeindex: godnodes (empty graph)".to_string();
                     } else {
-                        match idx.godnodes(n) {
-                            Ok(nodes) => {
-                                let mut output =
-                                    String::from("## God Nodes (Top Most-Connected Symbols)\n\n");
-                                output.push_str("| # | Symbol | Source File | Degree |\n");
-                                output.push_str("|---|--------|-------------|--------|\n");
-                                for (i, node) in nodes.iter().enumerate() {
-                                    output.push_str(&format!(
-                                        "| {} | `{}` | `{}` | {} |\n",
-                                        i + 1,
-                                        crate::app::mdtable::cell(&node.name),
-                                        crate::app::mdtable::cell(&node.source_file),
-                                        node.degree,
-                                    ));
-                                }
-                                self.append_assistant_text(&output);
-                                self.status =
-                                    format!("codeindex: godnodes ({} symbols)", nodes.len());
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "[err] God nodes query failed: {e}"
-                                ));
-                                self.status = "codeindex: godnodes failed".to_string();
-                            }
-                        }
+                        self.codeindex_godnodes(&idx, n);
                     }
                 } else {
                     self.append_assistant_text(
@@ -12863,60 +12884,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         );
                         self.status = "codeindex: explain (empty graph)".to_string();
                     } else {
-                        match idx.explain(symbol) {
-                            Ok(Some(result)) => {
-                                let mut output = format!(
-                                    "## {} `{}` (line {}, degree {})\n\n",
-                                    result.name, result.source_file, result.line, result.degree,
-                                );
-                                output.push_str("### Incoming\n\n");
-                                if result.incoming.is_empty() {
-                                    output.push_str("_(none)_\n\n");
-                                } else {
-                                    output.push_str("| Symbol | File | Kind | Confidence |\n");
-                                    output.push_str("|--------|------|------|------------|\n");
-                                    for conn in &result.incoming {
-                                        output.push_str(&format!(
-                                            "| `{}` | `{}` | {} | {} |\n",
-                                            conn.symbol,
-                                            conn.source_file,
-                                            conn.kind,
-                                            conn.confidence,
-                                        ));
-                                    }
-                                }
-                                output.push_str("\n### Outgoing\n\n");
-                                if result.outgoing.is_empty() {
-                                    output.push_str("_(none)_\n");
-                                } else {
-                                    output.push_str("| Symbol | File | Kind | Confidence |\n");
-                                    output.push_str("|--------|------|------|------------|\n");
-                                    for conn in &result.outgoing {
-                                        output.push_str(&format!(
-                                            "| `{}` | `{}` | {} | {} |\n",
-                                            conn.symbol,
-                                            conn.source_file,
-                                            conn.kind,
-                                            conn.confidence,
-                                        ));
-                                    }
-                                }
-                                self.append_assistant_text(&output);
-                                self.status = "codeindex: explain".to_string();
-                            }
-                            Ok(None) => {
-                                self.append_assistant_text(&format!(
-                                    "[warn] Symbol `{symbol}` not found in the index."
-                                ));
-                                self.status = "codeindex: explain (not found)".to_string();
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "[err] Explain query failed: {e}"
-                                ));
-                                self.status = "codeindex: explain failed".to_string();
-                            }
-                        }
+                        self.codeindex_explain(&idx, symbol);
                     }
                 } else {
                     self.append_assistant_text(
@@ -12944,42 +12912,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         );
                         self.status = "codeindex: path (empty graph)".to_string();
                     } else {
-                        match idx.path(from, to) {
-                            Ok(Some(result)) => {
-                                let mut output = format!(
-                                    "## Shortest Path: {} -> {} ({} hops)\n\n",
-                                    from, to, result.hops,
-                                );
-                                if result.steps.is_empty() {
-                                    output.push_str("(empty path)\n");
-                                } else {
-                                    for (i, (sym, kind)) in result.steps.iter().enumerate() {
-                                        if i == 0 {
-                                            output.push_str(&format!("`{sym}`"));
-                                        } else if let Some(k) = kind {
-                                            output.push_str(&format!(" --{k}--> `{sym}`"));
-                                        } else {
-                                            output.push_str(&format!(" --> `{sym}`"));
-                                        }
-                                    }
-                                    output.push('\n');
-                                }
-                                self.append_assistant_text(&output);
-                                self.status = "codeindex: path".to_string();
-                            }
-                            Ok(None) => {
-                                self.append_assistant_text(&format!(
-                                    "[warn] No path found between `{from}` and `{to}`."
-                                ));
-                                self.status = "codeindex: path (no path)".to_string();
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "[err] Path query failed: {e}"
-                                ));
-                                self.status = "codeindex: path failed".to_string();
-                            }
-                        }
+                        self.codeindex_path(&idx, from, to);
                     }
                 } else {
                     self.append_assistant_text(
@@ -12999,39 +12932,7 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                         );
                         self.status = "codeindex: communities (empty graph)".to_string();
                     } else {
-                        match idx.communities() {
-                            Ok(communities) => {
-                                if communities.is_empty() {
-                                    self.append_assistant_text(
-                                        "[warn] No communities detected. \
-                                                 Run `/codeindex graph build` first.",
-                                    );
-                                    self.status = "codeindex: communities (none)".to_string();
-                                } else {
-                                    let mut output = String::from("## Communities\n\n");
-                                    output.push_str("| Community | Label | Members |\n");
-                                    output.push_str("|-----------|-------|--------|\n");
-                                    for comm in &communities {
-                                        let label = comm.label.as_deref().unwrap_or("-");
-                                        output.push_str(&format!(
-                                            "| {} | {} | {} |\n",
-                                            comm.id, label, comm.member_count,
-                                        ));
-                                    }
-                                    self.append_assistant_text(&output);
-                                    self.status = format!(
-                                        "codeindex: communities ({} found)",
-                                        communities.len()
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                self.append_assistant_text(&format!(
-                                    "[err] Community detection failed: {e}"
-                                ));
-                                self.status = "codeindex: communities failed".to_string();
-                            }
-                        }
+                        self.codeindex_communities(&idx);
                     }
                 } else {
                     self.append_assistant_text(
@@ -13041,62 +12942,10 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 }
             }
             "rebuild" => {
-                if let Some(idx) = self.code_index.clone() {
-                    self.append_assistant_text(
-                        "\u{1f504} **Rebuilding FTS index** from SQLite data...",
-                    );
-                    match idx.rebuild_fts() {
-                        Ok(()) => {
-                            let fts_count = idx.status().map(|s| s.fts_doc_count).unwrap_or(0);
-                            self.append_assistant_text(&format!(
-                                "\u{2705} FTS rebuild complete: {} documents indexed.",
-                                fts_count,
-                            ));
-                            self.status = format!("codeindex: FTS rebuilt ({fts_count} docs)");
-                        }
-                        Err(e) => {
-                            self.append_assistant_text(&format!(
-                                "\u{274c} FTS rebuild failed: {e}"
-                            ));
-                            self.status = "codeindex: rebuild failed".to_string();
-                        }
-                    }
-                } else {
-                    self.append_assistant_text(
-                                "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
-                            );
-                }
+                self.codeindex_rebuild();
             }
             "skillgen" => {
-                self.append_assistant_text(
-                            "\u{1f9e9} **Generating graphify skill...** writing SKILL.md and references to `~/.codemason/skills/graphify/`.",
-                        );
-                match super::skillgen::generate_graphify_skill() {
-                    Ok(result) => {
-                        let action = if result.already_existed {
-                            "Updated"
-                        } else {
-                            "Installed"
-                        };
-                        self.append_assistant_text(&format!(
-                            "\u{2705} {action} graphify skill: {} files written to `{}`.\n\n\
-                                     The skill is now available via `/skill` or `Skill`. \
-                                     It provides a `/graphify` command that turns any folder of \
-                                     files into a navigable knowledge graph with community \
-                                     detection, god nodes, and query/path/explain tools.",
-                            result.files_written,
-                            result.dest.display(),
-                        ));
-                        self.status =
-                            format!("codeindex: skillgen ({} files)", result.files_written);
-                    }
-                    Err(e) => {
-                        self.append_assistant_text(&format!(
-                            "\u{274c} Failed to generate graphify skill: {e}",
-                        ));
-                        self.status = "codeindex: skillgen failed".to_string();
-                    }
-                }
+                self.codeindex_skillgen();
             }
             "help" | "--help" | "-h" => {
                 self.codeindex_help();
@@ -13105,6 +12954,332 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 self.append_assistant_text(
                             "Usage: `/codeindex on|off|show|status|lang|reindex|rebuild|graph <build|export|lang>|explain <symbol>|path <A> <B>|communities|godnodes|skillgen|help`",
                         );
+            }
+        }
+    }
+
+    /// Run `/codeindex reindex`: start a background re-index of the codebase.
+    ///
+    /// Reports a spawn failure, or that the index is not active; returns nothing.
+    fn codeindex_reindex(&mut self) {
+        if self.code_index.is_some() {
+            self.append_assistant_text(
+                        "[sync] **Re-indexing codebase...** scanning files and extracting symbols. This runs in the background; watch the status bar for the indexing indicator.",
+                    );
+            self.status = "[wait] codeindex: reindexing...".to_string();
+            match self.spawn_codeindex_reindex() {
+                Ok(()) => {}
+                Err(reason) => {
+                    self.append_assistant_text(&format!("[err] {reason}"));
+                    self.status = "codeindex: reindex failed".to_string();
+                }
+            }
+        } else {
+            self.append_assistant_text(
+                "[warn] Code index is not active. Enable it first with `/codeindex on`.",
+            );
+            self.status = "codeindex: not active".to_string();
+        }
+    }
+
+    /// Run `/codeindex lang` (alias `languages`): list the languages the code
+    /// index supports.
+    ///
+    /// Takes no arguments and returns nothing.
+    fn codeindex_languages(&mut self) {
+        let languages = codemason_codeindex::scanner::SUPPORTED_LANGUAGES;
+        let mut output = String::from("## Supported Languages\n\n");
+        output.push_str("The code index supports the following languages:\n\n");
+        for (i, lang) in languages.iter().enumerate() {
+            if i % 5 == 0 && i > 0 {
+                output.push('\n');
+            }
+            output.push_str(&format!("`{lang}`  "));
+        }
+        output.push_str(&format!("\n\n**Total: {} languages**", languages.len()));
+        self.append_assistant_text(&output);
+        self.status = format!("codeindex: {} languages supported", languages.len());
+    }
+
+    /// Run `/codeindex graph build` once the index is known to be active: start
+    /// the background semantic edge graph build.
+    ///
+    /// Reports a spawn failure; returns nothing.
+    fn codeindex_graph_build(&mut self) {
+        self.append_assistant_text(
+                    "\u{1f517} **Building semantic edge graph...** deriving typed edges from indexed symbols. This runs in the background; the status bar shows a graph indicator while it works.",
+                );
+        self.status = "[wait] codeindex: building graph...".to_string();
+        match self.spawn_codeindex_graph_build(None) {
+            Ok(()) => {}
+            Err(reason) => {
+                self.append_assistant_text(&format!("\u{274c} Graph build failed: {reason}"));
+                self.status = "codeindex: graph build failed".to_string();
+            }
+        }
+    }
+
+    /// Run `/codeindex graph lang <lang>` once the index is known to be active:
+    /// start a background graph build restricted to one language.
+    ///
+    /// # Arguments
+    ///
+    /// * `lang` - the language name (non-empty).
+    ///
+    /// Reports a spawn failure; returns nothing.
+    fn codeindex_graph_lang(&mut self, lang: &str) {
+        self.append_assistant_text(&format!(
+                      "\u{1f517} **Building graph for language `{lang}`...** This runs in the background; the status bar shows a graph indicator while it works."
+                  ));
+        self.status = format!("[wait] codeindex: building graph ({lang})...");
+        match self.spawn_codeindex_graph_build(Some(lang.to_string())) {
+            Ok(()) => {}
+            Err(reason) => {
+                self.append_assistant_text(&format!("\u{274c} Graph lang build failed: {reason}"));
+                self.status = "codeindex: graph lang failed".to_string();
+            }
+        }
+    }
+
+    /// Render `/codeindex godnodes` once the arm's guards have passed: list the
+    /// N most-connected symbols.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - the active code index (its graph is known to be non-empty).
+    /// * `n` - how many symbols to list (already clamped to 1..=100).
+    ///
+    /// Reports the table or the query failure; returns nothing.
+    fn codeindex_godnodes(&mut self, idx: &codemason_codeindex::CodeIndex, n: usize) {
+        match idx.godnodes(n) {
+            Ok(nodes) => {
+                let mut output = String::from("## God Nodes (Top Most-Connected Symbols)\n\n");
+                output.push_str("| # | Symbol | Source File | Degree |\n");
+                output.push_str("|---|--------|-------------|--------|\n");
+                for (i, node) in nodes.iter().enumerate() {
+                    output.push_str(&format!(
+                        "| {} | `{}` | `{}` | {} |\n",
+                        i + 1,
+                        crate::app::mdtable::cell(&node.name),
+                        crate::app::mdtable::cell(&node.source_file),
+                        node.degree,
+                    ));
+                }
+                self.append_assistant_text(&output);
+                self.status = format!("codeindex: godnodes ({} symbols)", nodes.len());
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!("[err] God nodes query failed: {e}"));
+                self.status = "codeindex: godnodes failed".to_string();
+            }
+        }
+    }
+
+    /// Render `/codeindex explain <symbol>` once the arm's guards have passed:
+    /// show the symbol's incoming and outgoing graph edges.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - the active code index (its graph is known to be non-empty).
+    /// * `symbol` - the symbol name (non-empty).
+    ///
+    /// Reports the edges, a not-found notice or the query failure; returns
+    /// nothing.
+    fn codeindex_explain(&mut self, idx: &codemason_codeindex::CodeIndex, symbol: &str) {
+        match idx.explain(symbol) {
+            Ok(Some(result)) => {
+                let mut output = format!(
+                    "## {} `{}` (line {}, degree {})\n\n",
+                    result.name, result.source_file, result.line, result.degree,
+                );
+                output.push_str("### Incoming\n\n");
+                if result.incoming.is_empty() {
+                    output.push_str("_(none)_\n\n");
+                } else {
+                    output.push_str("| Symbol | File | Kind | Confidence |\n");
+                    output.push_str("|--------|------|------|------------|\n");
+                    for conn in &result.incoming {
+                        output.push_str(&format!(
+                            "| `{}` | `{}` | {} | {} |\n",
+                            conn.symbol, conn.source_file, conn.kind, conn.confidence,
+                        ));
+                    }
+                }
+                output.push_str("\n### Outgoing\n\n");
+                if result.outgoing.is_empty() {
+                    output.push_str("_(none)_\n");
+                } else {
+                    output.push_str("| Symbol | File | Kind | Confidence |\n");
+                    output.push_str("|--------|------|------|------------|\n");
+                    for conn in &result.outgoing {
+                        output.push_str(&format!(
+                            "| `{}` | `{}` | {} | {} |\n",
+                            conn.symbol, conn.source_file, conn.kind, conn.confidence,
+                        ));
+                    }
+                }
+                self.append_assistant_text(&output);
+                self.status = "codeindex: explain".to_string();
+            }
+            Ok(None) => {
+                self.append_assistant_text(&format!(
+                    "[warn] Symbol `{symbol}` not found in the index."
+                ));
+                self.status = "codeindex: explain (not found)".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!("[err] Explain query failed: {e}"));
+                self.status = "codeindex: explain failed".to_string();
+            }
+        }
+    }
+
+    /// Render `/codeindex path <A> <B>` once the arm's guards have passed: show
+    /// the shortest graph path between two symbols.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - the active code index (its graph is known to be non-empty).
+    /// * `from` - the start symbol (non-empty).
+    /// * `to` - the end symbol (non-empty).
+    ///
+    /// Reports the path, a no-path notice or the query failure; returns nothing.
+    fn codeindex_path(&mut self, idx: &codemason_codeindex::CodeIndex, from: &str, to: &str) {
+        match idx.path(from, to) {
+            Ok(Some(result)) => {
+                let mut output = format!(
+                    "## Shortest Path: {} -> {} ({} hops)\n\n",
+                    from, to, result.hops,
+                );
+                if result.steps.is_empty() {
+                    output.push_str("(empty path)\n");
+                } else {
+                    for (i, (sym, kind)) in result.steps.iter().enumerate() {
+                        if i == 0 {
+                            output.push_str(&format!("`{sym}`"));
+                        } else if let Some(k) = kind {
+                            output.push_str(&format!(" --{k}--> `{sym}`"));
+                        } else {
+                            output.push_str(&format!(" --> `{sym}`"));
+                        }
+                    }
+                    output.push('\n');
+                }
+                self.append_assistant_text(&output);
+                self.status = "codeindex: path".to_string();
+            }
+            Ok(None) => {
+                self.append_assistant_text(&format!(
+                    "[warn] No path found between `{from}` and `{to}`."
+                ));
+                self.status = "codeindex: path (no path)".to_string();
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!("[err] Path query failed: {e}"));
+                self.status = "codeindex: path failed".to_string();
+            }
+        }
+    }
+
+    /// Render `/codeindex communities` once the arm's guards have passed: list
+    /// the detected symbol communities.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - the active code index (its graph is known to be non-empty).
+    ///
+    /// Reports the table, a none-found notice or the failure; returns nothing.
+    fn codeindex_communities(&mut self, idx: &codemason_codeindex::CodeIndex) {
+        match idx.communities() {
+            Ok(communities) => {
+                if communities.is_empty() {
+                    self.append_assistant_text(
+                        "[warn] No communities detected. \
+                                 Run `/codeindex graph build` first.",
+                    );
+                    self.status = "codeindex: communities (none)".to_string();
+                } else {
+                    let mut output = String::from("## Communities\n\n");
+                    output.push_str("| Community | Label | Members |\n");
+                    output.push_str("|-----------|-------|--------|\n");
+                    for comm in &communities {
+                        let label = comm.label.as_deref().unwrap_or("-");
+                        output.push_str(&format!(
+                            "| {} | {} | {} |\n",
+                            comm.id, label, comm.member_count,
+                        ));
+                    }
+                    self.append_assistant_text(&output);
+                    self.status = format!("codeindex: communities ({} found)", communities.len());
+                }
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!("[err] Community detection failed: {e}"));
+                self.status = "codeindex: communities failed".to_string();
+            }
+        }
+    }
+
+    /// Run `/codeindex rebuild`: rebuild the full-text search index from the
+    /// SQLite data.
+    ///
+    /// Reports the document count, a failure, or that the index is not active;
+    /// returns nothing.
+    fn codeindex_rebuild(&mut self) {
+        if let Some(idx) = self.code_index.clone() {
+            self.append_assistant_text("\u{1f504} **Rebuilding FTS index** from SQLite data...");
+            match idx.rebuild_fts() {
+                Ok(()) => {
+                    let fts_count = idx.status().map(|s| s.fts_doc_count).unwrap_or(0);
+                    self.append_assistant_text(&format!(
+                        "\u{2705} FTS rebuild complete: {} documents indexed.",
+                        fts_count,
+                    ));
+                    self.status = format!("codeindex: FTS rebuilt ({fts_count} docs)");
+                }
+                Err(e) => {
+                    self.append_assistant_text(&format!("\u{274c} FTS rebuild failed: {e}"));
+                    self.status = "codeindex: rebuild failed".to_string();
+                }
+            }
+        } else {
+            self.append_assistant_text(
+                "\u{26a0}\u{fe0f} Code index is not active. Enable it first with `/codeindex on`.",
+            );
+        }
+    }
+
+    /// Run `/codeindex skillgen`: install or update the graphify skill under
+    /// `~/.codemason/skills/graphify/`.
+    ///
+    /// Reports the files written or the failure; returns nothing.
+    fn codeindex_skillgen(&mut self) {
+        self.append_assistant_text(
+                    "\u{1f9e9} **Generating graphify skill...** writing SKILL.md and references to `~/.codemason/skills/graphify/`.",
+                );
+        match super::skillgen::generate_graphify_skill() {
+            Ok(result) => {
+                let action = if result.already_existed {
+                    "Updated"
+                } else {
+                    "Installed"
+                };
+                self.append_assistant_text(&format!(
+                    "\u{2705} {action} graphify skill: {} files written to `{}`.\n\n\
+                             The skill is now available via `/skill` or `Skill`. \
+                             It provides a `/graphify` command that turns any folder of \
+                             files into a navigable knowledge graph with community \
+                             detection, god nodes, and query/path/explain tools.",
+                    result.files_written,
+                    result.dest.display(),
+                ));
+                self.status = format!("codeindex: skillgen ({} files)", result.files_written);
+            }
+            Err(e) => {
+                self.append_assistant_text(&format!(
+                    "\u{274c} Failed to generate graphify skill: {e}",
+                ));
+                self.status = "codeindex: skillgen failed".to_string();
             }
         }
     }
@@ -13519,9 +13694,8 @@ edges, creates an ephemeral team, and orchestrates parallel execution.\n";
                 // Find the config file path
                 let cwd = self.cwd_path.clone();
                 let project_config = cwd.join(".codemason").join("codemason.json");
-                let config_dir = dirs::config_dir()
-                    .unwrap_or_else(|| cwd.clone())
-                    .join("codemason");
+                let config_dir = codemason_config::Config::global_config_dir()
+                    .unwrap_or_else(|| cwd.join("codemason"));
                 let global_config = config_dir.join("codemason.json");
 
                 let config_path = if project_config.exists() {

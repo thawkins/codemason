@@ -28,8 +28,8 @@
 //! (FR-016, FR-018).
 
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -1410,13 +1410,8 @@ fn api_version(api: &str, probe: bool) -> String {
 /// read into the report, so no secret can leak (FR-008).
 fn run_probe(probe: &Probe) -> Option<(bool, String)> {
     let mut command = Command::new(probe.program);
-    command
-        .args(probe.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = command.spawn().ok()?;
-    let output = wait_with_timeout(child, PROBE_TIMEOUT)?;
+    command.args(probe.args);
+    let output = run_with_timeout(&mut command, PROBE_TIMEOUT)?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push('\n');
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -1426,33 +1421,19 @@ fn run_probe(probe: &Probe) -> Option<(bool, String)> {
 /// Timeout for a single vendor diagnostic (FR-020).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Wait for a child to exit, killing it once `timeout` elapses.
+/// Run `command` (stdin null, output captured), killing it once `timeout`
+/// elapses.
 ///
-/// Returns `None` on timeout (after killing and reaping the child so nothing is
-/// orphaned) and `Some(output)` once the process exits (FR-011).
-fn wait_with_timeout(
-    mut child: std::process::Child,
-    timeout: Duration,
-) -> Option<std::process::Output> {
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().ok(),
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
+/// Returns `None` when it cannot be spawned or times out (the process tree is
+/// then killed and reaped, so nothing is orphaned) and `Some(output)` once it
+/// exits (FR-011). The output drains while the probe runs, so a verbose probe
+/// (`rocminfo` on a multi-GPU host) is not mistaken for a hung one (AG-07).
+#[doc(hidden)]
+pub fn run_with_timeout(command: &mut Command, timeout: Duration) -> Option<std::process::Output> {
+    crate::child_process::run_with_deadline(command, None, timeout)
+        .ok()?
+        .into_output(timeout)
+        .ok()
 }
 
 /// Enumerate graphics adapters from the Linux DRM sysfs tree.

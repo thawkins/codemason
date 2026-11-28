@@ -802,8 +802,8 @@ impl App {
             }
             ResearchCliCommand::Delete { name, yes } => {
                 if !yes {
-                    // The TUI has no inline y/N prompt, so the flag is the
-                    // confirmation.
+                    // This command opens no confirm dialog, so the `--yes`
+                    // flag is the confirmation.
                     self.append_assistant_text(&format!(
                         "From: /research delete\n\nNot deleted. Deleting `research/{name}` \
                          cannot be undone; confirm with `/research delete {name} --yes`."
@@ -1024,11 +1024,7 @@ impl App {
                             .session
                             .selected_model
                             .as_deref()
-                            .and_then(|s| s.split_once('/'))
-                            .map(|(p, m)| codemason_agent::agent::ModelRef {
-                                provider_id: p.to_string(),
-                                model_id: m.to_string(),
-                            });
+                            .and_then(codemason_agent::agent::ModelRef::split_slash);
                         let Some(model_ref) = model_ref else {
                             self.status = format!("research: cluster '{name}' no model selected");
                             self.append_assistant_text(&format!(

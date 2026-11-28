@@ -581,3 +581,54 @@ fn add_error_io_preserves_the_source_chain() {
     // rather than parse a string.
     let _: &dyn std::error::Error = io;
 }
+
+// -- RS-05: the archive entry count is bounded --------------------------------
+
+/// `MAX_ARCHIVE_ENTRIES + 1` zero-byte entries plus a valid manifest.
+fn many_empty_entries() -> Vec<(String, &'static str)> {
+    let mut files = vec![
+        ("codex-plugin.json".to_string(), CODEX),
+        ("index.js".to_string(), "// entry"),
+    ];
+    files.extend((0..=codemason_plugins::MAX_ARCHIVE_ENTRIES).map(|i| (format!("e/{i}"), "")));
+    files
+}
+
+fn assert_entry_cap_refused(err: &AddError) {
+    let AddError::Io(io) = err else {
+        panic!("expected an entry-count refusal, got {err:?}");
+    };
+    assert!(
+        io.message_str().contains("entries"),
+        "got: {}",
+        io.message_str()
+    );
+}
+
+#[test]
+fn add_zip_with_too_many_entries_is_refused() {
+    let tree = TempTree::new("zip-many");
+    let zip_path = tree.0.join("src/many.zip");
+    let files = many_empty_entries();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(n, b)| (n.as_str(), *b)).collect();
+    make_zip(&zip_path, &refs);
+
+    let err = add(&dirs(&tree), &tree.0, zip_path.to_str().unwrap(), false)
+        .expect_err("an archive past the entry cap must be refused");
+    assert_entry_cap_refused(&err);
+    assert!(scan_dirs(dirs(&tree)).is_empty());
+}
+
+#[test]
+fn add_tar_gz_with_too_many_entries_is_refused() {
+    let tree = TempTree::new("tgz-many");
+    let tgz_path = tree.0.join("src/many.tar.gz");
+    let files = many_empty_entries();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(n, b)| (n.as_str(), *b)).collect();
+    make_tar_gz(&tgz_path, &refs);
+
+    let err = add(&dirs(&tree), &tree.0, tgz_path.to_str().unwrap(), false)
+        .expect_err("an archive past the entry cap must be refused");
+    assert_entry_cap_refused(&err);
+    assert!(scan_dirs(dirs(&tree)).is_empty());
+}

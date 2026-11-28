@@ -349,8 +349,7 @@ impl LlmClient for CopilotClient {
         let timeout_secs = request
             .stream_timeout_secs
             .unwrap_or(super::http_client::DEFAULT_STREAM_TIMEOUT_SECS);
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
+        let response = super::http_client::send_within_first_byte_timeout(
             self.http
                 .post(&url)
                 .header(
@@ -369,18 +368,13 @@ impl LlmClient for CopilotClient {
                 .header("x-session-id", request.session_id.as_deref().unwrap_or(""))
                 .body(body_bytes)
                 .send(),
+            timeout_secs,
+            "copilot",
+            &url,
+            || format!("HTTP 408: Copilot API request timed out after {timeout_secs}s"),
+            || format!("Failed to connect to GitHub Copilot API at {url}"),
         )
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(provider = "copilot", url = %url, error = %e, "chat request timed out");
-        })
-        .map_err(|_| {
-            anyhow::anyhow!("HTTP 408: Copilot API request timed out after {timeout_secs}s")
-        })?
-        .inspect_err(|e| {
-            tracing::warn!(provider = "copilot", url = %url, error = %e, "chat request failed");
-        })
-        .with_context(|| format!("Failed to connect to GitHub Copilot API at {url}"))?;
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             // ANTIPAT 3.1/3.2: capped error-body read.
@@ -526,8 +520,19 @@ impl LlmClient for CopilotClient {
                         // Tool calls
                         if let Some(tool_calls) = delta["tool_calls"].as_array() {
                             for tc in tool_calls {
-                                let index = tc["index"].as_u64().unwrap_or(0);
-                                let key = StreamKey::Index(index);
+                                // FUNC-032 / CO-06: `unwrap_or(0)` merged index-less parallel
+
+                                // calls onto stream 0. Key such a call by its id instead, and
+
+                                // skip a frame that names neither, as the shared SSE parser does.
+
+                                let Some(key) = StreamKey::from_frame(tc["index"].as_u64(), tc["id"].as_str()) else {
+
+                                    tracing::warn!("tool_call delta without an index or id; skipping frame");
+
+                                    continue;
+
+                                };
 
                                 if let Some(id) = tc["id"].as_str() {
                                     acc.set_id(&key, id);

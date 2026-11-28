@@ -247,7 +247,12 @@ pub(crate) fn elided_galley(
 /// without the stack (a test harness) still draws the label.
 #[must_use]
 pub fn label_large(ctx: &egui::Context) -> egui::FontId {
-    let size = crate::metrics::text_size::BODY;
+    label_font(ctx, crate::metrics::text_size::BODY)
+}
+
+/// The bold label font at `size` points, falling back to egui's proportional
+/// family when the window's font stack is not installed (see [`label_large`]).
+pub(crate) fn label_font(ctx: &egui::Context, size: f32) -> egui::FontId {
     let bold = egui::FontFamily::Name(crate::fonts::BOLD_FAMILY.into());
     let installed = ctx.fonts_mut(|fonts| fonts.definitions().families.contains_key(&bold));
     if installed {

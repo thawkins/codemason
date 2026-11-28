@@ -1273,6 +1273,9 @@ impl App {
     /// Dispatch a key event to the active UI region (history picker, agent /
     /// teams dialog, slash menu, context menu, or the main input editor).
     /// Asserts UI invariants and logs the transition for diagnostics.
+    ///
+    /// The routing order is the precedence order: the first region that
+    /// consumes the key wins and nothing after it sees the key.
     async fn dispatch_key(&mut self, key: KeyInput) {
         let before_input = self.session.input.clone();
         let before_cursor = self.session.input_cursor;
@@ -1285,6 +1288,48 @@ impl App {
         if self.prune_stale_selection() && key.key == Key::Esc {
             return;
         }
+        if self.dismiss_run_cost_banner_for_key(key) == KeyRoute::Handled {
+            return;
+        }
+        if let Some(label) = self.route_overlay_key(key).await {
+            self.assert_ui_invariants();
+            self.debug_log_input_transition(label, &before_input, before_cursor);
+            return;
+        }
+        if let Some(action) = input::handle_key(self, key).await
+            && self.apply_input_action(action).await == KeyRoute::Handled
+        {
+            return;
+        }
+        self.assert_ui_invariants();
+        self.debug_log_input_transition("key", &before_input, before_cursor);
+    }
+}
+
+/// Whether a key-dispatch step ended the dispatch.
+///
+/// `Handled` means the caller must return at once (skipping every later
+/// step, including the trailing invariant check and transition log);
+/// `NotHandled` means dispatch continues with the next step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyRoute {
+    /// The step ended the dispatch; return immediately.
+    Handled,
+    /// Continue with the next dispatch step.
+    NotHandled,
+}
+
+impl App {
+    /// Dismiss the transient run-cost banner, if one is showing.
+    ///
+    /// # Arguments
+    /// * `key` - the key press being dispatched.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when the key was consumed solely to clear the
+    /// banner, otherwise [`KeyRoute::NotHandled`] (no banner, or the key
+    /// must still reach normal processing).
+    fn dismiss_run_cost_banner_for_key(&mut self, key: KeyInput) -> KeyRoute {
         // Dismiss the transient run-cost banner on any keypress (FR-012).
         // Non-character keys (Esc, arrows, Enter, modifier-only, etc.) are
         // consumed solely to clear the banner.  A plain printable character,
@@ -1306,24 +1351,35 @@ impl App {
             // quitting works identically while the cost banner is showing
             // (LOW-6).
             if !is_plain_char && !is_confirm && !input::is_global_quit_key(key) {
-                return;
+                return KeyRoute::Handled;
             }
         }
+        KeyRoute::NotHandled
+    }
+
+    /// Offer the key to the open overlays, modals and windows in precedence
+    /// order: config-save picker, command palette, theme editor, theme
+    /// picker, history picker, row-action confirmation, Agents window, Teams
+    /// window.
+    ///
+    /// # Arguments
+    /// * `key` - the key press being dispatched.
+    ///
+    /// # Returns
+    /// The transition-log label of the overlay that consumed the key, or
+    /// `None` when no overlay took it and it must reach the input editor.
+    async fn route_overlay_key(&mut self, key: KeyInput) -> Option<&'static str> {
         // Config-save picker intercepts all keys while it is open - except the
         // global quit keys, which must keep working from every screen (LOW-6).
         if self.config_save_picker.is_some() && !input::is_global_quit_key(key) {
             self.handle_config_save_picker_key(key);
-            self.assert_ui_invariants();
-            self.debug_log_input_transition("key-config-save-picker", &before_input, before_cursor);
-            return;
+            return Some("key-config-save-picker");
         }
         // The command palette takes its keys while it is open, except the
         // global quit keys; typing goes to its search field.
         if self.palette.is_some() && !input::is_global_quit_key(key) {
             self.handle_palette_key(key).await;
-            self.assert_ui_invariants();
-            self.debug_log_input_transition("key-palette", &before_input, before_cursor);
-            return;
+            return Some("key-palette");
         }
         // The theme editor sits on top of the theme picker and takes every
         // key while it is open: Esc cancels the edit (asking once when there
@@ -1334,25 +1390,19 @@ impl App {
             if key.key == Key::Esc {
                 self.escape_theme_edit();
             }
-            self.assert_ui_invariants();
-            self.debug_log_input_transition("key-theme-editor", &before_input, before_cursor);
-            return;
+            return Some("key-theme-editor");
         }
         // The theme picker intercepts all keys while it is open, except the
         // global quit keys.
         if self.theme_picker.is_some() && !input::is_global_quit_key(key) {
             self.handle_theme_picker_key(key);
-            self.assert_ui_invariants();
-            self.debug_log_input_transition("key-theme-picker", &before_input, before_cursor);
-            return;
+            return Some("key-theme-picker");
         }
         // History picker intercepts all keys while it is open - except the
         // global quit keys, which must keep working from every screen (LOW-6).
         if self.history_picker.is_some() && !input::is_global_quit_key(key) {
             self.handle_history_picker_key(key);
-            self.assert_ui_invariants();
-            self.debug_log_input_transition("key-history-picker", &before_input, before_cursor);
-            return;
+            return Some("key-history-picker");
         }
         // Destructive row-action confirmation dialog (spec `agentui` T-009):
         // while it is open it owns the keyboard, before the Agents/Teams arms
@@ -1362,23 +1412,8 @@ impl App {
         // move between `Yes` and `No`, `Enter` selects, `Esc` dismisses;
         // everything else is swallowed so nothing reaches the input buffer.
         if self.row_action_confirm_open() {
-            match key.key {
-                Key::Left | Key::Right | Key::Tab | Key::BackTab => {
-                    self.row_action_confirm_toggle();
-                }
-                Key::Enter => {
-                    if self.row_action_confirm_is_yes() {
-                        self.row_action_confirm_accept();
-                    } else {
-                        self.row_action_confirm_cancel();
-                    }
-                }
-                Key::Esc => self.row_action_confirm_cancel(),
-                _ => {}
-            }
-            self.assert_ui_invariants();
-            self.debug_log_input_transition("key-row-action-confirm", &before_input, before_cursor);
-            return;
+            self.route_row_action_confirm_key(key);
+            return Some("key-row-action-confirm");
         }
         // Agent / Teams dialog keyboard shortcuts. The popup owns the keyboard
         // for its navigation keys only (FR-055): unmapped keys still reach the
@@ -1387,1037 +1422,1074 @@ impl App {
         if self.show_agents_window
             && self.output_view.is_none()
             && super::window_owns_key(super::KeyWindow::Agents, key)
+            && self.route_agents_window_key(key) == KeyRoute::Handled
         {
-            let consumed = match key.key {
-                Key::Up => {
-                    self.move_agents_cursor(-1);
-                    true
-                }
-                Key::Down => {
-                    self.move_agents_cursor(1);
-                    true
-                }
-                Key::PageUp => {
-                    self.page_agents_cursor(-1);
-                    true
-                }
-                Key::PageDown => {
-                    self.page_agents_cursor(1);
-                    true
-                }
-                Key::Char(' ') => {
-                    self.agents_cursor_toggle_stop_resume();
-                    true
-                }
-                Key::Delete => {
-                    self.agents_cursor_kill();
-                    true
-                }
-                Key::Enter => {
-                    self.agents_cursor_open_output();
-                    true
-                }
-                Key::Char('K') if key.mods.contains(Modifiers::SHIFT) => {
-                    self.agents_cursor_kill();
-                    true
-                }
-                // `Esc` is the window's only dismissal: the modal carries no
-                // Close button, so the footer legend ends with `Esc close`.
-                Key::Esc => {
-                    self.close_agents_window();
-                    true
-                }
-                _ => false,
-            };
-            if consumed {
-                self.assert_ui_invariants();
-                self.debug_log_input_transition("key-agents-window", &before_input, before_cursor);
-                return;
-            }
+            return Some("key-agents-window");
         }
         if self.show_teams_window
             && self.output_view.is_none()
             && super::window_owns_key(super::KeyWindow::Teams, key)
+            && self.route_teams_window_key(key) == KeyRoute::Handled
         {
-            let consumed = match key.key {
-                Key::Up => {
-                    self.move_teams_cursor(-1);
-                    true
-                }
-                Key::Down => {
-                    self.move_teams_cursor(1);
-                    true
-                }
-                Key::PageUp => {
-                    self.page_teams_cursor(-1);
-                    true
-                }
-                Key::PageDown => {
-                    self.page_teams_cursor(1);
-                    true
-                }
-                Key::Char(' ') => {
-                    self.teams_cursor_toggle_stop_resume();
-                    true
-                }
-                Key::Delete => {
-                    self.teams_cursor_shutdown();
-                    true
-                }
-                Key::Enter => {
-                    self.teams_cursor_focus();
-                    true
-                }
-                Key::Char('K') | Key::Char('k') => {
-                    self.teams_cursor_shutdown();
-                    true
-                }
-                // Mirror the Agents window: `Esc` dismisses, since there is no
-                // Close button to click.
-                Key::Esc => {
-                    self.close_teams_window();
-                    true
-                }
-                _ => false,
-            };
-            if consumed {
-                self.assert_ui_invariants();
-                self.debug_log_input_transition("key-teams-window", &before_input, before_cursor);
-                return;
-            }
+            return Some("key-teams-window");
         }
+        None
+    }
 
-        if let Some(action) = input::handle_key(self, key).await {
-            match action {
-                InputAction::BangCommand(text) => {
-                    // Create session if needed, then run the command.
-                    if self.session.session_id.is_none() {
-                        let dir = self.cwd_path.clone();
-                        match self.session_processor.session_manager.create_session(dir) {
-                            Ok(session) => {
-                                self.session.session_id = Some(session.id.clone());
-                                // A fresh session starts with an empty queue (NFR-005).
-                                self.clear_input_queue();
-                                let short_sid = short_session_id(&session.id);
-                                self.sid_to_display_name
-                                    .insert(short_sid, self.session.agent_name.clone());
-                            }
-                            Err(e) => {
-                                self.status = format!("error: {e}");
-                                return;
-                            }
-                        }
-                    }
-                    self.dispatch_bang_command(text);
+    /// Answer the destructive row-action confirmation dialog with `key`.
+    ///
+    /// # Arguments
+    /// * `key` - the key press being dispatched.
+    fn route_row_action_confirm_key(&mut self, key: KeyInput) {
+        match key.key {
+            Key::Left | Key::Right | Key::Tab | Key::BackTab => {
+                self.row_action_confirm_toggle();
+            }
+            Key::Enter => {
+                if self.row_action_confirm_is_yes() {
+                    self.row_action_confirm_accept();
+                } else {
+                    self.row_action_confirm_cancel();
                 }
-                InputAction::SendMessage(text) => {
-                    // FR-058 (amended): teammate focus in the Teams pane does
-                    // not redirect the input box. Enter addresses the focused
-                    // session: opening a leader or teammate row in the Sessions
-                    // pane makes that agent the target (below), and
-                    // `/team message <name> <text>` reaches a teammate from
-                    // anywhere.
-                    // A running sub-agent takes the message into its current
-                    // run, so it is neither queued nor held for compaction; a
-                    // team leader or teammate gets it as a direct user turn.
-                    if self.session.session_id.as_deref().is_some_and(|id| {
-                        self.active_subagent_task(id).is_some() || self.is_team_agent_session(id)
-                    }) {
-                        let image_paths = std::mem::take(&mut self.session.pending_attachments);
-                        self.dispatch_user_message(text, image_paths);
-                        return;
-                    }
-                    // Block sending if no provider/model is configured
-                    if self.configured_provider.is_none() {
-                        self.status =
-                            "[!] No provider configured - use /provider to set up".to_string();
-                        return;
-                    }
-                    if self.session.selected_model.is_none() {
-                        self.status = "[!] No model selected - use /model to choose".to_string();
-                        return;
-                    }
-                    // FR-002/FR-005/FR-012: while the primary agent is
-                    // executing the input field stays live; a plain message is
-                    // accepted and queued instead of being rejected.
-                    // FR-016: never queue a compaction-pending send or overlap
-                    // a running turn.
-                    if self.is_input_blocked() {
-                        let image_paths: Vec<std::path::PathBuf> =
-                            std::mem::take(&mut self.session.pending_attachments);
-                        if let Err(rejected) = self.enqueue_input(text, image_paths) {
-                            // FR-004: the queue is at capacity. The submission
-                            // is rejected, but the typed text and staged
-                            // attachments must not be lost.
-                            self.session.input = rejected.text;
-                            self.session.input_cursor = self.input_len_chars();
-                            self.session.pending_attachments = rejected.image_paths;
-                        }
-                        return;
-                    }
-                    // Create session if needed
-                    if self.session.session_id.is_none() {
-                        let dir = self.cwd_path.clone();
-                        match self.session_processor.session_manager.create_session(dir) {
-                            Ok(session) => {
-                                self.session.session_id = Some(session.id.clone());
-                                // A fresh session starts with an empty queue (NFR-005).
-                                self.clear_input_queue();
-                                // Map the primary session's short_sid to the current agent name
-                                let short_sid = short_session_id(&session.id);
-                                self.sid_to_display_name
-                                    .insert(short_sid, self.session.agent_name.clone());
-                            }
-                            Err(e) => {
-                                self.status = format!("error: {}", e);
-                                return;
-                            }
-                        }
-                    }
+            }
+            Key::Esc => self.row_action_confirm_cancel(),
+            _ => {}
+        }
+    }
 
-                    // Take image attachments once; either queue for auto-compaction
-                    // or send immediately.
-                    let image_paths: Vec<std::path::PathBuf> =
-                        std::mem::take(&mut self.session.pending_attachments);
-                    if self.should_auto_compact_before_send() {
-                        self.session.pending_send_after_compact = Some((text, image_paths));
-                        if !self.start_compaction(true) {
-                            // If compaction could not start, fall back to direct send.
-                            if let Some((queued_text, queued_images)) =
-                                self.session.pending_send_after_compact.take()
-                            {
-                                self.dispatch_user_message(queued_text, queued_images);
-                            }
-                        }
-                        return;
-                    }
-                    self.dispatch_user_message(text, image_paths);
+    /// Apply an Agents-window navigation key.
+    ///
+    /// # Arguments
+    /// * `key` - the key press being dispatched.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when the window consumed the key, otherwise
+    /// [`KeyRoute::NotHandled`] so it falls through to the next region.
+    fn route_agents_window_key(&mut self, key: KeyInput) -> KeyRoute {
+        match key.key {
+            Key::Up => self.move_agents_cursor(-1),
+            Key::Down => self.move_agents_cursor(1),
+            Key::PageUp => self.page_agents_cursor(-1),
+            Key::PageDown => self.page_agents_cursor(1),
+            Key::Char(' ') => self.agents_cursor_toggle_stop_resume(),
+            Key::Delete => self.agents_cursor_kill(),
+            Key::Enter => self.agents_cursor_open_output(),
+            Key::Char('K') if key.mods.contains(Modifiers::SHIFT) => {
+                self.agents_cursor_kill();
+            }
+            // `Esc` is the window's only dismissal: the modal carries no
+            // Close button, so the footer legend ends with `Esc close`.
+            Key::Esc => self.close_agents_window(),
+            _ => return KeyRoute::NotHandled,
+        }
+        KeyRoute::Handled
+    }
+
+    /// Apply a Teams-window navigation key.
+    ///
+    /// # Arguments
+    /// * `key` - the key press being dispatched.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when the window consumed the key, otherwise
+    /// [`KeyRoute::NotHandled`] so it falls through to the input editor.
+    fn route_teams_window_key(&mut self, key: KeyInput) -> KeyRoute {
+        match key.key {
+            Key::Up => self.move_teams_cursor(-1),
+            Key::Down => self.move_teams_cursor(1),
+            Key::PageUp => self.page_teams_cursor(-1),
+            Key::PageDown => self.page_teams_cursor(1),
+            Key::Char(' ') => self.teams_cursor_toggle_stop_resume(),
+            Key::Delete => self.teams_cursor_shutdown(),
+            Key::Enter => self.teams_cursor_focus(),
+            Key::Char('K') | Key::Char('k') => self.teams_cursor_shutdown(),
+            // Mirror the Agents window: `Esc` dismisses, since there is no
+            // Close button to click.
+            Key::Esc => self.close_teams_window(),
+            _ => return KeyRoute::NotHandled,
+        }
+        KeyRoute::Handled
+    }
+
+    /// Apply one input-editor action produced by [`input::handle_key`].
+    ///
+    /// # Arguments
+    /// * `action` - the action the input editor mapped the key to.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when the action ended the dispatch early (the
+    /// trailing invariant check and transition log are skipped), otherwise
+    /// [`KeyRoute::NotHandled`].
+    async fn apply_input_action(&mut self, action: InputAction) -> KeyRoute {
+        match action {
+            InputAction::BangCommand(text) => return self.submit_bang_command(text),
+            InputAction::SendMessage(text) => return self.submit_message(text),
+            InputAction::Quit => {
+                self.quit_armed = true;
+                self.status = "Press Ctrl+D to quit (or use /quit or /exit)".to_string();
+            }
+            InputAction::ConfirmQuit => {
+                if self.quit_armed {
+                    self.quit();
+                } else {
+                    self.status = "Press Ctrl+C first, then Ctrl+D to quit".to_string();
                 }
-                InputAction::Quit => {
-                    self.quit_armed = true;
-                    self.status = "Press Ctrl+D to quit (or use /quit or /exit)".to_string();
-                }
-                InputAction::ConfirmQuit => {
-                    if self.quit_armed {
-                        self.quit();
-                    } else {
-                        self.status = "Press Ctrl+C first, then Ctrl+D to quit".to_string();
-                    }
-                }
-                InputAction::ScrollUp => {
-                    self.session.scroll_offset =
-                        self.session.scroll_offset.saturating_add(SCROLL_STEP_LINES);
-                }
-                InputAction::ScrollDown => {
-                    self.session.scroll_offset =
-                        self.session.scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                }
-                InputAction::LogScrollUp => {
-                    if self.show_log {
-                        self.log_scroll_offset =
-                            self.log_scroll_offset.saturating_add(SCROLL_STEP_LINES);
-                    } else if self.show_profile {
-                        self.profile_scroll_offset =
-                            self.profile_scroll_offset.saturating_add(SCROLL_STEP_LINES);
-                    } else if self.show_tasks_panel {
-                        self.tasks_scroll_offset =
-                            self.tasks_scroll_offset.saturating_add(SCROLL_STEP_LINES);
-                    } else if self.show_memory {
-                        // Memory panel shares the LogScrollUp / LogScrollDown
-                        // key bindings with the other side panels (FR-009).
-                        self.memory_scroll_offset =
-                            self.memory_scroll_offset.saturating_add(SCROLL_STEP_LINES);
-                    } else if self.show_telemetry {
-                        self.telemetry_scroll_offset = self
-                            .telemetry_scroll_offset
-                            .saturating_add(SCROLL_STEP_LINES);
-                    } else if self.show_context_panel {
-                        self.context_scroll_offset =
-                            self.context_scroll_offset.saturating_add(SCROLL_STEP_LINES);
-                    }
-                }
-                InputAction::LogScrollDown => {
-                    if self.show_log {
-                        self.log_scroll_offset =
-                            self.log_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                    } else if self.show_profile {
-                        self.profile_scroll_offset =
-                            self.profile_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                    } else if self.show_tasks_panel {
-                        self.tasks_scroll_offset =
-                            self.tasks_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                    } else if self.show_memory {
-                        self.memory_scroll_offset =
-                            self.memory_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                    } else if self.show_telemetry {
-                        self.telemetry_scroll_offset = self
-                            .telemetry_scroll_offset
-                            .saturating_sub(SCROLL_STEP_LINES);
-                    } else if self.show_context_panel {
-                        self.context_scroll_offset =
-                            self.context_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
-                    }
-                }
-                InputAction::ToggleLog => {
-                    self.show_log = !self.show_log;
-                    if self.show_log {
-                        // Entering log mode: dismiss the other side panels so
-                        // only one occupies the side column (FR-012).
-                        self.show_profile = false;
-                        self.show_tasks_panel = false;
-                        self.show_memory = false;
-                        self.show_telemetry = false;
-                        self.spool_log_window_history();
-                    } else {
-                        if self
-                            .text_selection
-                            .as_ref()
-                            .is_some_and(|s| s.pane == SelectionPane::Log)
-                        {
-                            self.text_selection = None;
-                        }
-                        if self
-                            .context_menu
-                            .as_ref()
-                            .is_some_and(|m| m.pane == SelectionPane::Log)
-                        {
-                            self.context_menu = None;
-                        }
-                    }
-                    self.status = if self.show_log {
-                        "log panel visible".to_string()
-                    } else {
-                        "log panel hidden".to_string()
-                    };
-                }
-                InputAction::ToggleProfile => {
-                    let enabled = !self.show_profile;
-                    self.set_profile_panel_enabled(enabled);
-                    if !enabled {
-                        if self
-                            .text_selection
-                            .as_ref()
-                            .is_some_and(|s| s.pane == SelectionPane::Profile)
-                        {
-                            self.text_selection = None;
-                        }
-                        if self
-                            .context_menu
-                            .as_ref()
-                            .is_some_and(|m| m.pane == SelectionPane::Profile)
-                        {
-                            self.context_menu = None;
-                        }
-                    }
-                }
-                InputAction::ToggleYolo => {
-                    // The same path the status bar's YOLO toggle and `/yolo` use.
-                    self.toggle_yolo();
-                }
-                InputAction::ToggleTasksPanel => {
-                    // Toggle the TASKS side panel visibility (Alt+I). Implements
-                    // FR-002 (toggle) and FR-003 (mutual exclusion of side
-                    // panels - only one of log/profile/tasks is visible at a
-                    // time, matching the `/log` and `/profile` slash commands
-                    // in app/slash.rs). On hide, any active Tasks-pane text
-                    // selection or context menu is cleared.
-                    self.show_tasks_panel = !self.show_tasks_panel;
-                    if self.show_tasks_panel {
-                        // Entering TASKS mode: dismiss the other side panels so
-                        // only one occupies the side column (FR-012/SPEC
-                        // mutual-exclusion policy). Force a cache refresh on the
-                        // next render so the panel is always up-to-date when
-                        // first shown.
-                        self.session.tasks_cache_dirty = true;
-                        self.show_log = false;
-                        self.show_profile = false;
-                        self.show_memory = false;
-                        self.show_telemetry = false;
-                    } else {
-                        // Leaving TODO mode: clear Todo-pane selection state.
-                        if self
-                            .text_selection
-                            .as_ref()
-                            .is_some_and(|s| s.pane == SelectionPane::Tasks)
-                        {
-                            self.text_selection = None;
-                        }
-                        if self
-                            .context_menu
-                            .as_ref()
-                            .is_some_and(|m| m.pane == SelectionPane::Tasks)
-                        {
-                            self.context_menu = None;
-                        }
-                    }
-                    self.status = if self.show_tasks_panel {
-                        "tasks panel visible".to_string()
-                    } else {
-                        "tasks panel hidden".to_string()
-                    };
-                }
-                // Alt+M toggles the Memory side panel (FR-003). Implements
-                // mutual exclusion with the log / profile / TODO panels
-                // (FR-004): when the Memory panel becomes visible the other
-                // side panels are dismissed so only one occupies the side
-                // column. On hide, any active Memory-pane text selection or
-                // context menu is cleared (FR-005). A status-bar message is
-                // set describing the new state (FR-014).
-                InputAction::ToggleMemory => {
-                    self.show_memory = !self.show_memory;
-                    if self.show_memory {
-                        // Entering Memory mode: dismiss the other side panels
-                        // so only one occupies the side column (FR-004).
-                        self.show_log = false;
-                        self.show_profile = false;
-                        self.show_tasks_panel = false;
-                        self.show_telemetry = false;
-                        // Reset cursor to the first memory whenever the panel is opened.
-                        self.memory_cursor = 0;
-                        self.memory_scroll_offset = 0;
-                    } else {
-                        if self
-                            .text_selection
-                            .as_ref()
-                            .is_some_and(|s| s.pane == SelectionPane::Memory)
-                        {
-                            self.text_selection = None;
-                        }
-                        if self
-                            .context_menu
-                            .as_ref()
-                            .is_some_and(|m| m.pane == SelectionPane::Memory)
-                        {
-                            self.context_menu = None;
-                        }
-                    }
-                    self.status = if self.show_memory {
-                        "memory panel visible".to_string()
-                    } else {
-                        "memory panel hidden".to_string()
-                    };
-                }
-                InputAction::MemoryCursorUp => {
-                    self.move_memory_cursor(-1);
-                }
-                InputAction::MemoryCursorDown => {
-                    self.move_memory_cursor(1);
-                }
-                InputAction::OpenMemoryView => {
-                    self.open_memory_view_from_cursor();
-                }
-                InputAction::PromptMemoryDelete => {
-                    self.prompt_memory_delete_from_cursor();
-                }
-                InputAction::ConfirmMemoryDelete => {
-                    self.confirm_memory_delete();
-                }
-                InputAction::CancelMemoryDelete => {
-                    self.pending_memory_delete = None;
-                    self.status = "memory delete cancelled".to_string();
-                }
-                InputAction::MemoryViewPageUp => {
-                    self.scroll_memory_view_by(5);
-                }
-                InputAction::MemoryViewPageDown => {
-                    self.scroll_memory_view_by(-5);
-                }
-                InputAction::MemoryViewToStart => {
-                    self.jump_memory_view_start();
-                }
-                InputAction::MemoryViewToEnd => {
-                    self.jump_memory_view_end();
-                }
-                InputAction::MemoryViewLineUp => {
-                    self.scroll_memory_view_by(1);
-                }
-                InputAction::MemoryViewLineDown => {
-                    self.scroll_memory_view_by(-1);
-                }
-                InputAction::ToggleAutopilot => {
-                    // Toggle autopilot mode (Alt+O) - the same state machine as
-                    // `/autopilot on|off`. Enabling applies a default time limit so
-                    // the run cannot spin forever; `/autopilot on` (no flags) leaves
-                    // the limit disabled for a fully unbounded run.
-                    if self.session.autopilot_enabled {
-                        self.stop_autopilot();
-                        self.append_assistant_text(
-                            "From: Alt+O\n **Autopilot OFF** - returning to interactive mode.",
-                        );
-                        self.push_log_no_agent(LogLevel::Info, "autopilot disabled".to_string());
-                    } else {
-                        self.start_autopilot(None, Some(alt_o_default_autopilot_time_limit()));
-                        self.append_assistant_text(&format!(
-                            "From: Alt+O\n **Autopilot ON** - agent will run autonomously. \
-                             Time limit: {}s.\nCall `task_complete` to signal completion, or \
-                             press Alt+O again to stop.",
-                            alt_o_default_autopilot_time_limit()
-                        ));
-                        self.push_log_no_agent(LogLevel::Info, "autopilot enabled".to_string());
-                    }
-                }
-                InputAction::ToggleContextPanel => {
-                    // Toggle the Context panel (Alt+C). The Context pane is a
-                    // pinned tab beside the sessions sidebar, so it leaves the
-                    // other side panels alone.
-                    self.set_context_panel_shown(!self.show_context_panel);
-                    self.status = if self.show_context_panel {
-                        "context panel visible".to_string()
-                    } else {
-                        "context panel hidden".to_string()
-                    };
-                }
-                InputAction::ToggleEditLog => match codemason_config::edit_log::toggle_persist() {
-                    Ok(enabled) => {
-                        self.status = if enabled {
-                            "Edit log enabled".to_string()
-                        } else {
-                            "Edit log disabled".to_string()
-                        };
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!("Edit log {}", if enabled { "enabled" } else { "disabled" }),
-                        );
-                    }
-                    Err(e) => {
-                        self.status = format!("[!] failed to persist edit log state: {e}");
-                        self.push_log_no_agent(
-                            LogLevel::Error,
-                            format!("Edit log persist failed: {e}"),
-                        );
-                    }
-                },
-                InputAction::ToggleGcf => {
-                    // Alt+G: toggle GCF tool-result encoding and persist the
-                    // new state (same semantics as Alt+Y / Alt+E and `/gcf
-                    // on|off`). The status-bar indicator reads the runtime
-                    // flag directly, so it reflects the toggle immediately.
-                    match codemason_config::gcf::toggle_persist() {
-                        Ok(enabled) => {
-                            self.status = if enabled {
-                                "GCF encoding enabled".to_string()
-                            } else {
-                                "GCF encoding disabled".to_string()
-                            };
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                format!(
-                                    "GCF encoding {}",
-                                    if enabled { "enabled" } else { "disabled" }
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            self.status = format!("[!] failed to persist GCF state: {e}");
-                            self.push_log_no_agent(
-                                LogLevel::Error,
-                                format!("GCF persist failed: {e}"),
-                            );
-                        }
-                    }
-                }
-                InputAction::ToggleAgentsWindow => {
-                    // Alt+A: toggle the Agents window (spec `agentssetup`
-                    // FR-022). This calls the very same
-                    // `App::toggle_agents_window` the Agents button's left
-                    // click calls, so the keyboard and the mouse share one
-                    // visibility path - including the named refusal when the
-                    // window has no subject to open on, and the Teams-window
-                    // exclusion. Nothing else is touched:
-                    // the input buffer, staged attachments and a running turn
-                    // are left as they were.
-                    self.toggle_agents_window();
-                }
-                InputAction::ToggleTeamsWindow => {
-                    // Alt+T: toggle the Teams window (spec `agentssetup`
-                    // FR-045). The exact mirror of the Alt+A arm above - it
-                    // calls the same `App::toggle_teams_window` the Teams
-                    // button's click calls, so the keyboard and the mouse share
-                    // one visibility path: an open window always closes, an
-                    // open with no team is refused and named, and a successful
-                    // open closes the Agents window. The input buffer, staged
-                    // attachments and a running turn are left untouched.
-                    self.toggle_teams_window();
-                }
-                // Alt+Q opens the queue-control menu overlay (spec `inputqueue`
-                // FR-021). Opening it only flips the menu flag and resets the
-                // selection; the input buffer, staged attachments, and running
-                // turn are left untouched (FR-022) and the change is painted on
-                // the next frame (NFR-008/NFR-009).
-                InputAction::OpenQueueMenu => {
-                    self.queue_menu_open = true;
-                    self.queue_menu_selected = 0;
-                }
-                InputAction::OutputViewPageUp => {
-                    self.scroll_output_view_by(5);
-                }
-                InputAction::OutputViewPageDown => {
-                    self.scroll_output_view_by(-5);
-                }
-                InputAction::OutputViewToStart => {
-                    self.jump_output_view_start();
-                }
-                InputAction::OutputViewToEnd => {
-                    self.jump_output_view_end();
-                }
-                InputAction::ResearchViewPageUp => {
-                    self.scroll_research_view_by(5);
-                }
-                InputAction::ResearchViewPageDown => {
-                    self.scroll_research_view_by(-5);
-                }
-                InputAction::ResearchViewToStart => {
-                    self.jump_research_view_start();
-                }
-                InputAction::ResearchViewToEnd => {
-                    self.jump_research_view_end();
-                }
-                InputAction::ResearchViewLineUp => {
-                    self.scroll_research_view_by(1);
-                }
-                InputAction::ResearchViewLineDown => {
-                    self.scroll_research_view_by(-1);
-                }
-                InputAction::HistoryUp => {
-                    // Within a multiline input, Up moves to the previous logical line.
-                    // Only navigate history when already on the first logical line.
-                    if self.session.history_index.is_none() && !self.cursor_on_first_logical_line()
-                    {
-                        self.cursor_move_up_logical_line();
-                        return;
-                    }
-                    if self.input_history.is_empty() {
-                        return;
-                    }
-                    match self.session.history_index {
-                        None => {
-                            self.session.history_draft = self.session.input.clone();
-                            let idx = self.input_history.len() - 1;
-                            self.session.history_index = Some(idx);
-                            self.session.input = self.input_history[idx].clone();
-                        }
-                        Some(idx) if idx > 0 => {
-                            let idx = idx - 1;
-                            self.session.history_index = Some(idx);
-                            self.session.input = self.input_history[idx].clone();
-                        }
-                        _ => {}
-                    }
-                    self.session.input_cursor = self.input_len_chars();
-                }
-                InputAction::HistoryDown => {
-                    // Within a multiline input (while not browsing history), Down moves
-                    // to the next logical line before navigating history.
-                    if self.session.history_index.is_none() && !self.cursor_on_last_logical_line() {
-                        self.cursor_move_down_logical_line();
-                        return;
-                    }
-                    match self.session.history_index {
-                        Some(idx) if idx + 1 < self.input_history.len() => {
-                            let idx = idx + 1;
-                            self.session.history_index = Some(idx);
-                            self.session.input = self.input_history[idx].clone();
-                            self.session.input_cursor = self.input_len_chars();
-                        }
-                        Some(_) => {
-                            self.session.history_index = None;
-                            self.session.input = self.session.history_draft.clone();
-                            self.session.history_draft.clear();
-                            self.session.input_cursor = self.input_len_chars();
-                        }
-                        None => {}
-                    }
-                }
-                InputAction::MoveCursorLeft => {
-                    // Standard: if selection active, jump to left boundary and clear.
-                    if let Some((start, _)) = self.kb_selection_char_range() {
-                        self.session.kb_select_anchor = None;
-                        self.set_cursor_char_index_clamped(start);
-                    } else {
-                        self.cursor_move_left();
-                    }
-                }
-                InputAction::MoveCursorRight => {
-                    // Standard: if selection active, jump to right boundary and clear.
-                    if let Some((_, end)) = self.kb_selection_char_range() {
-                        self.session.kb_select_anchor = None;
-                        self.set_cursor_char_index_clamped(end);
-                    } else {
-                        self.cursor_move_right();
-                    }
-                }
-                InputAction::MoveCursorWordLeft => {
-                    self.clear_kb_selection();
-                    self.cursor_move_word_left();
-                }
-                InputAction::MoveCursorWordRight => {
-                    self.clear_kb_selection();
-                    self.cursor_move_word_right();
-                }
-                InputAction::MoveCursorHome => {
-                    self.clear_kb_selection();
-                    self.cursor_move_home();
-                }
-                InputAction::MoveCursorEnd => {
-                    self.clear_kb_selection();
-                    self.cursor_move_end();
-                }
-                InputAction::Delete => {
-                    if let Some((start, end)) = self.kb_selection_char_range() {
-                        self.remove_input_char_range(start, end);
-                        self.session.kb_select_anchor = None;
-                    } else {
-                        self.delete_next_char();
-                    }
-                }
-                InputAction::DeletePrevWord => {
-                    self.clear_kb_selection();
-                    self.delete_prev_word();
-                }
-                InputAction::DeleteToLineEnd => {
-                    self.clear_kb_selection();
-                    self.delete_to_end_of_line();
-                }
-                InputAction::SelectAll => {
-                    self.session.kb_select_anchor = Some(0);
-                    self.cursor_move_end();
-                }
-                InputAction::SelectCharLeft => {
-                    if self.session.kb_select_anchor.is_none() {
-                        self.session.kb_select_anchor = Some(self.session.input_cursor);
-                    }
+            }
+            InputAction::ScrollUp => {
+                self.session.scroll_offset =
+                    self.session.scroll_offset.saturating_add(SCROLL_STEP_LINES);
+            }
+            InputAction::ScrollDown => {
+                self.session.scroll_offset =
+                    self.session.scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+            }
+            InputAction::LogScrollUp => self.scroll_side_panel_up(),
+            InputAction::LogScrollDown => self.scroll_side_panel_down(),
+            InputAction::ToggleLog => self.toggle_log_panel_from_key(),
+            InputAction::ToggleProfile => self.toggle_profile_panel_from_key(),
+            InputAction::ToggleYolo => {
+                // The same path the status bar's YOLO toggle and `/yolo` use.
+                self.toggle_yolo();
+            }
+            InputAction::ToggleTasksPanel => self.toggle_tasks_panel_from_key(),
+            // Alt+M toggles the Memory side panel (FR-003). Implements
+            // mutual exclusion with the log / profile / TODO panels
+            // (FR-004): when the Memory panel becomes visible the other
+            // side panels are dismissed so only one occupies the side
+            // column. On hide, any active Memory-pane text selection or
+            // context menu is cleared (FR-005). A status-bar message is
+            // set describing the new state (FR-014).
+            InputAction::ToggleMemory => self.toggle_memory_panel_from_key(),
+            InputAction::MemoryCursorUp => self.move_memory_cursor(-1),
+            InputAction::MemoryCursorDown => self.move_memory_cursor(1),
+            InputAction::OpenMemoryView => self.open_memory_view_from_cursor(),
+            InputAction::PromptMemoryDelete => self.prompt_memory_delete_from_cursor(),
+            InputAction::ConfirmMemoryDelete => self.confirm_memory_delete(),
+            InputAction::CancelMemoryDelete => {
+                self.pending_memory_delete = None;
+                self.status = "memory delete cancelled".to_string();
+            }
+            InputAction::MemoryViewPageUp => self.scroll_memory_view_by(5),
+            InputAction::MemoryViewPageDown => self.scroll_memory_view_by(-5),
+            InputAction::MemoryViewToStart => self.jump_memory_view_start(),
+            InputAction::MemoryViewToEnd => self.jump_memory_view_end(),
+            InputAction::MemoryViewLineUp => self.scroll_memory_view_by(1),
+            InputAction::MemoryViewLineDown => self.scroll_memory_view_by(-1),
+            InputAction::ToggleAutopilot => self.toggle_autopilot_from_key(),
+            InputAction::ToggleContextPanel => {
+                // Toggle the Context panel (Alt+C). The Context pane is a
+                // pinned tab beside the sessions sidebar, so it leaves the
+                // other side panels alone.
+                self.set_context_panel_shown(!self.show_context_panel);
+                self.status = if self.show_context_panel {
+                    "context panel visible".to_string()
+                } else {
+                    "context panel hidden".to_string()
+                };
+            }
+            InputAction::ToggleEditLog => self.toggle_edit_log_from_key(),
+            InputAction::ToggleGcf => self.toggle_gcf_from_key(),
+            InputAction::ToggleAgentsWindow => {
+                // Alt+A: toggle the Agents window (spec `agentssetup`
+                // FR-022). This calls the very same
+                // `App::toggle_agents_window` the Agents button's left
+                // click calls, so the keyboard and the mouse share one
+                // visibility path - including the named refusal when the
+                // window has no subject to open on, and the Teams-window
+                // exclusion. Nothing else is touched:
+                // the input buffer, staged attachments and a running turn
+                // are left as they were.
+                self.toggle_agents_window();
+            }
+            InputAction::ToggleTeamsWindow => {
+                // Alt+T: toggle the Teams window (spec `agentssetup`
+                // FR-045). The exact mirror of the Alt+A arm above - it
+                // calls the same `App::toggle_teams_window` the Teams
+                // button's click calls, so the keyboard and the mouse share
+                // one visibility path: an open window always closes, an
+                // open with no team is refused and named, and a successful
+                // open closes the Agents window. The input buffer, staged
+                // attachments and a running turn are left untouched.
+                self.toggle_teams_window();
+            }
+            // Alt+Q opens the queue-control menu overlay (spec `inputqueue`
+            // FR-021). Opening it only flips the menu flag and resets the
+            // selection; the input buffer, staged attachments, and running
+            // turn are left untouched (FR-022) and the change is painted on
+            // the next frame (NFR-008/NFR-009).
+            InputAction::OpenQueueMenu => {
+                self.queue_menu_open = true;
+                self.queue_menu_selected = 0;
+            }
+            InputAction::OutputViewPageUp => self.scroll_output_view_by(5),
+            InputAction::OutputViewPageDown => self.scroll_output_view_by(-5),
+            InputAction::OutputViewToStart => self.jump_output_view_start(),
+            InputAction::OutputViewToEnd => self.jump_output_view_end(),
+            InputAction::ResearchViewPageUp => self.scroll_research_view_by(5),
+            InputAction::ResearchViewPageDown => self.scroll_research_view_by(-5),
+            InputAction::ResearchViewToStart => self.jump_research_view_start(),
+            InputAction::ResearchViewToEnd => self.jump_research_view_end(),
+            InputAction::ResearchViewLineUp => self.scroll_research_view_by(1),
+            InputAction::ResearchViewLineDown => self.scroll_research_view_by(-1),
+            InputAction::HistoryUp => return self.history_up_from_key(),
+            InputAction::HistoryDown => return self.history_down_from_key(),
+            InputAction::MoveCursorLeft => {
+                // Standard: if selection active, jump to left boundary and clear.
+                if let Some((start, _)) = self.kb_selection_char_range() {
+                    self.session.kb_select_anchor = None;
+                    self.set_cursor_char_index_clamped(start);
+                } else {
                     self.cursor_move_left();
                 }
-                InputAction::SelectCharRight => {
-                    if self.session.kb_select_anchor.is_none() {
-                        self.session.kb_select_anchor = Some(self.session.input_cursor);
-                    }
+            }
+            InputAction::MoveCursorRight => {
+                // Standard: if selection active, jump to right boundary and clear.
+                if let Some((_, end)) = self.kb_selection_char_range() {
+                    self.session.kb_select_anchor = None;
+                    self.set_cursor_char_index_clamped(end);
+                } else {
                     self.cursor_move_right();
                 }
-                InputAction::SelectWordLeft => {
-                    if self.session.kb_select_anchor.is_none() {
-                        self.session.kb_select_anchor = Some(self.session.input_cursor);
-                    }
-                    self.cursor_move_word_left();
-                }
-                InputAction::SelectWordRight => {
-                    if self.session.kb_select_anchor.is_none() {
-                        self.session.kb_select_anchor = Some(self.session.input_cursor);
-                    }
-                    self.cursor_move_word_right();
-                }
-                InputAction::CopyToClipboard => {
-                    self.copy_kb_selection();
-                }
-                InputAction::CutToClipboard => {
-                    self.cut_kb_selection();
-                }
-                InputAction::PasteFromClipboard => {
-                    self.paste_text_from_clipboard();
-                }
-                InputAction::SwitchAgent => {
-                    if self.cycleable_agents.len() > 1 {
-                        let prev = self.session.agent_name.clone();
-                        self.session.current_agent_index =
-                            (self.session.current_agent_index + 1) % self.cycleable_agents.len();
-                        self.session.agent_info =
-                            self.cycleable_agents[self.session.current_agent_index].clone();
-                        self.session.agent_name = self.session.agent_info.name.clone();
-                        self.status = format!("agent: {}", self.session.agent_name);
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "Switched to: {} ({})",
-                                self.session.agent_name, self.session.agent_info.description
-                            ),
-                        );
-
-                        if let Some(ref sid) = self.session.session_id {
-                            self.event_bus.publish(Event::AgentSwitched {
-                                session_id: sid.clone(),
-                                from: prev,
-                                to: self.session.agent_name.clone(),
-                            });
-                        }
-                    }
-                }
-                InputAction::SlashCommand(cmd) => {
-                    // FR-017 (amended)/FR-005: a slash command submitted while
-                    // the primary agent is executing is queued like a plain
-                    // message and runs at the next turn boundary. Only when the
-                    // turn is free does it dispatch immediately.
-                    if self.is_input_blocked() {
-                        if let Err(rejected) = self.enqueue_input(cmd, Vec::new()) {
-                            // FR-004: the queue is at capacity. The submission is
-                            // rejected, but the typed command must not be lost.
-                            self.session.input = rejected.text;
-                            self.session.input_cursor = self.input_len_chars();
-                        }
-                    } else {
-                        self.execute_slash_command(&cmd).await;
-                    }
-                }
-                InputAction::CancelAgent => {
-                    // govdoc T-014/FR-019: when a govcreate run is live,
-                    // Esc cancels it at the next stage boundary instead of
-                    // hitting the (absent) agent turn.
-                    if self.govcreate_run_active() {
-                        self.poll_govcreate_cancel();
-                    }
-                    self.halt_running_agent();
-                }
-                InputAction::ConfirmForceCleanup => {
-                    if self.session.pending_forcecleanup.is_some() {
-                        // Clear pending modal state and invoke forcecleanup with confirm arg.
-                        self.session.pending_forcecleanup = None;
-                        self.execute_slash_command("/team forcecleanup confirm")
-                            .await;
-                    }
-                }
-                InputAction::CancelForceCleanup => {
-                    if self.session.pending_forcecleanup.is_some() {
-                        self.session.pending_forcecleanup = None;
-                        self.append_assistant_text(
-                            "From: /team forcecleanup\nForce-cleanup cancelled.",
-                        );
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            "forcecleanup cancelled".to_string(),
-                        );
-                        self.status = "forcecleanup cancelled".to_string();
-                    }
-                }
-                InputAction::ConfirmRollback => {
-                    if let Some(offer) = self.session.pending_rollback.take() {
-                        // FR-020 / T-013: restore the workspace from the
-                        // pre-loop capture. The processor drops the capture
-                        // on success and keeps it on restore failure so a
-                        // retry is possible.
-                        let sid = offer.session_id.clone();
-                        let processor = self.session_processor.clone();
-                        let results = self.session.rollback_result.clone();
-                        self.status = "rolling back to pre-loop snapshot...".to_string();
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            format!(
-                                "rollback accepted * restoring {}",
-                                crate::app::helpers::plural(offer.files.len() as u64, "file")
-                            ),
-                        );
-                        tokio::spawn(async move {
-                            // The task only logs; the outcome is deposited in
-                            // `rollback_result` for `poll_rollback_result` so
-                            // the UI status cannot stay stuck at "rolling
-                            // back..." and a failed restore is visible in the
-                            // message window.
-                            match processor.rollback_loop(&sid).await {
-                                Ok(outcome) => {
-                                    tracing::info!(
-                                        session_id = %sid,
-                                        "rollback finished (FR-020), restored={}",
-                                        outcome
-                                    );
-                                    if let Ok(mut guard) = results.lock() {
-                                        *guard = Some(Ok(outcome));
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        session_id = %sid,
-                                        error = %e,
-                                        "rollback failed; the capture is kept for retry"
-                                    );
-                                    if let Ok(mut guard) = results.lock() {
-                                        *guard = Some(Err(e.to_string()));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-                InputAction::CancelRollback => {
-                    if self.session.pending_rollback.take().is_some() {
-                        // FR-020 / T-013: declining keeps every change the
-                        // loop made; the pending capture is dropped so no
-                        // later rollback can resurrect it.
-                        let processor = self.session_processor.clone();
-                        tokio::spawn(async move {
-                            processor.clear_loop_captures().await;
-                        });
-                        self.append_assistant_text(
-                            "Rollback declined - all changes made by the loop are kept.",
-                        );
-                        self.push_log_no_agent(
-                            LogLevel::Info,
-                            "rollback declined; changes kept".to_string(),
-                        );
-                        self.status = "rollback declined - changes kept".to_string();
-                    }
-                }
-                // `Clear the input queue?` confirmation dialog (spec `inputqueue`
-                // T-021/T-022, FR-033/FR-034/FR-036). Opened by
-                // `queue_menu_select_clear`; the entries are removed only here,
-                // on an explicit `Yes` (FR-036/FR-037).
-                InputAction::ConfirmQueueClear => {
-                    if self.queue_clear_confirm_open {
-                        self.queue_clear_confirm_open = false;
-                        self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
-                        // FR-036: `Yes` drains every entry and refreshes the
-                        // counter.
-                        self.clear_input_queue();
-                    }
-                }
-                InputAction::CancelQueueClear => {
-                    if self.queue_clear_confirm_open {
-                        self.queue_clear_confirm_open = false;
-                        self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
-                        // FR-035: dismissing with `No`/`Esc` leaves the queue
-                        // unchanged; only the dialog state is reset.
-                    }
-                }
-                // The single-button notice dialog only reports a message; both
-                // `Enter` and `Esc` close it and nothing else changes.
-                InputAction::DismissNotice => {
-                    if self.notice_open {
-                        self.dismiss_notice();
-                    }
-                }
-                // `Clear this project's memory?` confirmation dialog (opened by
-                // `/memory clear`). Memory is removed only here, on an explicit
-                // `Yes`.
-                InputAction::ConfirmMemoryClear => {
-                    if self.memory_clear_confirm_open {
-                        self.close_memory_clear_confirm();
-                        self.clear_project_memory();
-                    }
-                }
-                InputAction::CancelMemoryClear => {
-                    if self.memory_clear_confirm_open {
-                        // Dismissing with `No`/`Esc` leaves memory unchanged.
-                        self.close_memory_clear_confirm();
-                    }
-                }
-                // `Prune messages older than N days?` confirmation dialog
-                // (opened by `/db prune`). Messages are deleted only here, on
-                // an explicit `Yes`. The armed window must be captured BEFORE
-                // `close_db_prune_confirm()` clears it, otherwise
-                // `run_confirmed_db_prune()` has nothing to apply and
-                // silently does nothing.
-                InputAction::ConfirmDbPrune => {
-                    if self.db_prune_confirm_open && self.db_prune_confirm_is_yes() {
-                        self.run_confirmed_db_prune();
-                        self.close_db_prune_confirm();
-                    } else if self.db_prune_confirm_open {
-                        // `No` is the default selection: treat it as a cancel
-                        // rather than deleting on a dialog the user did not
-                        // explicitly accept.
-                        self.close_db_prune_confirm();
-                    }
-                }
-                InputAction::CancelDbPrune => {
-                    if self.db_prune_confirm_open {
-                        // Dismissing with `No`/`Esc` leaves the database
-                        // unchanged; only the dialog state is reset.
-                        self.close_db_prune_confirm();
-                    }
-                }
-                // `Delete every compaction summary?` confirmation dialog
-                // (opened by `/compact prune --all`). Summaries are deleted
-                // only here, on an explicit `Yes`.
-                InputAction::ConfirmCompactPrune => {
-                    if self.compact_prune_confirm_open && self.compact_prune_confirm_is_yes() {
-                        self.close_compact_prune_confirm();
-                        self.run_compaction_prune(0, true);
-                    } else if self.compact_prune_confirm_open {
-                        // `No` is the default selection: treat it as a cancel
-                        // rather than deleting on a dialog the user did not
-                        // explicitly accept.
-                        self.close_compact_prune_confirm();
-                    }
-                }
-                InputAction::CancelCompactPrune => {
-                    if self.compact_prune_confirm_open {
-                        // Dismissing with `No`/`Esc` leaves the stored
-                        // summaries unchanged; only the dialog state is reset.
-                        self.close_compact_prune_confirm();
-                    }
-                }
-                InputAction::ConfirmRouterSave => {
-                    if let Some(draft) = self.pending_router_save.take() {
-                        match self.save_router_config(&draft) {
-                            Ok(()) => {
-                                self.select_router_as_active();
-                                self.router_enabled = true;
-                                self.status =
-                                    "[ok] Router cluster saved - Model Router active".to_string();
-                                self.provider_setup = None;
-                            }
-                            Err(e) => {
-                                self.status = format!("error: {e}");
-                                self.push_log_no_agent(LogLevel::Error, e.clone());
-                                if let Some(ProviderSetupStep::SetupRouter { error, .. }) =
-                                    self.provider_setup.as_mut()
-                                {
-                                    *error = Some(e);
-                                }
-                            }
-                        }
-                    }
-                }
-                InputAction::CancelRouterSave => {
-                    if self.pending_router_save.take().is_some() {
-                        self.status = "Router save cancelled".to_string();
-                    }
-                }
-                InputAction::ApprovePlan => {
-                    if let Some(state) = self.session.plan_approval_pending.take() {
-                        if let Some(ref session_id) = self.session.session_id.clone() {
-                            self.push_log_no_agent(LogLevel::Info, "plan approved".to_string());
-                            self.execute_plan_restore(session_id, &state.plan_text);
-                        }
-                    }
-                }
-                InputAction::RejectPlan => {
-                    if let Some(state) = self.session.plan_approval_pending.take() {
-                        if let Some(ref session_id) = self.session.session_id.clone() {
-                            self.push_log_no_agent(
-                                LogLevel::Info,
-                                "plan rejected - re-delegating".to_string(),
-                            );
-                            self.append_assistant_text(
-                                "From: /plan\n[refresh] **Plan rejected** - re-delegating to plan agent for revision.\n",
-                            );
-                            self.execute_plan_delegation(
-                                session_id,
-                                "Revise the plan based on this feedback: please provide an improved plan".to_string(),
-                                state.plan_text,
-                            );
-                        }
-                    }
-                }
-                InputAction::TogglePlanCursor => {
-                    if let Some(ref mut state) = self.session.plan_approval_pending {
-                        state.cursor_approve = !state.cursor_approve;
-                    }
-                }
-                InputAction::FocusNextTeammate => {
-                    self.cycle_focused_teammate(true);
-                }
-                InputAction::FocusPrevTeammate => {
-                    self.cycle_focused_teammate(false);
-                }
-                InputAction::InsertNewline => {
-                    self.insert_char_at_cursor('\n');
-                }
-                InputAction::ClearLine => {
-                    self.session.input.clear();
-                    self.session.input_cursor = 0;
+            }
+            InputAction::MoveCursorWordLeft => {
+                self.clear_kb_selection();
+                self.cursor_move_word_left();
+            }
+            InputAction::MoveCursorWordRight => {
+                self.clear_kb_selection();
+                self.cursor_move_word_right();
+            }
+            InputAction::MoveCursorHome => {
+                self.clear_kb_selection();
+                self.cursor_move_home();
+            }
+            InputAction::MoveCursorEnd => {
+                self.clear_kb_selection();
+                self.cursor_move_end();
+            }
+            InputAction::Delete => {
+                if let Some((start, end)) = self.kb_selection_char_range() {
+                    self.remove_input_char_range(start, end);
                     self.session.kb_select_anchor = None;
+                } else {
+                    self.delete_next_char();
+                }
+            }
+            InputAction::DeletePrevWord => {
+                self.clear_kb_selection();
+                self.delete_prev_word();
+            }
+            InputAction::DeleteToLineEnd => {
+                self.clear_kb_selection();
+                self.delete_to_end_of_line();
+            }
+            InputAction::SelectAll => {
+                self.session.kb_select_anchor = Some(0);
+                self.cursor_move_end();
+            }
+            InputAction::SelectCharLeft => {
+                if self.session.kb_select_anchor.is_none() {
+                    self.session.kb_select_anchor = Some(self.session.input_cursor);
+                }
+                self.cursor_move_left();
+            }
+            InputAction::SelectCharRight => {
+                if self.session.kb_select_anchor.is_none() {
+                    self.session.kb_select_anchor = Some(self.session.input_cursor);
+                }
+                self.cursor_move_right();
+            }
+            InputAction::SelectWordLeft => {
+                if self.session.kb_select_anchor.is_none() {
+                    self.session.kb_select_anchor = Some(self.session.input_cursor);
+                }
+                self.cursor_move_word_left();
+            }
+            InputAction::SelectWordRight => {
+                if self.session.kb_select_anchor.is_none() {
+                    self.session.kb_select_anchor = Some(self.session.input_cursor);
+                }
+                self.cursor_move_word_right();
+            }
+            InputAction::InsertNewline => {
+                self.insert_char_at_cursor('\n');
+            }
+            InputAction::ClearLine => {
+                self.session.input.clear();
+                self.session.input_cursor = 0;
+                self.session.kb_select_anchor = None;
+            }
+            InputAction::CopyToClipboard => self.copy_kb_selection(),
+            InputAction::CutToClipboard => self.cut_kb_selection(),
+            InputAction::PasteFromClipboard => self.paste_text_from_clipboard(),
+            InputAction::SwitchAgent => self.switch_agent_from_key(),
+            InputAction::SlashCommand(cmd) => self.submit_slash_command(cmd).await,
+            InputAction::CancelAgent => {
+                // govdoc T-014/FR-019: when a govcreate run is live,
+                // Esc cancels it at the next stage boundary instead of
+                // hitting the (absent) agent turn.
+                if self.govcreate_run_active() {
+                    self.poll_govcreate_cancel();
+                }
+                self.halt_running_agent();
+            }
+            InputAction::ConfirmForceCleanup => {
+                if self.session.pending_forcecleanup.is_some() {
+                    // Clear pending modal state and invoke forcecleanup with confirm arg.
+                    self.session.pending_forcecleanup = None;
+                    self.execute_slash_command("/team forcecleanup confirm")
+                        .await;
+                }
+            }
+            InputAction::CancelForceCleanup => {
+                if self.session.pending_forcecleanup.is_some() {
+                    self.session.pending_forcecleanup = None;
+                    self.append_assistant_text(
+                        "From: /team forcecleanup\nForce-cleanup cancelled.",
+                    );
+                    self.push_log_no_agent(LogLevel::Info, "forcecleanup cancelled".to_string());
+                    self.status = "forcecleanup cancelled".to_string();
+                }
+            }
+            InputAction::ConfirmRollback => self.confirm_pending_rollback(),
+            InputAction::CancelRollback => self.cancel_pending_rollback(),
+            // `Clear the input queue?` confirmation dialog (spec `inputqueue`
+            // T-021/T-022, FR-033/FR-034/FR-036). Opened by
+            // `queue_menu_select_clear`; the entries are removed only here,
+            // on an explicit `Yes` (FR-036/FR-037).
+            InputAction::ConfirmQueueClear => {
+                if self.queue_clear_confirm_open {
+                    self.queue_clear_confirm_open = false;
+                    self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
+                    // FR-036: `Yes` drains every entry and refreshes the
+                    // counter.
+                    self.clear_input_queue();
+                }
+            }
+            InputAction::CancelQueueClear => {
+                if self.queue_clear_confirm_open {
+                    self.queue_clear_confirm_open = false;
+                    self.queue_clear_confirm_selected = crate::app::QUEUE_CLEAR_CONFIRM_NO;
+                    // FR-035: dismissing with `No`/`Esc` leaves the queue
+                    // unchanged; only the dialog state is reset.
+                }
+            }
+            // The single-button notice dialog only reports a message; both
+            // `Enter` and `Esc` close it and nothing else changes.
+            InputAction::DismissNotice => {
+                if self.notice_open {
+                    self.dismiss_notice();
+                }
+            }
+            // `Clear this project's memory?` confirmation dialog (opened by
+            // `/memory clear`). Memory is removed only here, on an explicit
+            // `Yes`.
+            InputAction::ConfirmMemoryClear => {
+                if self.memory_clear_confirm_open {
+                    self.close_memory_clear_confirm();
+                    self.clear_project_memory();
+                }
+            }
+            InputAction::CancelMemoryClear => {
+                if self.memory_clear_confirm_open {
+                    // Dismissing with `No`/`Esc` leaves memory unchanged.
+                    self.close_memory_clear_confirm();
+                }
+            }
+            // `Prune messages older than N days?` confirmation dialog
+            // (opened by `/db prune`). Messages are deleted only here, on
+            // an explicit `Yes`. The armed window must be captured BEFORE
+            // `close_db_prune_confirm()` clears it, otherwise
+            // `run_confirmed_db_prune()` has nothing to apply and
+            // silently does nothing.
+            InputAction::ConfirmDbPrune => {
+                if self.db_prune_confirm_open && self.db_prune_confirm_is_yes() {
+                    self.run_confirmed_db_prune();
+                    self.close_db_prune_confirm();
+                } else if self.db_prune_confirm_open {
+                    // `No` is the default selection: treat it as a cancel
+                    // rather than deleting on a dialog the user did not
+                    // explicitly accept.
+                    self.close_db_prune_confirm();
+                }
+            }
+            InputAction::CancelDbPrune => {
+                if self.db_prune_confirm_open {
+                    // Dismissing with `No`/`Esc` leaves the database
+                    // unchanged; only the dialog state is reset.
+                    self.close_db_prune_confirm();
+                }
+            }
+            // `Delete every compaction summary?` confirmation dialog
+            // (opened by `/compact prune --all`). Summaries are deleted
+            // only here, on an explicit `Yes`.
+            InputAction::ConfirmCompactPrune => {
+                if self.compact_prune_confirm_open && self.compact_prune_confirm_is_yes() {
+                    self.close_compact_prune_confirm();
+                    self.run_compaction_prune(0, true);
+                } else if self.compact_prune_confirm_open {
+                    // `No` is the default selection: treat it as a cancel
+                    // rather than deleting on a dialog the user did not
+                    // explicitly accept.
+                    self.close_compact_prune_confirm();
+                }
+            }
+            InputAction::CancelCompactPrune => {
+                if self.compact_prune_confirm_open {
+                    // Dismissing with `No`/`Esc` leaves the stored
+                    // summaries unchanged; only the dialog state is reset.
+                    self.close_compact_prune_confirm();
+                }
+            }
+            InputAction::ConfirmRouterSave => self.confirm_pending_router_save(),
+            InputAction::CancelRouterSave => self.cancel_pending_router_save(),
+            InputAction::ApprovePlan => self.approve_pending_plan(),
+            InputAction::RejectPlan => self.reject_pending_plan(),
+            InputAction::TogglePlanCursor => {
+                if let Some(ref mut state) = self.session.plan_approval_pending {
+                    state.cursor_approve = !state.cursor_approve;
+                }
+            }
+            InputAction::FocusNextTeammate => self.cycle_focused_teammate(true),
+            InputAction::FocusPrevTeammate => self.cycle_focused_teammate(false),
+        }
+        KeyRoute::NotHandled
+    }
+
+    /// Run a submitted `!` bang command, creating the session first when
+    /// none exists yet.
+    ///
+    /// # Arguments
+    /// * `text` - the submitted command text.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when session creation failed (the error is in
+    /// the status line), otherwise [`KeyRoute::NotHandled`].
+    fn submit_bang_command(&mut self, text: String) -> KeyRoute {
+        // Create session if needed, then run the command.
+        if self.session.session_id.is_none() {
+            let dir = self.cwd_path.clone();
+            match self.session_processor.session_manager.create_session(dir) {
+                Ok(session) => {
+                    self.session.session_id = Some(session.id.clone());
+                    // A fresh session starts with an empty queue (NFR-005).
+                    self.clear_input_queue();
+                    let short_sid = short_session_id(&session.id);
+                    self.sid_to_display_name
+                        .insert(short_sid, self.session.agent_name.clone());
+                }
+                Err(e) => {
+                    self.status = format!("error: {e}");
+                    return KeyRoute::Handled;
                 }
             }
         }
-        self.assert_ui_invariants();
-        self.debug_log_input_transition("key", &before_input, before_cursor);
+        self.dispatch_bang_command(text);
+        KeyRoute::NotHandled
+    }
+
+    /// Send a submitted message: to a running sub-agent, onto the input
+    /// queue while a turn is running, behind an auto-compaction, or
+    /// straight to the primary agent.
+    ///
+    /// # Arguments
+    /// * `text` - the submitted message text.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] for every path that originally returned early
+    /// (sub-agent delivery, missing provider/model, queued, session-create
+    /// failure, compaction), otherwise [`KeyRoute::NotHandled`] after a
+    /// direct send.
+    fn submit_message(&mut self, text: String) -> KeyRoute {
+        // FR-058 (amended): teammate focus in the Teams pane does
+        // not redirect the input box. Enter addresses the focused
+        // session: opening a leader or teammate row in the Sessions
+        // pane makes that agent the target (below), and
+        // `/team message <name> <text>` reaches a teammate from
+        // anywhere.
+        // A running sub-agent takes the message into its current
+        // run, so it is neither queued nor held for compaction; a
+        // team leader or teammate gets it as a direct user turn.
+        if self.session.session_id.as_deref().is_some_and(|id| {
+            self.active_subagent_task(id).is_some() || self.is_team_agent_session(id)
+        }) {
+            let image_paths = std::mem::take(&mut self.session.pending_attachments);
+            self.dispatch_user_message(text, image_paths);
+            return KeyRoute::Handled;
+        }
+        // Block sending if no provider/model is configured
+        if self.configured_provider.is_none() {
+            self.status = "[!] No provider configured - use /provider to set up".to_string();
+            return KeyRoute::Handled;
+        }
+        if self.session.selected_model.is_none() {
+            self.status = "[!] No model selected - use /model to choose".to_string();
+            return KeyRoute::Handled;
+        }
+        // FR-002/FR-005/FR-012: while the primary agent is
+        // executing the input field stays live; a plain message is
+        // accepted and queued instead of being rejected.
+        // FR-016: never queue a compaction-pending send or overlap
+        // a running turn.
+        if self.is_input_blocked() {
+            let image_paths: Vec<std::path::PathBuf> =
+                std::mem::take(&mut self.session.pending_attachments);
+            if let Err(rejected) = self.enqueue_input(text, image_paths) {
+                // FR-004: the queue is at capacity. The submission
+                // is rejected, but the typed text and staged
+                // attachments must not be lost.
+                self.session.input = rejected.text;
+                self.session.input_cursor = self.input_len_chars();
+                self.session.pending_attachments = rejected.image_paths;
+            }
+            return KeyRoute::Handled;
+        }
+        // Create session if needed
+        if self.session.session_id.is_none() {
+            let dir = self.cwd_path.clone();
+            match self.session_processor.session_manager.create_session(dir) {
+                Ok(session) => {
+                    self.session.session_id = Some(session.id.clone());
+                    // A fresh session starts with an empty queue (NFR-005).
+                    self.clear_input_queue();
+                    // Map the primary session's short_sid to the current agent name
+                    let short_sid = short_session_id(&session.id);
+                    self.sid_to_display_name
+                        .insert(short_sid, self.session.agent_name.clone());
+                }
+                Err(e) => {
+                    self.status = format!("error: {}", e);
+                    return KeyRoute::Handled;
+                }
+            }
+        }
+
+        // Take image attachments once; either queue for auto-compaction
+        // or send immediately.
+        let image_paths: Vec<std::path::PathBuf> =
+            std::mem::take(&mut self.session.pending_attachments);
+        if self.should_auto_compact_before_send() {
+            self.session.pending_send_after_compact = Some((text, image_paths));
+            if !self.start_compaction(true) {
+                // If compaction could not start, fall back to direct send.
+                if let Some((queued_text, queued_images)) =
+                    self.session.pending_send_after_compact.take()
+                {
+                    self.dispatch_user_message(queued_text, queued_images);
+                }
+            }
+            return KeyRoute::Handled;
+        }
+        self.dispatch_user_message(text, image_paths);
+        KeyRoute::NotHandled
+    }
+
+    /// Scroll the visible side panel up by one step (`LogScrollUp`).
+    fn scroll_side_panel_up(&mut self) {
+        if self.show_log {
+            self.log_scroll_offset = self.log_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+        } else if self.show_profile {
+            self.profile_scroll_offset =
+                self.profile_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+        } else if self.show_tasks_panel {
+            self.tasks_scroll_offset = self.tasks_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+        } else if self.show_memory {
+            // Memory panel shares the LogScrollUp / LogScrollDown
+            // key bindings with the other side panels (FR-009).
+            self.memory_scroll_offset = self.memory_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+        } else if self.show_telemetry {
+            self.telemetry_scroll_offset = self
+                .telemetry_scroll_offset
+                .saturating_add(SCROLL_STEP_LINES);
+        } else if self.show_context_panel {
+            self.context_scroll_offset =
+                self.context_scroll_offset.saturating_add(SCROLL_STEP_LINES);
+        }
+    }
+
+    /// Scroll the visible side panel down by one step (`LogScrollDown`).
+    fn scroll_side_panel_down(&mut self) {
+        if self.show_log {
+            self.log_scroll_offset = self.log_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+        } else if self.show_profile {
+            self.profile_scroll_offset =
+                self.profile_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+        } else if self.show_tasks_panel {
+            self.tasks_scroll_offset = self.tasks_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+        } else if self.show_memory {
+            self.memory_scroll_offset = self.memory_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+        } else if self.show_telemetry {
+            self.telemetry_scroll_offset = self
+                .telemetry_scroll_offset
+                .saturating_sub(SCROLL_STEP_LINES);
+        } else if self.show_context_panel {
+            self.context_scroll_offset =
+                self.context_scroll_offset.saturating_sub(SCROLL_STEP_LINES);
+        }
+    }
+
+    /// Toggle the log side panel (`ToggleLog`), dismissing the other side
+    /// panels on show and clearing Log-pane selection state on hide.
+    fn toggle_log_panel_from_key(&mut self) {
+        self.show_log = !self.show_log;
+        if self.show_log {
+            // Entering log mode: dismiss the other side panels so
+            // only one occupies the side column (FR-012).
+            self.show_profile = false;
+            self.show_tasks_panel = false;
+            self.show_memory = false;
+            self.show_telemetry = false;
+            self.spool_log_window_history();
+        } else {
+            if self
+                .text_selection
+                .as_ref()
+                .is_some_and(|s| s.pane == SelectionPane::Log)
+            {
+                self.text_selection = None;
+            }
+            if self
+                .context_menu
+                .as_ref()
+                .is_some_and(|m| m.pane == SelectionPane::Log)
+            {
+                self.context_menu = None;
+            }
+        }
+        self.status = if self.show_log {
+            "log panel visible".to_string()
+        } else {
+            "log panel hidden".to_string()
+        };
+    }
+
+    /// Toggle the profile side panel (`ToggleProfile`), clearing
+    /// Profile-pane selection state on hide.
+    fn toggle_profile_panel_from_key(&mut self) {
+        let enabled = !self.show_profile;
+        self.set_profile_panel_enabled(enabled);
+        if !enabled {
+            if self
+                .text_selection
+                .as_ref()
+                .is_some_and(|s| s.pane == SelectionPane::Profile)
+            {
+                self.text_selection = None;
+            }
+            if self
+                .context_menu
+                .as_ref()
+                .is_some_and(|m| m.pane == SelectionPane::Profile)
+            {
+                self.context_menu = None;
+            }
+        }
+    }
+
+    /// Toggle the TASKS side panel (`ToggleTasksPanel`, Alt+I).
+    fn toggle_tasks_panel_from_key(&mut self) {
+        // Toggle the TASKS side panel visibility (Alt+I). Implements
+        // FR-002 (toggle) and FR-003 (mutual exclusion of side
+        // panels - only one of log/profile/tasks is visible at a
+        // time, matching the `/log` and `/profile` slash commands
+        // in app/slash.rs). On hide, any active Tasks-pane text
+        // selection or context menu is cleared.
+        self.show_tasks_panel = !self.show_tasks_panel;
+        if self.show_tasks_panel {
+            // Entering TASKS mode: dismiss the other side panels so
+            // only one occupies the side column (FR-012/SPEC
+            // mutual-exclusion policy). Force a cache refresh on the
+            // next render so the panel is always up-to-date when
+            // first shown.
+            self.session.tasks_cache_dirty = true;
+            self.show_log = false;
+            self.show_profile = false;
+            self.show_memory = false;
+            self.show_telemetry = false;
+        } else {
+            // Leaving TODO mode: clear Todo-pane selection state.
+            if self
+                .text_selection
+                .as_ref()
+                .is_some_and(|s| s.pane == SelectionPane::Tasks)
+            {
+                self.text_selection = None;
+            }
+            if self
+                .context_menu
+                .as_ref()
+                .is_some_and(|m| m.pane == SelectionPane::Tasks)
+            {
+                self.context_menu = None;
+            }
+        }
+        self.status = if self.show_tasks_panel {
+            "tasks panel visible".to_string()
+        } else {
+            "tasks panel hidden".to_string()
+        };
+    }
+
+    /// Toggle the Memory side panel (`ToggleMemory`, Alt+M).
+    fn toggle_memory_panel_from_key(&mut self) {
+        self.show_memory = !self.show_memory;
+        if self.show_memory {
+            // Entering Memory mode: dismiss the other side panels
+            // so only one occupies the side column (FR-004).
+            self.show_log = false;
+            self.show_profile = false;
+            self.show_tasks_panel = false;
+            self.show_telemetry = false;
+            // Reset cursor to the first memory whenever the panel is opened.
+            self.memory_cursor = 0;
+            self.memory_scroll_offset = 0;
+        } else {
+            if self
+                .text_selection
+                .as_ref()
+                .is_some_and(|s| s.pane == SelectionPane::Memory)
+            {
+                self.text_selection = None;
+            }
+            if self
+                .context_menu
+                .as_ref()
+                .is_some_and(|m| m.pane == SelectionPane::Memory)
+            {
+                self.context_menu = None;
+            }
+        }
+        self.status = if self.show_memory {
+            "memory panel visible".to_string()
+        } else {
+            "memory panel hidden".to_string()
+        };
+    }
+
+    /// Toggle autopilot mode from the `Alt+O` key (`ToggleAutopilot`).
+    fn toggle_autopilot_from_key(&mut self) {
+        // Toggle autopilot mode (Alt+O) - the same state machine as
+        // `/autopilot on|off`. Enabling applies a default time limit so
+        // the run cannot spin forever; `/autopilot on` (no flags) leaves
+        // the limit disabled for a fully unbounded run.
+        if self.session.autopilot_enabled {
+            self.stop_autopilot();
+            self.append_assistant_text(
+                "From: Alt+O\n **Autopilot OFF** - returning to interactive mode.",
+            );
+            self.push_log_no_agent(LogLevel::Info, "autopilot disabled".to_string());
+        } else {
+            self.start_autopilot(None, Some(alt_o_default_autopilot_time_limit()));
+            self.append_assistant_text(&format!(
+                "From: Alt+O\n **Autopilot ON** - agent will run autonomously. \
+                 Time limit: {}s.\nCall `task_complete` to signal completion, or \
+                 press Alt+O again to stop.",
+                alt_o_default_autopilot_time_limit()
+            ));
+            self.push_log_no_agent(LogLevel::Info, "autopilot enabled".to_string());
+        }
+    }
+
+    /// Toggle and persist the edit log (`ToggleEditLog`), reporting the new
+    /// state or the persist failure.
+    fn toggle_edit_log_from_key(&mut self) {
+        match codemason_config::edit_log::toggle_persist() {
+            Ok(enabled) => {
+                self.status = if enabled {
+                    "Edit log enabled".to_string()
+                } else {
+                    "Edit log disabled".to_string()
+                };
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("Edit log {}", if enabled { "enabled" } else { "disabled" }),
+                );
+            }
+            Err(e) => {
+                self.status = format!("[!] failed to persist edit log state: {e}");
+                self.push_log_no_agent(LogLevel::Error, format!("Edit log persist failed: {e}"));
+            }
+        }
+    }
+
+    /// Toggle and persist GCF tool-result encoding (`ToggleGcf`, Alt+G).
+    fn toggle_gcf_from_key(&mut self) {
+        // Alt+G: toggle GCF tool-result encoding and persist the
+        // new state (same semantics as Alt+Y / Alt+E and `/gcf
+        // on|off`). The status-bar indicator reads the runtime
+        // flag directly, so it reflects the toggle immediately.
+        match codemason_config::gcf::toggle_persist() {
+            Ok(enabled) => {
+                self.status = if enabled {
+                    "GCF encoding enabled".to_string()
+                } else {
+                    "GCF encoding disabled".to_string()
+                };
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!(
+                        "GCF encoding {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    ),
+                );
+            }
+            Err(e) => {
+                self.status = format!("[!] failed to persist GCF state: {e}");
+                self.push_log_no_agent(LogLevel::Error, format!("GCF persist failed: {e}"));
+            }
+        }
+    }
+
+    /// Recall the previous input-history entry (`HistoryUp`), or move up one
+    /// logical line inside a multiline input.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when the key moved the cursor within the input
+    /// or the history is empty (the original early returns), otherwise
+    /// [`KeyRoute::NotHandled`].
+    fn history_up_from_key(&mut self) -> KeyRoute {
+        // Within a multiline input, Up moves to the previous logical line.
+        // Only navigate history when already on the first logical line.
+        if self.session.history_index.is_none() && !self.cursor_on_first_logical_line() {
+            self.cursor_move_up_logical_line();
+            return KeyRoute::Handled;
+        }
+        if self.input_history.is_empty() {
+            return KeyRoute::Handled;
+        }
+        match self.session.history_index {
+            None => {
+                self.session.history_draft = self.session.input.clone();
+                let idx = self.input_history.len() - 1;
+                self.session.history_index = Some(idx);
+                self.session.input = self.input_history[idx].clone();
+            }
+            Some(idx) if idx > 0 => {
+                let idx = idx - 1;
+                self.session.history_index = Some(idx);
+                self.session.input = self.input_history[idx].clone();
+            }
+            _ => {}
+        }
+        self.session.input_cursor = self.input_len_chars();
+        KeyRoute::NotHandled
+    }
+
+    /// Recall the next input-history entry or the saved draft
+    /// (`HistoryDown`), or move down one logical line inside a multiline
+    /// input.
+    ///
+    /// # Returns
+    /// [`KeyRoute::Handled`] when the key moved the cursor within the input
+    /// (the original early return), otherwise [`KeyRoute::NotHandled`].
+    fn history_down_from_key(&mut self) -> KeyRoute {
+        // Within a multiline input (while not browsing history), Down moves
+        // to the next logical line before navigating history.
+        if self.session.history_index.is_none() && !self.cursor_on_last_logical_line() {
+            self.cursor_move_down_logical_line();
+            return KeyRoute::Handled;
+        }
+        match self.session.history_index {
+            Some(idx) if idx + 1 < self.input_history.len() => {
+                let idx = idx + 1;
+                self.session.history_index = Some(idx);
+                self.session.input = self.input_history[idx].clone();
+                self.session.input_cursor = self.input_len_chars();
+            }
+            Some(_) => {
+                self.session.history_index = None;
+                self.session.input = self.session.history_draft.clone();
+                self.session.history_draft.clear();
+                self.session.input_cursor = self.input_len_chars();
+            }
+            None => {}
+        }
+        KeyRoute::NotHandled
+    }
+
+    /// Cycle to the next cycleable agent (`SwitchAgent`) and publish the
+    /// switch on the event bus.
+    fn switch_agent_from_key(&mut self) {
+        if self.cycleable_agents.len() > 1 {
+            let prev = self.session.agent_name.clone();
+            self.session.current_agent_index =
+                (self.session.current_agent_index + 1) % self.cycleable_agents.len();
+            self.session.agent_info =
+                self.cycleable_agents[self.session.current_agent_index].clone();
+            self.session.agent_name = self.session.agent_info.name.clone();
+            self.status = format!("agent: {}", self.session.agent_name);
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "Switched to: {} ({})",
+                    self.session.agent_name, self.session.agent_info.description
+                ),
+            );
+
+            if let Some(ref sid) = self.session.session_id {
+                self.event_bus.publish(Event::AgentSwitched {
+                    session_id: sid.clone(),
+                    from: prev,
+                    to: self.session.agent_name.clone(),
+                });
+            }
+        }
+    }
+
+    /// Run a submitted slash command now, or queue it while a turn is
+    /// running.
+    ///
+    /// # Arguments
+    /// * `cmd` - the submitted slash-command text.
+    async fn submit_slash_command(&mut self, cmd: String) {
+        // FR-017 (amended)/FR-005: a slash command submitted while
+        // the primary agent is executing is queued like a plain
+        // message and runs at the next turn boundary. Only when the
+        // turn is free does it dispatch immediately.
+        if self.is_input_blocked() {
+            if let Err(rejected) = self.enqueue_input(cmd, Vec::new()) {
+                // FR-004: the queue is at capacity. The submission is
+                // rejected, but the typed command must not be lost.
+                self.session.input = rejected.text;
+                self.session.input_cursor = self.input_len_chars();
+            }
+        } else {
+            self.execute_slash_command(&cmd).await;
+        }
+    }
+
+    /// Accept the pending post-loop rollback offer (`ConfirmRollback`) and
+    /// restore the workspace in the background.
+    fn confirm_pending_rollback(&mut self) {
+        if let Some(offer) = self.session.pending_rollback.take() {
+            // FR-020 / T-013: restore the workspace from the
+            // pre-loop capture. The processor drops the capture
+            // on success and keeps it on restore failure so a
+            // retry is possible.
+            let sid = offer.session_id.clone();
+            let processor = self.session_processor.clone();
+            let results = self.session.rollback_result.clone();
+            self.status = "rolling back to pre-loop snapshot...".to_string();
+            self.push_log_no_agent(
+                LogLevel::Info,
+                format!(
+                    "rollback accepted * restoring {}",
+                    crate::app::helpers::plural(offer.files.len() as u64, "file")
+                ),
+            );
+            tokio::spawn(async move {
+                // The task only logs; the outcome is deposited in
+                // `rollback_result` for `poll_rollback_result` so
+                // the UI status cannot stay stuck at "rolling
+                // back..." and a failed restore is visible in the
+                // message window.
+                match processor.rollback_loop(&sid).await {
+                    Ok(outcome) => {
+                        tracing::info!(
+                            session_id = %sid,
+                            "rollback finished (FR-020), restored={}",
+                            outcome
+                        );
+                        if let Ok(mut guard) = results.lock() {
+                            *guard = Some(Ok(outcome));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            session_id = %sid,
+                            error = %e,
+                            "rollback failed; the capture is kept for retry"
+                        );
+                        if let Ok(mut guard) = results.lock() {
+                            *guard = Some(Err(e.to_string()));
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /// Decline the pending post-loop rollback offer (`CancelRollback`),
+    /// keeping every change the loop made.
+    fn cancel_pending_rollback(&mut self) {
+        if self.session.pending_rollback.take().is_some() {
+            // FR-020 / T-013: declining keeps every change the
+            // loop made; the pending capture is dropped so no
+            // later rollback can resurrect it.
+            let processor = self.session_processor.clone();
+            tokio::spawn(async move {
+                processor.clear_loop_captures().await;
+            });
+            self.append_assistant_text(
+                "Rollback declined - all changes made by the loop are kept.",
+            );
+            self.push_log_no_agent(
+                LogLevel::Info,
+                "rollback declined; changes kept".to_string(),
+            );
+            self.status = "rollback declined - changes kept".to_string();
+        }
+    }
+
+    /// Save the pending router-cluster draft (`ConfirmRouterSave`) and make
+    /// the Model Router active, or report the save error.
+    fn confirm_pending_router_save(&mut self) {
+        if let Some(draft) = self.pending_router_save.take() {
+            match self.save_router_config(&draft) {
+                Ok(()) => {
+                    self.select_router_as_active();
+                    self.router_enabled = true;
+                    self.status = "[ok] Router cluster saved - Model Router active".to_string();
+                    self.provider_setup = None;
+                }
+                Err(e) => {
+                    self.status = format!("error: {e}");
+                    self.push_log_no_agent(LogLevel::Error, e.clone());
+                    if let Some(ProviderSetupStep::SetupRouter { error, .. }) =
+                        self.provider_setup.as_mut()
+                    {
+                        *error = Some(e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drop the pending router-cluster draft (`CancelRouterSave`).
+    fn cancel_pending_router_save(&mut self) {
+        if self.pending_router_save.take().is_some() {
+            self.status = "Router save cancelled".to_string();
+        }
+    }
+
+    /// Approve the pending plan (`ApprovePlan`) and restore it into the
+    /// session.
+    fn approve_pending_plan(&mut self) {
+        if let Some(state) = self.session.plan_approval_pending.take() {
+            if let Some(ref session_id) = self.session.session_id.clone() {
+                self.push_log_no_agent(LogLevel::Info, "plan approved".to_string());
+                self.execute_plan_restore(session_id, &state.plan_text);
+            }
+        }
+    }
+
+    /// Reject the pending plan (`RejectPlan`) and re-delegate it to the plan
+    /// agent for revision.
+    fn reject_pending_plan(&mut self) {
+        if let Some(state) = self.session.plan_approval_pending.take() {
+            if let Some(ref session_id) = self.session.session_id.clone() {
+                self.push_log_no_agent(LogLevel::Info, "plan rejected - re-delegating".to_string());
+                self.append_assistant_text(
+                    "From: /plan\n[refresh] **Plan rejected** - re-delegating to plan agent for revision.\n",
+                );
+                self.execute_plan_delegation(
+                    session_id,
+                    "Revise the plan based on this feedback: please provide an improved plan"
+                        .to_string(),
+                    state.plan_text,
+                );
+            }
+        }
     }
 }
 
@@ -2440,7 +2512,8 @@ impl App {
     }
 
     /// Scroll the Memory panel so the cursor's preview line is within the
-    /// visible window. Uses the line indices computed by `render_memory_panel`.
+    /// visible window, using `memory_row_line_indices` (currently never
+    /// filled, so this does nothing).
     fn scroll_memory_cursor_into_view(&mut self) {
         let line = self
             .memory_row_line_indices

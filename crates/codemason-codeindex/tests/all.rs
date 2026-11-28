@@ -113,3 +113,7 @@ mod test_typescript_parser;
 mod test_watcher;
 #[path = "test_worker.rs"]
 mod test_worker;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

@@ -51,8 +51,7 @@ pub type Result<T> = std::result::Result<T, TelemetryError>;
 
 /// Errors returned by the telemetry subsystem.
 ///
-/// Kept intentionally narrow for the scaffold; richer variants will be added
-/// as exporter wiring (T-004, T-005) and configuration parsing (T-002) land.
+/// One variant per way live export can fail to start.
 #[derive(Debug, thiserror::Error)]
 pub enum TelemetryError {
     /// The `telemetry` Cargo feature is not enabled, so the real OpenTelemetry

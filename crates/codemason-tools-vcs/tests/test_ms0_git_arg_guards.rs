@@ -184,3 +184,30 @@ async fn test_git_remote_remove_rejects_option_like_name() {
         "error must name the rejected operand, got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// git_clone `directory` containment (TL-02)
+// ---------------------------------------------------------------------------
+
+/// A rooted path escapes the workspace on every platform, including `/x`,
+/// which `Path::is_absolute` reports as relative on Windows.
+#[test]
+fn test_validate_clone_directory_rejects_rooted_paths() {
+    assert!(validate_clone_directory("/x").is_err());
+    assert!(validate_clone_directory("..").is_err());
+    assert!(validate_clone_directory("a/../../x").is_err());
+    assert!(validate_clone_directory("cloned").is_ok());
+    assert!(validate_clone_directory("sub/cloned").is_ok());
+}
+
+/// On Windows `\x` (root of the current drive) and `C:x` (drive-relative)
+/// are not `is_absolute()` and have no `..`, yet both leave the workspace.
+#[cfg(windows)]
+#[test]
+fn test_validate_clone_directory_rejects_windows_root_and_prefix() {
+    assert!(validate_clone_directory(r"\x").is_err());
+    assert!(validate_clone_directory("C:x").is_err());
+    assert!(validate_clone_directory(r"C:\x").is_err());
+    assert!(validate_clone_directory(r"\\server\share\x").is_err());
+    assert!(validate_clone_directory(r"sub\cloned").is_ok());
+}

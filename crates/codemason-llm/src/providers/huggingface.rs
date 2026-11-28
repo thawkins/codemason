@@ -616,8 +616,19 @@ impl LlmClient for HuggingFaceClient {
                         // Tool calls
                         if let Some(tool_calls) = delta["tool_calls"].as_array() {
                             for tc in tool_calls {
-                                let index = tc["index"].as_u64().unwrap_or(0);
-                                let key = StreamKey::Index(index);
+                                // FUNC-032 / CO-06: `unwrap_or(0)` merged index-less parallel
+
+                                // calls onto stream 0. Key such a call by its id instead, and
+
+                                // skip a frame that names neither, as the shared SSE parser does.
+
+                                let Some(key) = StreamKey::from_frame(tc["index"].as_u64(), tc["id"].as_str()) else {
+
+                                    tracing::warn!("tool_call delta without an index or id; skipping frame");
+
+                                    continue;
+
+                                };
 
                                 if let Some(id) = tc["id"].as_str() {
                                     acc.set_id(&key, id);

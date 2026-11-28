@@ -204,6 +204,8 @@ fn test_project_mcp_registries_never_share_a_version() {
     );
 }
 
+// Unix-only: the probe is a `#!/bin/sh` script made executable by mode bits.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_project_mcp_stdio_servers_start_in_the_project_root() {
     use std::os::unix::fs::PermissionsExt;

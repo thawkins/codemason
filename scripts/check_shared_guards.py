@@ -19,8 +19,8 @@ fails when a crate re-derives a guard the workspace already owns:
     `/connectors` ledgers share one implementation parameterised by the JSON
     root key.
 
-Scope: ``crates/*/src/**/*.rs``. ``#[cfg(test)]`` module bodies are blanked out
-and ``tests``/``benches`` directories are skipped, because a test-local helper is
+Scope: ``crates/*/src/**/*.rs`` and the root binary's ``src/**/*.rs`` (RS-24).
+``#[cfg(test)]`` module bodies are blanked out and ``tests``/``benches`` directories are skipped, because a test-local helper is
 not a production duplicate.
 
 Usage:
@@ -38,6 +38,8 @@ import subprocess
 import sys
 
 SCAN_ROOT = pathlib.Path("crates")
+# RS-24: the root `codemason` binary is production code too.
+BIN_SRC = pathlib.Path("src")
 
 # The one file allowed to define each guard, plus the documented adapter sites.
 GUARD_HOME = "crates/codemason-types/src/guard.rs"
@@ -144,11 +146,11 @@ def blank_cfg_test_blocks(src: str) -> str:
 def scan() -> list[str]:
     """Return a list of ``path:line: description`` duplicate-guard findings."""
     findings: list[str] = []
-    for path in sorted(SCAN_ROOT.rglob("*.rs")):
+    for path in sorted([*SCAN_ROOT.rglob("*.rs"), *BIN_SRC.rglob("*.rs")]):
         parts = path.parts
         if "tests" in parts or "benches" in parts:
             continue
-        rel = str(path)
+        rel = path.as_posix()  # `/` on Windows too, to match the homes above
         src = path.read_text(encoding="utf-8", errors="replace")
         clean = blank_cfg_test_blocks(src)
         for lineno, line in enumerate(clean.splitlines(), 1):

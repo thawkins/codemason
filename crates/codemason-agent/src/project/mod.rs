@@ -94,15 +94,8 @@ impl Project {
 ///
 /// Returns an error when either part is empty or there is no `/`.
 pub fn parse_model_ref(text: &str) -> Result<ModelRef> {
-    let (provider_id, model_id) = text
-        .trim()
-        .split_once('/')
-        .filter(|(p, m)| !p.is_empty() && !m.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("expected <provider>/<model>, got '{}'", text.trim()))?;
-    Ok(ModelRef {
-        provider_id: provider_id.to_string(),
-        model_id: model_id.to_string(),
-    })
+    ModelRef::parse_strict(text)
+        .ok_or_else(|| anyhow::anyhow!("expected <provider>/<model>, got '{}'", text.trim()))
 }
 
 /// Creates, resolves and edits project records, publishing

@@ -11,6 +11,7 @@ use codemason_app_core::app::App;
 use egui::accesskit::Role;
 use egui::{RichText, WidgetInfo};
 
+use crate::material::button::small_button;
 use crate::palette::Palette;
 
 /// Accessible name of the empty-state group.
@@ -55,10 +56,9 @@ pub fn empty_state_ui(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         ui.add_space(crate::metrics::space::MD);
         ui.horizontal_wrapped(|ui| {
             for (label, text) in STARTERS {
-                // Click-only: a button that can hold the keyboard focus would
-                // share Enter with the prompt, which sends the draft.
-                let starter = egui::Button::new(label).sense(egui::Sense::CLICK);
-                if ui.add(starter).clicked() {
+                // Click-only (`small_button`): a focusable button would share
+                // Enter with the prompt, which sends the draft.
+                if small_button(ui, palette, label, None).clicked() {
                     app.session.input = text.to_string();
                     // Moves the cursor to the end and rebuilds the completion
                     // menus for the new draft, so a menu opened for the old

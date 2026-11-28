@@ -44,6 +44,8 @@ use codemason_app_core::styled::ThemeColor;
 use codemason_config::i18n::{MessageKey, t};
 use egui::{Color32, RichText, Role, WidgetInfo};
 
+use crate::material::badge::{BadgeTone, badge};
+use crate::material::button::small_button;
 use crate::material::chip::{ChipKind, chip_dense};
 use crate::palette::Palette;
 use crate::styled_text::drawable;
@@ -405,15 +407,18 @@ fn summary(ui: &mut egui::Ui, app: &App, palette: &Palette) -> Option<&'static s
     }
     let waiting = app.background.waiting_count();
     if waiting > 0 {
-        let badge = RichText::new(format!(" {waiting} need you "))
-            .color(palette.background)
-            .background_color(palette.warning)
-            .strong();
-        ui.label(badge);
+        // UI-14: the Material badge in the error tone, M3's colour for a
+        // count that asks for attention.
+        badge(
+            ui,
+            palette,
+            BadgeTone::Error,
+            &format!("{waiting} need you"),
+        );
     }
-    // Click-only: a button that can hold the keyboard focus would share Enter
-    // with the prompt, which sends the draft.
-    let response = ui.add(egui::Button::new(DETAILS_LABEL).sense(egui::Sense::CLICK));
+    // Click-only (`small_button`): a focusable button would share Enter with
+    // the prompt, which sends the draft.
+    let response = small_button(ui, palette, DETAILS_LABEL, None);
     // The popup has a fixed id: the AUTO and YOLO chips before the button
     // come and go, and an id taken from the button's would change with them,
     // closing the popup when one of them is flipped from inside it. It stays

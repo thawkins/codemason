@@ -66,10 +66,22 @@ pub fn automation_admin_routes() -> Router<AppState> {
         .route("/automation/{id}/run", post(run_now))
 }
 
-/// A working directory for an automation run: the server's current directory
-/// (serve is launched from the project root).
-fn working_dir() -> std::path::PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+/// The working directory for an automation run: the project root the server
+/// state was built for, the parent of `AppState::research_root` (as SEC-002
+/// already treats it).
+///
+/// RS-08: this used the process's current directory, but `/webapi` builds the
+/// state from the session's directory, which changes when another project's
+/// session is resumed while the process directory does not; a webhook then ran
+/// in the launch directory instead of the project.
+#[doc(hidden)]
+#[must_use]
+pub fn working_dir(state: &AppState) -> std::path::PathBuf {
+    state
+        .research_root
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()))
 }
 
 /// Build an automation service from the shared state (FR-013).
@@ -82,7 +94,7 @@ async fn service(state: &AppState) -> AutomationService {
     AutomationService::new(
         Arc::clone(&state.session_processor),
         automation,
-        working_dir(),
+        working_dir(state),
     )
 }
 
@@ -115,27 +127,34 @@ fn payload_text(body: &Bytes) -> String {
 ///
 /// SEC-061: the ingress is mounted on the unauthenticated outer router (an
 /// external system such as a GitHub webhook has no server bearer token), so it
-/// shares the process-wide rate limiter under a dedicated `"webhook"` key and
-/// requires the automation's own secret ([`webhook_secret_refusal`]). Without
-/// it, any web page could start an agent run with a CORS "simple request".
+/// shares the process-wide rate limiter under a per-automation `"webhook:{id}"`
+/// key (RS-07) and requires the automation's own secret
+/// ([`webhook_secret_refusal`]). Without it, any web page could start an agent
+/// run with a CORS "simple request".
 async fn webhook_ingest(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Some(rate_limited) = check_rate_limit(&state, "webhook").await {
+    // RS-07: one bucket per automation id, so flooding one id cannot lock
+    // every other automation's webhook out.
+    if let Some(rate_limited) = check_rate_limit(&state, &format!("webhook:{id}")).await {
         return rate_limited.into_response();
     }
     let svc = Arc::new(service(&state).await);
-    if let Some(response) = guard_automation(&svc, &id) {
-        return response;
-    }
-    let secret_env = svc
-        .definition(&id)
-        .and_then(|definition| definition.webhook_secret_env.clone());
+    // RS-07: the credential check runs before the existence check, and an
+    // unknown id (or a disabled service) is refused exactly like a wrong
+    // credential, so the public ingress cannot enumerate automation ids.
+    let Some(definition) = svc.definition(&id).filter(|_| svc.is_enabled()) else {
+        return invalid_webhook_credential();
+    };
+    let secret_env = definition.webhook_secret_env.clone();
     if let Some(refusal) = webhook_secret_refusal(&id, secret_env.as_deref(), &headers, &body) {
         return refusal;
+    }
+    if let Some(response) = guard_automation(&svc, &id) {
+        return response;
     }
     let payload = payload_text(&body);
     match svc
@@ -188,14 +207,18 @@ fn webhook_secret_refusal(
     if bearer_ok || signature_ok {
         None
     } else {
-        Some(
-            error_response(
-                StatusCode::UNAUTHORIZED,
-                "invalid or missing webhook credential",
-            )
-            .into_response(),
-        )
+        Some(invalid_webhook_credential())
     }
+}
+
+/// The uniform `401` webhook refusal: a missing or wrong credential, and
+/// (RS-07) an unknown automation id, all answer with this same response.
+fn invalid_webhook_credential() -> Response {
+    error_response(
+        StatusCode::UNAUTHORIZED,
+        "invalid or missing webhook credential",
+    )
+    .into_response()
 }
 
 /// Lower-case hex HMAC-SHA256 of `body` keyed with `secret`, or `None` if

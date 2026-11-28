@@ -123,6 +123,7 @@ async fn test_rollback_loop_failure_keeps_the_capture() -> Result<()> {
     let snapshot = take_snapshot("sess-rollback", "msg-1", std::slice::from_ref(&target))?;
     std::fs::remove_file(&target).expect("remove mutated");
     // Turn the target directory read-only so the restore fails.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut perms = std::fs::metadata(dir.path())?.permissions();
     #[cfg(unix)]
     {

@@ -481,3 +481,15 @@ fn test_config_not_empty_when_customized() {
     };
     assert!(!config.is_empty());
 }
+
+#[test]
+fn test_dynamic_trigger_then_split_survives_case_folding_that_changes_length() {
+    // U+212A KELVIN SIGN lowercases to a 1-byte `k`, so an offset found in the
+    // lowercased text used to slice the original mid-character and panic.
+    let parsed = codemason_agent::trigger::dynamic::parse_trigger_request(
+        "when \u{212A} rises then run cargo test",
+    )
+    .expect("parses");
+    assert_eq!(parsed.condition, "\u{212A} rises");
+    assert_eq!(parsed.action, "run cargo test");
+}

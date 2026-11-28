@@ -233,7 +233,9 @@ fn each_consolidated_type_has_exactly_one_definition() {
             }
             let rel = file.strip_prefix(&workspace_root).map_or_else(
                 |_| file.display().to_string(),
-                |p| p.to_string_lossy().to_string(),
+                // The canonical homes are written with `/`; compare in that form
+                // so the guard agrees with itself on Windows (`\` separators).
+                |p| p.to_string_lossy().replace('\\', "/"),
             );
 
             if rel == canonical_display {

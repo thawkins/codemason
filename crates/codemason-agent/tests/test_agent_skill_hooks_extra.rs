@@ -887,7 +887,10 @@ async fn fire_hooks_and_turn_helpers_are_fire_and_forget() {
     let hooks = vec![
         hook(
             HookTrigger::OnTurnStart,
-            &format!("printf started > {}", marker.display()),
+            &format!(
+                "printf started > '{}'",
+                marker.display().to_string().replace('\\', "/")
+            ),
         ),
         hook(HookTrigger::OnTurnEnd, "true"),
         hook(HookTrigger::OnCompaction, "true"),
@@ -925,7 +928,7 @@ async fn run_stop_hooks_collects_top_level_block_reason() {
     .expect("write");
     let configs = vec![hook(
         HookTrigger::OnSessionEnd,
-        &format!("sh {}", script.display()),
+        &format!("sh '{}'", script.display().to_string().replace('\\', "/")),
     )];
     let guidance = run_stop_hooks(&configs, dir.path(), "sess-stop-extra").await;
     assert_eq!(guidance, vec!["needs a test".to_string()]);
@@ -942,7 +945,7 @@ async fn run_stop_hooks_uses_stderr_when_blocking_without_reason() {
     .expect("write");
     let configs = vec![hook(
         HookTrigger::OnSessionEnd,
-        &format!("sh {}", script.display()),
+        &format!("sh '{}'", script.display().to_string().replace('\\', "/")),
     )];
     let guidance = run_stop_hooks(&configs, dir.path(), "sess-stop-extra").await;
     assert_eq!(guidance, vec!["stderr finding".to_string()]);

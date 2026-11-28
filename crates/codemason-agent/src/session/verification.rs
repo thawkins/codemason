@@ -123,29 +123,20 @@ pub async fn run_verification_command(
 
 /// Synchronous execution of the verification script.
 ///
-/// Spawns `bash -c <script>` with piped output, drains stdout/stderr on
-/// helper threads (so a chatty child cannot deadlock on a full pipe buffer),
-/// and polls the child with a poll interval until either it exits or the
-/// deadline passes - on expiry the child is killed and the run reports a
-/// timeout failure. The blocking work runs on the tokio blocking pool via
-/// the async wrapper.
+/// Spawns `bash -c <script>` through the shared deadline runner (AG-06): the
+/// output drains while the script runs, the whole process tree is killed at
+/// [`VERIFICATION_TIMEOUT`] (a grandchild such as a test binary can no longer
+/// hold the pipes open past it), and the output is decoded lossily so one
+/// non-UTF-8 byte no longer empties it. The blocking work runs on the tokio
+/// blocking pool via the async wrapper.
 fn execute_verification_script(
     script: &str,
     working_dir: &std::path::Path,
 ) -> anyhow::Result<VerificationOutcome> {
-    use std::io::Read;
-
-    let result = Command::new("bash")
-        .arg("-c")
-        .arg(script)
-        .current_dir(working_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-
-    let mut child = match result {
-        Ok(child) => child,
+    let mut cmd = Command::new(codemason_tools_core::bash::bash_program());
+    cmd.arg("-c").arg(script).current_dir(working_dir);
+    let run = match crate::child_process::run_with_deadline(&mut cmd, None, VERIFICATION_TIMEOUT) {
+        Ok(run) => run,
         Err(e) => {
             return Ok(VerificationOutcome::Failure {
                 reason: format!("spawn error: {e}"),
@@ -153,83 +144,22 @@ fn execute_verification_script(
             });
         }
     };
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
 
-    // Drain stdout/stderr concurrently so the child never blocks on a full
-    // pipe while the poll loop waits for it to exit.
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-    let stdout_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(mut pipe) = stdout_pipe {
-            let _ = pipe.read_to_string(&mut buf);
-        }
-        buf
-    });
-    let stderr_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_string(&mut buf);
-        }
-        buf
-    });
-
-    // Poll-wait loop with a hard kill at the deadline.
-    let poll_interval = Duration::from_millis(100);
-    let mut waited = Duration::ZERO;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {}
-            Err(e) => {
-                let _ = child.kill();
-                // Reap the killed child so it does not linger as a zombie
-                // (the timeout branch below pairs kill() with wait() too).
-                let _ = child.wait();
-                // INTENTIONAL: reader-thread join; output is collected via the pipes
-                let _ = stdout_handle.join();
-                // INTENTIONAL: reader-thread join; output is collected via the pipes
-                let _ = stderr_handle.join();
-                return Ok(VerificationOutcome::Failure {
-                    reason: format!("wait error: {e}"),
-                    output: String::new(),
-                });
-            }
-        }
-        if waited >= VERIFICATION_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            let stdout = stdout_handle
-                .join()
-                .unwrap_or_else(|_| "(output capture failed)".to_string());
-            let stderr = stderr_handle
-                .join()
-                .unwrap_or_else(|_| "(output capture failed)".to_string());
-            let captured = truncate_head_tail(
-                format!("{stdout}{stderr}").trim(),
-                VERIFICATION_HEAD_CHARS,
-                VERIFICATION_TAIL_CHARS,
-            );
-            return Ok(VerificationOutcome::Failure {
-                reason: format!("timed out after {}s", VERIFICATION_TIMEOUT.as_secs()),
-                output: captured,
-            });
-        }
-        std::thread::sleep(poll_interval);
-        waited += poll_interval;
+    let Some(status) = run.status else {
+        let captured = truncate_head_tail(
+            format!("{stdout}{stderr}").trim(),
+            VERIFICATION_HEAD_CHARS,
+            VERIFICATION_TAIL_CHARS,
+        );
+        return Ok(VerificationOutcome::Failure {
+            reason: format!("timed out after {}s", VERIFICATION_TIMEOUT.as_secs()),
+            output: captured,
+        });
     };
 
-    // A panicked drain thread poisons the join; surface that rather than
-    // silently substituting empty output for the verdict evidence.
-    let stdout = match stdout_handle.join() {
-        Ok(out) => out,
-        Err(_) => "(output capture failed)".to_string(),
-    };
-    let stderr = match stderr_handle.join() {
-        Ok(err) => err,
-        Err(_) => "(output capture failed)".to_string(),
-    };
-
-    let mut captured = stdout;
+    let mut captured = stdout.into_owned();
     if !stderr.trim().is_empty() {
         if !captured.is_empty() {
             captured.push('\n');
@@ -241,16 +171,6 @@ fn execute_verification_script(
         VERIFICATION_HEAD_CHARS,
         VERIFICATION_TAIL_CHARS,
     );
-
-    let status = match status {
-        Some(status) => status,
-        None => {
-            return Ok(VerificationOutcome::Failure {
-                reason: "child exited without a status".to_string(),
-                output: String::new(),
-            });
-        }
-    };
     if status.success() {
         return Ok(VerificationOutcome::Success(captured));
     }

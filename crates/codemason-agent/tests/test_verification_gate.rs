@@ -541,3 +541,19 @@ async fn test_verification_failures_accumulate_until_budget_stops() -> Result<()
     assert!(!processor.loop_active(&session.id).await);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_verification_gate_non_utf8_output_is_kept() {
+    // One invalid byte used to empty the whole captured output (AG-06).
+    use codemason_agent::session::verification::{VerificationOutcome, run_verification_command};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outcome = run_verification_command(r"printf '\377ok'; exit 1", dir.path())
+        .await
+        .expect("ran");
+    match outcome {
+        VerificationOutcome::Failure { output, .. } => {
+            assert!(output.contains("ok"), "output: {output:?}");
+        }
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}

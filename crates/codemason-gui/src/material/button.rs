@@ -126,3 +126,76 @@ pub fn button(
     paint_focus_ring(ui, &response, radius, palette);
     response
 }
+
+/// Height of a [`small_button`], in points: one small text line and padding.
+pub const SMALL_HEIGHT: f32 = 24.0;
+
+/// Horizontal padding beside a small button's label, in points.
+const SMALL_PADDING: f32 = 12.0;
+
+/// Draw a small, click-only button for a toolbar or a row of actions (UI-13).
+///
+/// It is outlined, or filled `secondary_container` when it is a toggle in its
+/// on state, with its label in the small text size. It senses clicks only and
+/// so never takes the keyboard focus: a focusable button would share Enter
+/// with the prompt, which sends the draft.
+///
+/// # Arguments
+///
+/// * `ui` - the ui to draw in; a disabled ui draws a disabled button.
+/// * `palette` - the colours.
+/// * `label` - the button's text, also its accessible name.
+/// * `selected` - `Some(on)` for a toggle, reported to accessibility as
+///   toggled; `None` for a plain button.
+///
+/// # Returns
+///
+/// The button's response; `clicked()` is true when it was pressed.
+pub fn small_button(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    selected: Option<bool>,
+) -> Response {
+    let m3 = &palette.m3;
+    let on = selected == Some(true);
+    let content = if on {
+        rgb(m3.on_secondary_container)
+    } else {
+        rgb(m3.primary)
+    };
+    let content = content_colour(ui, palette, content);
+    let font = super::label_font(ui.ctx(), crate::metrics::text_size::SMALL);
+    let text = text_galley(ui, label, font, content);
+    let width = SMALL_PADDING + text.size().x + SMALL_PADDING;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, SMALL_HEIGHT), Sense::CLICK);
+    response.widget_info(|| match selected {
+        Some(on) => WidgetInfo::selected(Role::Button, ui.is_enabled(), on, label),
+        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), label),
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let radius = CornerRadius::same((SMALL_HEIGHT / 2.0) as u8);
+    let painter = ui.painter();
+    if on {
+        let fill = if ui.is_enabled() {
+            rgb(m3.secondary_container)
+        } else {
+            rgb(m3.on_surface).gamma_multiply(DISABLED_CONTAINER_OPACITY)
+        };
+        painter.rect_filled(rect, radius, fill);
+    } else {
+        let outline = if ui.is_enabled() {
+            rgb(m3.outline)
+        } else {
+            rgb(m3.on_surface).gamma_multiply(DISABLED_CONTAINER_OPACITY)
+        };
+        painter.rect_stroke(rect, radius, Stroke::new(1.0, outline), StrokeKind::Inside);
+    }
+    paint_state_layer(ui, &response, radius, content);
+    let y = rect.center().y - text.size().y / 2.0;
+    ui.painter()
+        .galley(egui::pos2(rect.left() + SMALL_PADDING, y), text, content);
+    response
+}

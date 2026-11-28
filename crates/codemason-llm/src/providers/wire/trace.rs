@@ -36,7 +36,7 @@
 //! turn proceeds. The trace observes the request; it never gates it.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -160,7 +160,10 @@ pub fn record_body(request: &ChatRequest, body: &Value) {
         return;
     }
     let text = render(body);
-    if let Err(error) = write_atomic(&path, &text) {
+    // CO-17: the shared atomic writer (temp file, sync, rename, 0600 on Unix);
+    // a crash mid-write would otherwise leave a truncated trace that looks
+    // like a truncated request.
+    if let Err(error) = codemason_types::guard::write_atomic(&path, text.as_bytes()) {
         tracing::warn!(
             path = %path.display(),
             error = %error,
@@ -308,33 +311,4 @@ fn escape_non_ascii(text: &str) -> String {
         }
     }
     out
-}
-
-/// Write `contents` to `path` through a temporary file in the same directory.
-///
-/// A crash mid-write would otherwise leave a truncated trace that looks like a
-/// truncated request, so the file is built beside its destination and renamed
-/// into place.
-fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let temporary = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, contents)?;
-    match std::fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            // Clean up the partial temporary file; the rename failure itself is
-            // the error the caller reports.
-            if let Err(cleanup) = std::fs::remove_file(&temporary) {
-                tracing::debug!(
-                    path = %temporary.display(),
-                    error = %cleanup,
-                    "wire trace: cannot remove a temporary file after a failed rename"
-                );
-            }
-            Err(error)
-        }
-    }
 }

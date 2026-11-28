@@ -156,6 +156,31 @@ fn get_shell() -> &'static ShellType {
     SHELL_CACHE.get_or_init(discover_shell)
 }
 
+/// The program that runs a POSIX `-c` script on this system.
+///
+/// Hooks, verification scripts and `run "!<cmd>"` are written in POSIX shell.
+/// On Unix that is `sh`. Windows has no `sh` on the default `PATH`, so a bare
+/// `sh` spawn fails there; this returns the Git Bash found by the same
+/// discovery the `Bash` tool uses. With no Git Bash it returns `sh`, so the
+/// spawn fails with a clear "program not found" error.
+#[must_use]
+pub fn posix_shell() -> PathBuf {
+    match get_shell() {
+        ShellType::GitBash(path) => path.clone(),
+        ShellType::Bash | ShellType::PowerShell(_) => PathBuf::from("sh"),
+    }
+}
+
+/// The program that runs a `bash -c` script on this system: the discovered
+/// Git Bash on Windows (see [`posix_shell`]), otherwise `bash`.
+#[must_use]
+pub fn bash_program() -> PathBuf {
+    match get_shell() {
+        ShellType::GitBash(path) => path.clone(),
+        ShellType::Bash | ShellType::PowerShell(_) => PathBuf::from("bash"),
+    }
+}
+
 // -- Windows state/temp directory helpers -----------------------------------
 
 /// Return the base directory for codemason shell state/temp files on Windows.

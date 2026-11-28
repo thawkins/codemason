@@ -82,6 +82,8 @@ mod test_apply_patch;
 #[path = "test_bash_reset_tool.rs"]
 mod test_bash_reset_tool;
 
+#[path = "test_bash_shell_program.rs"]
+mod test_bash_shell_program;
 #[path = "test_bash_wrapper_quoting.rs"]
 mod test_bash_wrapper_quoting;
 
@@ -168,3 +170,7 @@ mod test_truncate;
 
 #[path = "test_bash_large_output.rs"]
 mod test_bash_large_output;
+
+/// Redirects the user-profile variables before any test runs.
+#[path = "../../../tests/common/profile_isolation.rs"]
+mod profile_isolation;

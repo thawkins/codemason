@@ -64,6 +64,57 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// character cannot appear in a URL or session id, so it cannot collide.
 const KEY_SEP: char = '\u{1f}';
 
+/// Maximum bytes of a non-2xx response body kept as an error `detail` (AG-11).
+const ERROR_DETAIL_MAX_BYTES: usize = 4 * 1024;
+
+/// Maximum bytes of a session-creation response body (AG-11). The body is a
+/// small JSON object carrying the remote session `id`.
+const SESSION_BODY_MAX_BYTES: usize = 64 * 1024;
+
+/// Read at most `limit` bytes of `response`'s body, stopping the read at the
+/// cap so a hostile or broken server cannot force an unbounded buffer
+/// (AG-11). Returns the bytes kept and whether the body ran past `limit`.
+async fn read_capped(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<(Vec<u8>, bool), reqwest::Error> {
+    let mut stream = response.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let room = limit - out.len();
+        if chunk.len() > room {
+            out.extend_from_slice(&chunk[..room]);
+            return Ok((out, true));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok((out, false))
+}
+
+/// The bounded, trimmed `detail` of a rejected request: at most
+/// [`ERROR_DETAIL_MAX_BYTES`] of the body, read within [`REQUEST_TIMEOUT`]
+/// (the streaming turn request carries no total timeout of its own). A read
+/// failure or timeout yields an empty detail, since the detail only decorates
+/// an error that is already being reported.
+async fn error_detail(response: reqwest::Response) -> String {
+    let read = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        read_capped(response, ERROR_DETAIL_MAX_BYTES),
+    )
+    .await;
+    match read {
+        Ok(Ok((bytes, truncated))) => {
+            let mut detail = String::from_utf8_lossy(&bytes).trim().to_string();
+            if truncated {
+                detail.push_str("... [truncated]");
+            }
+            detail
+        }
+        Ok(Err(_)) | Err(_) => String::new(),
+    }
+}
+
 /// Why a remote turn step failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteErrorKind {
@@ -468,18 +519,35 @@ impl RemoteBackend {
         })?;
         let status = response.status();
         if !status.is_success() {
-            let detail = response.text().await.unwrap_or_default();
+            let detail = error_detail(response).await;
             return Err(RemoteError::new(
                 RemoteErrorKind::Protocol,
                 format!(
                     "the remote server rejected session creation (HTTP {}): {}",
                     status.as_u16(),
-                    detail.trim()
+                    detail
                 ),
             )
             .with_status(status.as_u16()));
         }
-        let value: Value = response.json().await.map_err(|e| {
+        let (bytes, truncated) = read_capped(response, SESSION_BODY_MAX_BYTES)
+            .await
+            .map_err(|e| {
+                RemoteError::new(
+                    RemoteErrorKind::Protocol,
+                    format!("the remote server's session body could not be read: {e}"),
+                )
+            })?;
+        if truncated {
+            return Err(RemoteError::new(
+                RemoteErrorKind::Protocol,
+                format!(
+                    "the remote server's session body exceeded the \
+                     {SESSION_BODY_MAX_BYTES}-byte cap"
+                ),
+            ));
+        }
+        let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
             RemoteError::new(
                 RemoteErrorKind::Protocol,
                 format!("the remote server returned an invalid session body: {e}"),
@@ -532,13 +600,13 @@ impl RemoteBackend {
             })?;
         let status = response.status();
         if !status.is_success() {
-            let detail = response.text().await.unwrap_or_default();
+            let detail = error_detail(response).await;
             return Err(RemoteError::new(
                 RemoteErrorKind::Protocol,
                 format!(
                     "the remote server rejected the turn (HTTP {}): {}",
                     status.as_u16(),
-                    detail.trim()
+                    detail
                 ),
             )
             .with_status(status.as_u16()));

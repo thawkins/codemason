@@ -488,25 +488,13 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         return cli::handle_wire_matrix_command();
     }
 
-    // Install the panic hook first so panics during startup are also captured.
-    panic_hook::install();
-
-    check_and_stamp_crash_marker(&working_dir);
-    // The GUI's quit safety net ends the process with `process::exit`, which
-    // skips the `clean exit` stamp in `main_body`; stamp the marker first so
-    // a deliberate forced exit is not reported as a crash on the next start.
-    codemason_app_core::app::quit::set_force_exit_hook(stamp_forced_exit);
+    install_crash_handling(&working_dir);
 
     let mut startup = StartupTimings::new();
     let t0 = Instant::now();
     startup.record("CLI parse", t0.elapsed());
 
-    if cli.no_git_context {
-        codemason_agent::agent::disable_git_prompt_context();
-    }
-    if cli.no_readme_context {
-        codemason_agent::agent::disable_readme_prompt_context();
-    }
+    apply_prompt_context_flags(&cli);
 
     // Initialize tracing.
     //
@@ -520,9 +508,264 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     startup.record("Tracing init", t0.elapsed());
     tracing::info!(log_level = %cli.log_level, gui_mode = gui_will_run, "Tracing initialized");
 
+    let config = load_and_apply_config(&cli, &mut startup)?;
+
+    let agent_services = AgentServiceSettings::from_config(&config);
+
+    let (db_path, storage) = open_storage(&config, &mut startup)?;
+
+    let (event_bus, provider_registry, tool_registry) =
+        create_event_bus_and_registries(&storage, &mut startup);
+
+    let permission_checker = create_permission_checker(&config, &mut startup);
+
+    let resolved_agent =
+        resolve_startup_agent(&cli, &config, &provider_registry, &storage, &mut startup)?;
+
+    let stream_config = config.stream.clone();
+
+    let config = Arc::new(tokio::sync::RwLock::new(config));
+
+    let (telemetry, _telemetry_guard) = start_telemetry(&config, logs_cell, &mut startup).await;
+
+    // Create session manager and processor
+    let t0 = Instant::now();
+    let (session_manager, session_processor) = build_session_processor(
+        &cli,
+        &storage,
+        &event_bus,
+        &provider_registry,
+        &tool_registry,
+        permission_checker,
+        stream_config,
+        telemetry,
+    );
+    tracing::info!(auto_approve = cli.yes, "Session processor initialized");
+    startup.record("Session manager & processor", t0.elapsed());
+
+    start_agent_services(
+        &session_processor,
+        agent_services,
+        &event_bus,
+        &storage,
+        &mut startup,
+    );
+
+    // Connect MCP servers from config in the background so the TUI (or
+    // headless run) appears immediately.  Each MCP connection spawns a child
+    // process and performs a handshake + tool-list round-trip; doing this
+    // sequentially on the main task can add 5-15 seconds to startup when one
+    // or more servers are slow to start.
+    //
+    // FR-030 MCP bridge: enabled plugins also contribute MCP servers (their
+    // manifest `mcpServers` section). Configured servers take precedence on an
+    // id collision; the merged set connects exactly like before.
+    //
+    // Enable state: whether a server is started is a durable, global choice
+    // recorded in the MCP enable-state ledger. A server absent from the ledger
+    // is enabled, so a newly added server starts connected.
+    // Connector bridge (spec `connectors` T-008; FR-008, FR-020): an enabled
+    // connector's servers are resolved into bridged ids (`<connector>.<server>`)
+    // and connect through the same loop as the configured servers, so their tools
+    // surface as the ordinary `mcp_<server>_<tool>` tools of the shared client.
+    // `scan_connector_bridge` is the read-only half (store scan + collision
+    // refusal, no connection); the connect loop applies the durable per-server
+    // enable ledger to the bridged ids exactly as it does for configured servers.
+    connect_mcp_servers(&config, &session_processor, &event_bus).await;
+
+    init_spec_manager(&session_processor, &mut startup);
+    if cli.dry_run {
+        run_cli_dry_run(&cli, cli.json, &provider_registry, &tool_registry).await;
+    }
+
+    // Wire the activity-log store into the session processor.
+    //
+    // The handle is set unconditionally; recording is gated at each call site
+    // by `codemason_config::activity_log::is_enabled()` so `/alog off` suppresses
+    // writes without unwiring the handle. A failure to open the log is
+    // non-fatal - the agent loop simply skips recording (best-effort).
+    //
+    // The open is off-loaded to a background thread: it opens a *separate*
+    // SQLite database (`activity_log.db`) and runs its schema migration, so
+    // doing it synchronously here would stall the TUI's first frame. The
+    // handle is wired via `OnceLock` (`set_activity_log`) once the open
+    // completes; recording only begins after the session starts, by which
+    // time the background open has finished.
+    //
+    // This is intentionally placed *after* the `dry_run` early-return so a
+    // readiness check does not open (or create) the activity-log database.
+    spawn_activity_log_open(&db_path, &session_processor);
+
+    // R-23: the command dispatch below moves `storage` into the TUI (and into
+    // several handlers), so keep a handle for the graceful-shutdown WAL
+    // checkpoint at the end of this function.
+    let storage_for_shutdown = Arc::clone(&storage);
+    let ctx = CommandContext {
+        event_bus,
+        storage,
+        provider_registry,
+        tool_registry,
+        session_manager: &session_manager,
+        session_processor,
+        resolved_agent,
+        config,
+        db_path,
+        gui_log_rx,
+        startup,
+        gui_launcher,
+        working_dir,
+    };
+    if dispatch_command(cli, ctx).await? == AfterCommand::SkipWalCheckpoint {
+        return Ok(());
+    }
+    // R-23: on a graceful exit, truncate the WAL so the next start does not
+    // inherit a file that grew to the high-water mark of this session's
+    // largest write burst. Best-effort: a failure here must never turn a
+    // successful command into an error exit.
+    if let Err(e) = storage_for_shutdown.checkpoint_wal() {
+        tracing::warn!(error = %e, "Failed to checkpoint WAL on shutdown");
+    }
+    Ok(())
+}
+
+/// What [`async_main`] does after a command returns successfully.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterCommand {
+    /// Run the graceful-shutdown WAL checkpoint.
+    CheckpointWal,
+    /// Return at once, skipping the checkpoint (the `run "/new"` path).
+    SkipWalCheckpoint,
+}
+
+/// The services and startup state a sub-command runs with, moved out of
+/// [`async_main`] into [`dispatch_command`].
+struct CommandContext<'a> {
+    /// The process event bus.
+    event_bus: Arc<EventBus>,
+    /// The main storage connection.
+    storage: Arc<Storage>,
+    /// The provider registry.
+    provider_registry: Arc<provider::ProviderRegistry>,
+    /// The tool registry.
+    tool_registry: Arc<tool::ToolRegistry>,
+    /// The session manager, owned by [`async_main`].
+    session_manager: &'a Arc<SessionManager>,
+    /// The session processor.
+    session_processor: Arc<SessionProcessor>,
+    /// The agent the session starts with.
+    resolved_agent: Arc<agent::AgentInfo>,
+    /// The shared runtime configuration.
+    config: Arc<tokio::sync::RwLock<Config>>,
+    /// Path of the main database.
+    db_path: PathBuf,
+    /// The GUI log-panel receiver, when the GUI will run.
+    gui_log_rx: Option<codemason_app_core::log_channel::TuiLogReceiver>,
+    /// Startup timings handed to the GUI.
+    startup: StartupTimings,
+    /// Launcher for the desktop GUI.
+    gui_launcher: codemason_gui::GuiLauncher,
+    /// The process working directory.
+    working_dir: PathBuf,
+}
+
+/// The configuration values [`wire_agent_services`] runs with.
+struct AgentServiceSettings {
+    /// Memory auto-extraction settings.
+    auto_extract_config: codemason_config::AutoExtractConfig,
+    /// Maximum concurrent background agents.
+    max_background_agents: usize,
+    /// Background agent timeout.
+    background_agent_timeout: u64,
+}
+
+impl AgentServiceSettings {
+    /// Read the agent-service settings from the configuration.
+    ///
+    /// # Arguments
+    /// * `config` - the loaded configuration.
+    ///
+    /// # Returns
+    /// The memory auto-extraction and background-agent settings.
+    fn from_config(config: &Config) -> Self {
+        Self {
+            auto_extract_config: config.memory.auto_extract.clone(),
+            max_background_agents: config.experimental.max_background_agents,
+            background_agent_timeout: config.experimental.background_agent_timeout,
+        }
+    }
+}
+
+/// Start the agent manager and background services on the session processor.
+///
+/// # Arguments
+/// * `session_processor` - the processor the services attach to.
+/// * `settings` - the agent-service settings from the configuration.
+/// * `event_bus` - the process event bus.
+/// * `storage` - the main storage connection.
+/// * `startup` - startup timings; records `Agent mgr & bg service`.
+fn start_agent_services(
+    session_processor: &Arc<SessionProcessor>,
+    settings: AgentServiceSettings,
+    event_bus: &Arc<EventBus>,
+    storage: &Arc<Storage>,
+    startup: &mut StartupTimings,
+) {
+    let t0 = Instant::now();
+    wire_agent_services(
+        session_processor,
+        settings.auto_extract_config,
+        event_bus,
+        storage,
+        settings.max_background_agents,
+        settings.background_agent_timeout,
+    );
+    startup.record("Agent mgr & bg service", t0.elapsed());
+}
+
+/// Install the panic hook and the crash marker, and register the forced-exit
+/// stamp.
+///
+/// # Arguments
+/// * `working_dir` - directory holding the crash marker.
+fn install_crash_handling(working_dir: &std::path::Path) {
+    // Install the panic hook first so panics during startup are also captured.
+    panic_hook::install();
+
+    check_and_stamp_crash_marker(working_dir);
+    // The GUI's quit safety net ends the process with `process::exit`, which
+    // skips the `clean exit` stamp in `main_body`; stamp the marker first so
+    // a deliberate forced exit is not reported as a crash on the next start.
+    codemason_app_core::app::quit::set_force_exit_hook(stamp_forced_exit);
+}
+
+/// Apply the `--no-git-context` and `--no-readme-context` flags.
+///
+/// # Arguments
+/// * `cli` - the parsed command line.
+fn apply_prompt_context_flags(cli: &Cli) {
+    if cli.no_git_context {
+        codemason_agent::agent::disable_git_prompt_context();
+    }
+    if cli.no_readme_context {
+        codemason_agent::agent::disable_readme_prompt_context();
+    }
+}
+
+/// Load the configuration and push its startup settings into the runtime.
+///
+/// # Arguments
+/// * `cli` - the parsed command line (`--config`).
+/// * `startup` - startup timings; records `Config load`.
+///
+/// # Returns
+/// The loaded configuration.
+///
+/// # Errors
+/// Returns an error when the configuration cannot be loaded.
+fn load_and_apply_config(cli: &Cli, startup: &mut StartupTimings) -> Result<Config> {
     // Load config
     let t0 = Instant::now();
-    let config = load_startup_config(&cli)?;
+    let config = load_startup_config(cli)?;
     startup.record("Config load", t0.elapsed());
     // Keep the in-memory runtime flags in sync with the loaded config. The
     // helper takes the already-loaded values, so no module reloads the config
@@ -554,9 +797,21 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         config_paths = ?config.config_paths,
         "Configuration loaded successfully"
     );
+    Ok(config)
+}
 
-    let auto_extract_config = config.memory.auto_extract.clone();
-
+/// Open the main database and start its background maintenance.
+///
+/// # Arguments
+/// * `config` - configuration supplying the retention settings.
+/// * `startup` - startup timings; records the storage open and secret seed.
+///
+/// # Returns
+/// The database path and the opened storage.
+///
+/// # Errors
+/// Returns an error when the database cannot be opened.
+fn open_storage(config: &Config, startup: &mut StartupTimings) -> Result<(PathBuf, Arc<Storage>)> {
     // Initialize storage
     let db_path = data_dir().join("codemason.db");
     tracing::info!(db_path = %db_path.display(), "Opening database");
@@ -571,7 +826,7 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // must not stall the startup critical path. Session rows are kept, so an
     // expired transcript leaves the session listed but empty rather than
     // vanishing from the session list.
-    spawn_message_retention(&config, &storage);
+    spawn_message_retention(config, &storage);
 
     // M5: Warm the session message FTS index in the background so the
     // conversation/session search tools return up-to-date results after
@@ -594,14 +849,32 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     let t0 = Instant::now();
     seed_secret_registry(&storage);
     startup.record("Secret registry seed", t0.elapsed());
+    Ok((db_path, storage))
+}
 
+/// Create the event bus and the provider and tool registries.
+///
+/// # Arguments
+/// * `storage` - storage the registries read provider settings from.
+/// * `startup` - startup timings; records `Provider & tool registries`.
+///
+/// # Returns
+/// The event bus, the provider registry and the tool registry.
+fn create_event_bus_and_registries(
+    storage: &Arc<Storage>,
+    startup: &mut StartupTimings,
+) -> (
+    Arc<EventBus>,
+    Arc<provider::ProviderRegistry>,
+    Arc<tool::ToolRegistry>,
+) {
     // Create event bus
     let t0 = Instant::now();
     let event_bus = Arc::new(EventBus::new(2048));
     tracing::debug!(capacity = 2048, "Event bus created");
 
     // Create registries
-    let (provider_registry, tool_registry) = build_registries(&storage);
+    let (provider_registry, tool_registry) = build_registries(storage);
     let provider_count = provider_registry.list().len();
     let tool_count = tool_registry.list().len();
     startup.record("Provider & tool registries", t0.elapsed());
@@ -610,22 +883,44 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         tools = tool_count,
         "Registries created"
     );
+    (event_bus, provider_registry, tool_registry)
+}
 
+/// Build the permission checker from the configured permission rules.
+///
+/// # Arguments
+/// * `config` - configuration supplying the permission rules.
+/// * `startup` - startup timings; records `Permission checker`.
+///
+/// # Returns
+/// The shared permission checker.
+fn create_permission_checker(
+    config: &Config,
+    startup: &mut StartupTimings,
+) -> Arc<parking_lot::RwLock<PermissionChecker>> {
     let t0 = Instant::now();
     let permission_checker = Arc::new(parking_lot::RwLock::new(PermissionChecker::new(
         config.permission.clone(),
     )));
     startup.record("Permission checker", t0.elapsed());
+    permission_checker
+}
 
-    let resolved_agent =
-        resolve_startup_agent(&cli, &config, &provider_registry, &storage, &mut startup)?;
-
-    let max_background_agents = config.experimental.max_background_agents;
-    let background_agent_timeout = config.experimental.background_agent_timeout;
-    let stream_config = config.stream.clone();
-
-    let config = Arc::new(tokio::sync::RwLock::new(config));
-
+/// Start the telemetry subsystem and attach it to the agent-loop profiler.
+///
+/// # Arguments
+/// * `config` - the shared runtime configuration.
+/// * `logs_cell` - the OTel log export cell from tracing initialisation.
+/// * `startup` - startup timings; records `Telemetry init`.
+///
+/// # Returns
+/// The telemetry subsystem and the guard that flushes it on exit; the caller
+/// keeps the guard alive for the rest of the process.
+async fn start_telemetry(
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    logs_cell: codemason_agent::telemetry::ExportCell,
+    startup: &mut StartupTimings,
+) -> (Arc<TelemetrySubsystem>, ShutdownGuard) {
     // Initialise telemetry subsystem from configuration.
     // A ShutdownGuard keeps the provider alive for the process lifetime and
     // flushes pending metrics on normal or panic exit paths.
@@ -640,61 +935,21 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
     // The guard shares the live subsystem via `Arc` - with the same handle
     // also wired into the session processor below, the shared-instance guard
     // flushes the actual provider rather than a disabled clone.
-    let _telemetry_guard = ShutdownGuard::new(Arc::clone(&telemetry));
+    let telemetry_guard = ShutdownGuard::new(Arc::clone(&telemetry));
     // Export every agent-loop profiler scope as `codemason.profile.duration`
     // (tagged with its profiler bucket) while OTel export is enabled.
     codemason_agent::session::profiler::agent_loop_profiler()
         .attach_telemetry(Arc::clone(&telemetry));
     startup.record("Telemetry init", t0.elapsed());
+    (telemetry, telemetry_guard)
+}
 
-    // Create session manager and processor
-    let t0 = Instant::now();
-    let (session_manager, session_processor) = build_session_processor(
-        &cli,
-        &storage,
-        &event_bus,
-        &provider_registry,
-        &tool_registry,
-        permission_checker,
-        stream_config,
-        telemetry,
-    );
-    tracing::info!(auto_approve = cli.yes, "Session processor initialized");
-    startup.record("Session manager & processor", t0.elapsed());
-
-    let t0 = Instant::now();
-    wire_agent_services(
-        &session_processor,
-        auto_extract_config,
-        &event_bus,
-        &storage,
-        max_background_agents,
-        background_agent_timeout,
-    );
-    startup.record("Agent mgr & bg service", t0.elapsed());
-
-    // Connect MCP servers from config in the background so the TUI (or
-    // headless run) appears immediately.  Each MCP connection spawns a child
-    // process and performs a handshake + tool-list round-trip; doing this
-    // sequentially on the main task can add 5-15 seconds to startup when one
-    // or more servers are slow to start.
-    //
-    // FR-030 MCP bridge: enabled plugins also contribute MCP servers (their
-    // manifest `mcpServers` section). Configured servers take precedence on an
-    // id collision; the merged set connects exactly like before.
-    //
-    // Enable state: whether a server is started is a durable, global choice
-    // recorded in the MCP enable-state ledger. A server absent from the ledger
-    // is enabled, so a newly added server starts connected.
-    // Connector bridge (spec `connectors` T-008; FR-008, FR-020): an enabled
-    // connector's servers are resolved into bridged ids (`<connector>.<server>`)
-    // and connect through the same loop as the configured servers, so their tools
-    // surface as the ordinary `mcp_<server>_<tool>` tools of the shared client.
-    // `scan_connector_bridge` is the read-only half (store scan + collision
-    // refusal, no connection); the connect loop applies the durable per-server
-    // enable ledger to the bridged ids exactly as it does for configured servers.
-    connect_mcp_servers(&config, &session_processor, &event_bus).await;
-
+/// Install the spec manager on the session processor.
+///
+/// # Arguments
+/// * `session_processor` - the processor that owns the spec manager slot.
+/// * `startup` - startup timings; records `Spec manager init`.
+fn init_spec_manager(session_processor: &Arc<SessionProcessor>, startup: &mut StartupTimings) {
     // Initialize spec manager for all modes (TUI, serve, run, etc.)
     let t0 = Instant::now();
     let specs_root = crate::working_dir().join("specs");
@@ -702,146 +957,83 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
         .spec_manager
         .set(Arc::new(codemason_specs::SpecManager::new(&specs_root)));
     startup.record("Spec manager init", t0.elapsed());
-    if cli.dry_run {
-        run_dry_run_and_exit(
-            cli.config.clone(),
-            &cli.agent,
-            cli.model.as_deref(),
-            cli.json,
-            Arc::clone(&provider_registry),
-            Arc::clone(&tool_registry),
-        )
-        .await;
-    }
+}
 
-    // Wire the activity-log store into the session processor.
-    //
-    // The handle is set unconditionally; recording is gated at each call site
-    // by `codemason_config::activity_log::is_enabled()` so `/alog off` suppresses
-    // writes without unwiring the handle. A failure to open the log is
-    // non-fatal - the agent loop simply skips recording (best-effort).
-    //
-    // The open is off-loaded to a background thread: it opens a *separate*
-    // SQLite database (`activity_log.db`) and runs its schema migration, so
-    // doing it synchronously here would stall the TUI's first frame. The
-    // handle is wired via `OnceLock` (`set_activity_log`) once the open
-    // completes; recording only begins after the session starts, by which
-    // time the background open has finished.
-    //
-    // This is intentionally placed *after* the `dry_run` early-return so a
-    // readiness check does not open (or create) the activity-log database.
-    spawn_activity_log_open(&db_path, &session_processor);
+/// Run the readiness check for the command line's config, agent and model,
+/// then exit the process.
+///
+/// # Arguments
+/// * `cli` - the parsed command line (`--config`, `--agent`, `--model`).
+/// * `json_output` - emit the report as JSON.
+/// * `provider_registry` - the provider registry.
+/// * `tool_registry` - the tool registry.
+async fn run_cli_dry_run(
+    cli: &Cli,
+    json_output: bool,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    tool_registry: &Arc<tool::ToolRegistry>,
+) {
+    run_dry_run_and_exit(
+        cli.config.clone(),
+        &cli.agent,
+        cli.model.as_deref(),
+        json_output,
+        Arc::clone(provider_registry),
+        Arc::clone(tool_registry),
+    )
+    .await;
+}
 
-    // R-23: the command dispatch below moves `storage` into the TUI (and into
-    // several handlers), so keep a handle for the graceful-shutdown WAL
-    // checkpoint at the end of this function.
-    let storage_for_shutdown = Arc::clone(&storage);
-    match cli.command {
+/// Run the sub-command the command line selected (the GUI when none).
+///
+/// # Arguments
+/// * `cli` - the parsed command line; its `command` is taken.
+/// * `ctx` - the services the command runs with.
+///
+/// # Returns
+/// Whether [`async_main`] should still run the WAL checkpoint.
+///
+/// # Errors
+/// Returns the selected command's error.
+async fn dispatch_command(mut cli: Cli, ctx: CommandContext<'_>) -> Result<AfterCommand> {
+    match cli.command.take() {
         None => {
-            // Default: open the desktop GUI (`--no-tui` keeps plain stdio).
-            if cli.interactive.mode() == Mode::Plain {
-                run_plain_interactive(
-                    &resolved_agent,
-                    &config,
-                    &provider_registry,
-                    &session_manager,
-                    &session_processor,
-                )
-                .await?;
-            } else {
-                launch_gui(
-                    event_bus,
-                    storage,
-                    provider_registry,
-                    session_processor,
-                    &resolved_agent,
-                    cli.log,
-                    if cli.new_session {
-                        StartupSession::New
-                    } else {
-                        StartupSession::Restore
-                    },
-                    gui_log_rx,
-                    db_path.clone(),
-                    &config,
-                    startup,
-                    gui_launcher,
-                )
-                .await?;
-            }
+            run_default_mode(&cli, ctx).await?;
         }
         Some(Commands::Run { prompt }) => {
-            // FR-013 CLI parity: a `/new` prompt is executed by the same
-            // scaffold engine as `codemason new`, not sent to the LLM. The
-            // scaffolder is a deterministic local operation; there is no
-            // agent turn to run.
-            let trimmed = prompt.trim();
-            if trimmed == "/new" || trimmed.starts_with("/new ") {
-                return cli::handle_new_prompt(trimmed.trim_start_matches("/new"));
-            }
-            run_headless(
+            return run_prompt_command(
                 prompt,
-                &resolved_agent,
-                &config,
-                &provider_registry,
-                &session_manager,
-                &session_processor,
+                &ctx.resolved_agent,
+                &ctx.config,
+                &ctx.provider_registry,
+                ctx.session_manager,
+                &ctx.session_processor,
             )
-            .await?;
+            .await;
         }
         Some(Commands::Serve { addr }) => {
-            serve(addr, event_bus, config, storage, session_processor).await?;
+            serve(
+                addr,
+                ctx.event_bus,
+                ctx.config,
+                ctx.storage,
+                ctx.session_processor,
+            )
+            .await?;
         }
         Some(Commands::Orchestrate) => {
             tracing::info!("Starting orchestration example");
             cli::run_orchestration_example().await?;
         }
         Some(Commands::Project { command }) => {
-            run_project_command(command, &config, &storage, &event_bus).await?;
+            run_project_command(command, &ctx.config, &ctx.storage, &ctx.event_bus).await?;
         }
-        Some(Commands::Session { command }) => match command {
-            SessionCommands::List { project, json } => {
-                run_session_list(&storage, project, json)?;
-            }
-            SessionCommands::Resume { id } => {
-                // Verify session exists before launching the GUI
-                if storage.get_session(&id)?.is_none() {
-                    anyhow::bail!("Session not found: {id}");
-                }
-                tracing::info!(session_id = %id, "Resuming session");
-                launch_gui(
-                    event_bus,
-                    storage,
-                    provider_registry,
-                    session_processor,
-                    &resolved_agent,
-                    cli.log,
-                    StartupSession::Resume(id),
-                    gui_log_rx,
-                    db_path.clone(),
-                    &config,
-                    startup,
-                    gui_launcher,
-                )
-                .await?;
-            }
-            SessionCommands::ExportArchive {
-                id,
-                output,
-                no_triggers,
-                no_cron,
-                no_loop_state,
-                include_cost: _,
-            } => {
-                run_session_export(&storage, id, output, no_triggers, no_cron, no_loop_state)?;
-            }
-            SessionCommands::Import { file } => {
-                run_session_import(&storage, file).await?;
-            }
-        },
+        Some(Commands::Session { command }) => {
+            run_session_command(command, &cli, ctx).await?;
+        }
         Some(Commands::Db { command }) => match command {
             DbCommands::Prune { days, dry_run } => {
-                run_db_prune(days, dry_run, &config, &storage).await?;
+                run_db_prune(days, dry_run, &ctx.config, &ctx.storage).await?;
             }
         },
         Some(Commands::Stats {
@@ -849,57 +1041,39 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             project,
             json,
         }) => {
-            let args = codemason_app_core::usage_stats::StatsArgs {
-                days,
-                project,
-                json,
-            };
-            let cwd = std::env::current_dir()?;
-            let report =
-                codemason_app_core::usage_stats::usage_stats_report(&storage, &args, &cwd)?;
-            writeln!(std::io::stdout(), "{report}")?;
+            run_stats_command(days, project, json, &ctx.storage)?;
         }
         Some(Commands::Auth { provider, key }) => {
-            storage.set_provider_auth(&provider, &key)?;
+            ctx.storage.set_provider_auth(&provider, &key)?;
             tracing::info!(provider = %provider, "Stored API key");
         }
         Some(Commands::Models {
             provider: filter,
             ollama_url,
         }) => {
-            list_models(filter, ollama_url, &storage, &provider_registry).await?;
+            list_models(filter, ollama_url, &ctx.storage, &ctx.provider_registry).await?;
         }
-        Some(Commands::Config { command }) => match command {
-            Some(ConfigCommands::Check { json }) => {
-                run_dry_run_and_exit(
-                    cli.config.clone(),
-                    &cli.agent,
-                    cli.model.as_deref(),
-                    cli.json || json,
-                    Arc::clone(&provider_registry),
-                    Arc::clone(&tool_registry),
-                )
-                .await;
-            }
-            _ => {
-                let config = config.read().await;
-                cliprintln!("{:#?}", *config);
-                drop(config);
-            }
-        },
+        Some(Commands::Config { command }) => {
+            run_config_command(
+                command,
+                &cli,
+                &ctx.config,
+                &ctx.provider_registry,
+                &ctx.tool_registry,
+            )
+            .await;
+        }
         Some(Commands::Memory { command }) => {
-            run_memory_command(command, &storage)?;
+            run_memory_command(command, &ctx.storage)?;
         }
         Some(Commands::Research { command }) => {
-            // Use the startup config, so `--config <file>` settings apply.
-            let startup_config = Arc::new(config.read().await.clone());
-            Box::pin(cli::handle_research_command_with_model(
-                *command,
-                startup_config,
-                resolved_agent.model.clone(),
-                Some(storage.clone()),
-                Some(provider_registry.clone()),
-            ))
+            run_research_command(
+                command,
+                &ctx.config,
+                &ctx.resolved_agent,
+                &ctx.storage,
+                &ctx.provider_registry,
+            )
             .await?;
         }
         Some(Commands::New { scaffold, .. }) => {
@@ -909,9 +1083,9 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             run_spec_command(
                 command,
                 cli.model.clone(),
-                &config,
-                storage,
-                provider_registry,
+                &ctx.config,
+                ctx.storage,
+                ctx.provider_registry,
             )
             .await?;
         }
@@ -931,8 +1105,8 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             // Automation service CLI parity surface (spec `openhands` T-016;
             // FR-018). Lists automations and their run history, or enqueues a
             // manual run; the run-history reads are synchronous storage calls.
-            let config = config.read().await.clone();
-            cli::handle_automation_command(&args, Arc::clone(&storage), &config)?;
+            let config = ctx.config.read().await.clone();
+            cli::handle_automation_command(&args, Arc::clone(&ctx.storage), &config)?;
         }
         Some(Commands::Openapi { client }) => {
             // FR-007 parity surface: emit the OpenAPI 3.1 document, or the
@@ -945,21 +1119,255 @@ async fn async_main(gui_launcher: codemason_gui::GuiLauncher) -> Result<()> {
             // stdio for an IDE client. Off by default - `acp_server::run` refuses
             // unless the feature is compiled in *and* `acp.server_enabled` is set.
             acp_server::run(
-                config.read().await.clone().into(),
-                Arc::clone(&session_processor),
-                Arc::clone(&event_bus),
-                working_dir.clone(),
+                ctx.config.read().await.clone().into(),
+                Arc::clone(&ctx.session_processor),
+                Arc::clone(&ctx.event_bus),
+                ctx.working_dir.clone(),
             )
             .await?;
         }
     }
-    // R-23: on a graceful exit, truncate the WAL so the next start does not
-    // inherit a file that grew to the high-water mark of this session's
-    // largest write burst. Best-effort: a failure here must never turn a
-    // successful command into an error exit.
-    if let Err(e) = storage_for_shutdown.checkpoint_wal() {
-        tracing::warn!(error = %e, "Failed to checkpoint WAL on shutdown");
+    Ok(AfterCommand::CheckpointWal)
+}
+
+/// Run the default mode: plain stdio with `--no-tui`, otherwise the desktop
+/// GUI.
+///
+/// # Arguments
+/// * `cli` - the parsed command line (interactive mode, `--log`, `--new`).
+/// * `ctx` - the services the session runs with.
+///
+/// # Errors
+/// Returns the interactive session's or the GUI's error.
+async fn run_default_mode(cli: &Cli, ctx: CommandContext<'_>) -> Result<()> {
+    // Default: open the desktop GUI (`--no-tui` keeps plain stdio).
+    if cli.interactive.mode() == Mode::Plain {
+        run_plain_interactive(
+            &ctx.resolved_agent,
+            &ctx.config,
+            &ctx.provider_registry,
+            ctx.session_manager,
+            &ctx.session_processor,
+        )
+        .await?;
+    } else {
+        launch_gui(
+            ctx.event_bus,
+            ctx.storage,
+            ctx.provider_registry,
+            ctx.session_processor,
+            &ctx.resolved_agent,
+            cli.log,
+            if cli.new_session {
+                StartupSession::New
+            } else {
+                StartupSession::Restore
+            },
+            ctx.gui_log_rx,
+            ctx.db_path.clone(),
+            &ctx.config,
+            ctx.startup,
+            ctx.gui_launcher,
+        )
+        .await?;
     }
+    Ok(())
+}
+
+/// Run `codemason run <prompt>`: a `/new` prompt goes to the scaffolder,
+/// anything else to a headless agent turn.
+///
+/// # Arguments
+/// * `prompt` - the prompt text.
+/// * `resolved_agent` - the agent the turn runs as.
+/// * `config` - the shared runtime configuration.
+/// * `provider_registry` - the provider registry.
+/// * `session_manager` - the session manager.
+/// * `session_processor` - the session processor.
+///
+/// # Returns
+/// [`AfterCommand::SkipWalCheckpoint`] for a `/new` prompt, otherwise
+/// [`AfterCommand::CheckpointWal`].
+///
+/// # Errors
+/// Returns the scaffolder's or the headless run's error.
+async fn run_prompt_command(
+    prompt: String,
+    resolved_agent: &Arc<agent::AgentInfo>,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    session_manager: &Arc<SessionManager>,
+    session_processor: &Arc<SessionProcessor>,
+) -> Result<AfterCommand> {
+    // FR-013 CLI parity: a `/new` prompt is executed by the same
+    // scaffold engine as `codemason new`, not sent to the LLM. The
+    // scaffolder is a deterministic local operation; there is no
+    // agent turn to run.
+    let trimmed = prompt.trim();
+    if trimmed == "/new" || trimmed.starts_with("/new ") {
+        cli::handle_new_prompt(trimmed.trim_start_matches("/new"))?;
+        return Ok(AfterCommand::SkipWalCheckpoint);
+    }
+    run_headless(
+        prompt,
+        resolved_agent,
+        config,
+        provider_registry,
+        session_manager,
+        session_processor,
+    )
+    .await?;
+    Ok(AfterCommand::CheckpointWal)
+}
+
+/// Run a `codemason session` sub-command.
+///
+/// # Arguments
+/// * `command` - the session sub-command.
+/// * `cli` - the parsed command line (`--log` for a resumed GUI).
+/// * `ctx` - the services the command runs with.
+///
+/// # Errors
+/// Returns an error when a resumed session does not exist, or the
+/// sub-command's error.
+async fn run_session_command(
+    command: SessionCommands,
+    cli: &Cli,
+    ctx: CommandContext<'_>,
+) -> Result<()> {
+    match command {
+        SessionCommands::List { project, json } => {
+            run_session_list(&ctx.storage, project, json)?;
+        }
+        SessionCommands::Resume { id } => {
+            // Verify session exists before launching the GUI
+            if ctx.storage.get_session(&id)?.is_none() {
+                anyhow::bail!("Session not found: {id}");
+            }
+            tracing::info!(session_id = %id, "Resuming session");
+            launch_gui(
+                ctx.event_bus,
+                ctx.storage,
+                ctx.provider_registry,
+                ctx.session_processor,
+                &ctx.resolved_agent,
+                cli.log,
+                StartupSession::Resume(id),
+                ctx.gui_log_rx,
+                ctx.db_path.clone(),
+                &ctx.config,
+                ctx.startup,
+                ctx.gui_launcher,
+            )
+            .await?;
+        }
+        SessionCommands::ExportArchive {
+            id,
+            output,
+            no_triggers,
+            no_cron,
+            no_loop_state,
+            include_cost: _,
+        } => {
+            run_session_export(
+                &ctx.storage,
+                id,
+                output,
+                no_triggers,
+                no_cron,
+                no_loop_state,
+            )?;
+        }
+        SessionCommands::Import { file } => {
+            run_session_import(&ctx.storage, file).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Run `codemason stats`: print the usage and cost report.
+///
+/// # Arguments
+/// * `days` - only count runs from the last N days.
+/// * `project` - only count sessions of the current directory's project.
+/// * `json` - emit JSON instead of a table.
+/// * `storage` - the storage the report reads.
+///
+/// # Errors
+/// Returns an error when the report cannot be built or written.
+fn run_stats_command(
+    days: Option<u32>,
+    project: bool,
+    json: bool,
+    storage: &Arc<Storage>,
+) -> Result<()> {
+    let args = codemason_app_core::usage_stats::StatsArgs {
+        days,
+        project,
+        json,
+    };
+    let cwd = std::env::current_dir()?;
+    let report = codemason_app_core::usage_stats::usage_stats_report(storage, &args, &cwd)?;
+    writeln!(std::io::stdout(), "{report}")?;
+    Ok(())
+}
+
+/// Run `codemason config`: `check` runs the readiness check and exits,
+/// anything else prints the loaded configuration.
+///
+/// # Arguments
+/// * `command` - the config sub-command, if any.
+/// * `cli` - the parsed command line (`--config`, `--agent`, `--model`, `--json`).
+/// * `config` - the shared runtime configuration.
+/// * `provider_registry` - the provider registry.
+/// * `tool_registry` - the tool registry.
+async fn run_config_command(
+    command: Option<ConfigCommands>,
+    cli: &Cli,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+    tool_registry: &Arc<tool::ToolRegistry>,
+) {
+    match command {
+        Some(ConfigCommands::Check { json }) => {
+            run_cli_dry_run(cli, cli.json || json, provider_registry, tool_registry).await;
+        }
+        _ => {
+            let config = config.read().await;
+            cliprintln!("{:#?}", *config);
+            drop(config);
+        }
+    }
+}
+
+/// Run a `codemason research` sub-command with the startup configuration.
+///
+/// # Arguments
+/// * `command` - the research sub-command.
+/// * `config` - the shared runtime configuration.
+/// * `resolved_agent` - the agent whose model the research runs with.
+/// * `storage` - the main storage connection.
+/// * `provider_registry` - the provider registry.
+///
+/// # Errors
+/// Returns the research command's error.
+async fn run_research_command(
+    command: Box<cli::ResearchCommands>,
+    config: &Arc<tokio::sync::RwLock<Config>>,
+    resolved_agent: &Arc<agent::AgentInfo>,
+    storage: &Arc<Storage>,
+    provider_registry: &Arc<provider::ProviderRegistry>,
+) -> Result<()> {
+    // Use the startup config, so `--config <file>` settings apply.
+    let startup_config = Arc::new(config.read().await.clone());
+    Box::pin(cli::handle_research_command_with_model(
+        *command,
+        startup_config,
+        resolved_agent.model.clone(),
+        Some(storage.clone()),
+        Some(provider_registry.clone()),
+    ))
+    .await?;
     Ok(())
 }
 
@@ -1774,7 +2182,7 @@ async fn run_headless(
             // tool applies the same principle via kill_on_drop).
             let owned_cmd = cmd.to_string();
             let output = tokio::task::spawn_blocking(move || {
-                std::process::Command::new("sh")
+                std::process::Command::new(codemason_tools_core::bash::posix_shell())
                     .arg("-c")
                     .arg(&owned_cmd)
                     .output()

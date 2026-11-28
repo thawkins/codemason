@@ -638,7 +638,9 @@ fn value_to_scratch(value: &JsValue<'_>) -> String {
 pub fn read_within(root: &std::path::Path, relative: &str) -> Result<String, String> {
     use std::path::Component;
     let rel = std::path::Path::new(relative);
-    if rel.is_absolute() {
+    // A root or a drive prefix is absolute for this purpose; on Windows
+    // `/abs.txt` and `C:x` are not `is_absolute()`.
+    if rel.has_root() || matches!(rel.components().next(), Some(Component::Prefix(_))) {
         return Err(format!(
             "plugin.read_text_file: absolute path refused: {relative}"
         ));

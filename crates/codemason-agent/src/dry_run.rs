@@ -241,8 +241,8 @@ fn load_config_section(
     }
 
     // Global config: ~/.config/codemason/codemason.json
-    if let Some(config_dir) = dirs::config_dir() {
-        let path = config_dir.join("codemason").join("codemason.json");
+    if let Some(config_dir) = Config::global_config_dir() {
+        let path = config_dir.join("codemason.json");
         if path.exists() {
             match load_config_file(&path) {
                 Ok(overlay) => {

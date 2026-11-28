@@ -1197,3 +1197,17 @@ fn declared_id_in_claude_manifest_is_also_confined() {
     .expect("parses");
     assert_eq!(parsed.descriptor.id, "weather");
 }
+
+/// RS-01: CRLF command markdown (with a multibyte char) parses exactly like
+/// the LF version; offsets must track the real `\r\n` line lengths.
+#[test]
+fn test_parse_command_markdown_crlf_matches_lf() {
+    let lf = "---\ndescription: \"Gr\u{00fc}\u{00df}e \u{00e9}t\u{00e9}\"\nargument-hint: x\n---\nBody \u{00e9}\u{00e9} line\nsecond\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let (lf_desc, lf_body) = codemason_plugins::manifest::parse_command_markdown(lf);
+    let (crlf_desc, crlf_body) = codemason_plugins::manifest::parse_command_markdown(&crlf);
+    assert_eq!(lf_desc, "Gr\u{00fc}\u{00df}e \u{00e9}t\u{00e9}");
+    assert_eq!(crlf_desc, lf_desc);
+    assert_eq!(crlf_body.replace("\r\n", "\n"), lf_body);
+    assert!(!crlf_body.contains("---"), "{crlf_body:?}");
+}

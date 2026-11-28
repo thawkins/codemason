@@ -584,29 +584,35 @@ impl Tool for MultiEditTool {
 
         // Phase 5: Write all modified files (skipped in dry-run mode).
         // F-4: files whose BOM was stripped at read time get it re-prefixed.
+        // TL-12: written all-or-nothing as far as the filesystem allows (see
+        // `write_all_staged`), so a failed write no longer leaves some files
+        // edited and others not without saying which.
         let mut write_errors: Vec<String> = Vec::new();
         if !dry_run {
-            for (path, content) in &file_contents {
-                if file_stats.contains_key(path) {
-                    let bytes: Vec<u8> = if had_bom.get(path).copied().unwrap_or(false) {
+            let staged: Vec<(PathBuf, Vec<u8>)> = file_contents
+                .iter()
+                .filter(|(path, _)| file_stats.contains_key(*path))
+                .map(|(path, content)| {
+                    let bytes = if had_bom.get(path).copied().unwrap_or(false) {
                         let mut bytes = b"\xef\xbb\xbf".to_vec();
                         bytes.extend_from_slice(content.as_bytes());
                         bytes
                     } else {
                         content.as_bytes().to_vec()
                     };
-                    if let Err(e) = tokio::fs::write(path, &bytes)
-                        .await
-                        .with_context(|| format!("Failed to write file: {}", path.display()))
-                    {
-                        write_errors.push(format!("{e}"));
-                    } else {
-                        // Refresh the read timestamp for this file so a follow-up
-                        // edit in the same session does not trip the stale-file
-                        // check on a file we just wrote (editrenewal FR-003).
+                    (path.clone(), bytes)
+                })
+                .collect();
+            match write_all_staged(&staged).await {
+                Ok(()) => {
+                    // Refresh the read timestamps so a follow-up edit in the
+                    // same session does not trip the stale-file check on a
+                    // file we just wrote (editrenewal FR-003).
+                    for (path, _) in &staged {
                         record_edit_timestamp(path, ctx);
                     }
                 }
+                Err(e) => write_errors.push(e),
             }
         }
 
@@ -688,3 +694,102 @@ impl Tool for MultiEditTool {
 }
 
 // Unit tests
+
+/// Write every `(path, bytes)` pair, all or nothing as far as the filesystem
+/// allows (TL-12).
+///
+/// Each new content is first staged in a temp file beside its target, taking
+/// the target's permissions; if any staging write fails, the temps are removed
+/// and no file is touched. The temps are then renamed over their targets (a
+/// symlink's target is replaced, not the link). A rename can still fail, for
+/// example on a file another process holds open on Windows; the error then
+/// names the files that were already replaced.
+async fn write_all_staged(files: &[(PathBuf, Vec<u8>)]) -> std::result::Result<(), String> {
+    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(files.len());
+    for (path, bytes) in files {
+        match stage_file(path, bytes).await {
+            Ok(pair) => staged.push(pair),
+            Err(e) => {
+                for (_, temp) in &staged {
+                    // INTENTIONAL: best-effort cleanup; nothing was replaced yet
+                    let _ = tokio::fs::remove_file(temp).await;
+                }
+                return Err(format!(
+                    "Failed to write file: {}: {e}; no file was modified",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    let mut replaced: Vec<String> = Vec::new();
+    for (index, (target, temp)) in staged.iter().enumerate() {
+        if let Err(e) = tokio::fs::rename(temp, target).await {
+            for (_, left) in &staged[index..] {
+                // INTENTIONAL: best-effort cleanup of the temps not yet renamed
+                let _ = tokio::fs::remove_file(left).await;
+            }
+            let already = if replaced.is_empty() {
+                "none".to_string()
+            } else {
+                replaced.join(", ")
+            };
+            return Err(format!(
+                "Failed to write file: {}: {e}; files already written: {already}",
+                target.display()
+            ));
+        }
+        replaced.push(target.display().to_string());
+    }
+    Ok(())
+}
+
+/// Stage `bytes` for `path` in a unique temp file in the target's directory,
+/// returning `(target, temp)`. The target is `path` resolved through a
+/// symlink, and the temp carries the target's current permissions.
+async fn stage_file(path: &Path, bytes: &[u8]) -> std::io::Result<(PathBuf, PathBuf)> {
+    let target = match tokio::fs::symlink_metadata(path).await {
+        Ok(meta) if meta.file_type().is_symlink() => tokio::fs::canonicalize(path).await?,
+        _ => path.to_path_buf(),
+    };
+    // A read-only file stays unwritable, as it was for the in-place write; a
+    // rename would otherwise replace it on Unix (and fail halfway on Windows).
+    if let Ok(meta) = tokio::fs::metadata(&target).await
+        && meta.permissions().readonly()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "the file is read-only",
+        ));
+    }
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp = dir.join(format!(".{name}.{}.{nanos}.multiedit", std::process::id()));
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .await?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, bytes).await?;
+        file.sync_all().await?;
+        if let Ok(meta) = tokio::fs::metadata(&target).await {
+            tokio::fs::set_permissions(&temp, meta.permissions()).await?;
+        }
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+    if let Err(e) = result {
+        // INTENTIONAL: best-effort removal of a half-written temp
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(e);
+    }
+    Ok((target, temp))
+}

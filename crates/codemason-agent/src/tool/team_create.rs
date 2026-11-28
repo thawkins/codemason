@@ -754,14 +754,10 @@ fn record_spawning_member(args: &serde_json::Value, name: &str, ctx: &ToolContex
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let model_override = args.get("model").and_then(|v| v.as_str()).and_then(|s| {
-        s.split_once('/')
-            .or_else(|| s.split_once(':'))
-            .map(|(p, m)| crate::agent::ModelRef {
-                provider_id: p.to_string(),
-                model_id: m.to_string(),
-            })
-    });
+    let model_override = args
+        .get("model")
+        .and_then(|v| v.as_str())
+        .and_then(crate::agent::ModelRef::split_slash_or_colon);
     let memory_scope = match args.get("memory").and_then(|v| v.as_str()) {
         Some("user") => crate::team::MemoryScope::User,
         Some("project") => crate::team::MemoryScope::Project,
