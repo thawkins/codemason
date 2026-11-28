@@ -20,7 +20,7 @@ mod slash_support;
 #[path = "support/mod.rs"]
 mod support;
 
-use slash_support::{app_with_session, enter_project, last_message};
+use slash_support::{app_with_leader_runtime, enter_project, last_message};
 
 /// An app in an isolated tempdir project with the `.codemason/teams` tree ready.
 fn team_app() -> (
@@ -32,7 +32,7 @@ fn team_app() -> (
     let (guard, env, temp) = enter_project(r#"{ "defaultAgent": "general" }"#);
     std::fs::create_dir_all(temp.path().join(".codemason/teams")).expect("create teams dir");
     std::fs::create_dir_all(temp.path().join(".codemason")).expect("create .codemason");
-    let app = app_with_session();
+    let app = app_with_leader_runtime();
     (guard, env, temp, app)
 }
 

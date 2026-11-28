@@ -7175,7 +7175,7 @@ Tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`.\n";
 | `/team help` | none | Show this command reference table. |
 | `/team status` | none | Show the currently active team in this session. |
 | `/team show [name]` | optional `name` | Show one team in detail, or all registered teams when no name is given. |
-| `/team create <blueprint> [name]` | required `blueprint`, optional `name` | Create a new project-local team (blueprint mandatory) and set it active. |
+| `/team create <blueprint> [name] [context]` | required `blueprint`, optional `name`, optional free-text `context` | Launch a `team-leader` sub-agent that leads a new project-local team (blueprint mandatory) and set it active. |
 | `/team close` | none | Close the active team in this session (does not delete on disk). |
 | `/team delete <name>` | required `name` | Delete a team from disk (also clears active state if it is active). |
 | `/team blueprint [name]` | optional `name` | List all installed blueprints, or show details of a specific blueprint. |
@@ -7343,6 +7343,8 @@ than assumed.
         let mut parts = rest.split_whitespace();
         let blueprint = parts.next().unwrap_or("").to_string();
         let name = parts.next().map(|s| s.to_string());
+        // Anything after the name is free-text context for the team leader.
+        let context = parts.collect::<Vec<_>>().join(" ");
 
         if blueprint.is_empty() {
             self.status = "Usage: /team create <blueprint> [name]".to_string();
@@ -7370,10 +7372,50 @@ than assumed.
 
         let working_dir = self.cwd_path.clone();
         let sid = self.session.session_id.clone().unwrap_or_default();
-        match TeamStore::create(&name, &sid, &working_dir, true) {
-            Ok(store) => {
+        // The primary is never a team lead: a `team-leader` sub-agent of this
+        // session creates and leads the team, and reports back here.
+        let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
+            self.status =
+                "Failed to create team: no agent manager to run its team leader".to_string();
+            self.push_log_no_agent(
+                LogLevel::Error,
+                "team create failed: no agent manager to run its team leader".to_string(),
+            );
+            return std::ops::ControlFlow::Continue(());
+        };
+        // Capture the currently selected model so the leader and its
+        // teammates inherit it.
+        let active_model: Option<codemason_agent::agent::ModelRef> =
+            self.session.selected_model.as_deref().and_then(|s| {
+                s.split_once('/')
+                    .map(|(pid, mid)| codemason_agent::agent::ModelRef {
+                        provider_id: pid.to_string(),
+                        model_id: mid.to_string(),
+                    })
+            });
+        let leader_context = if context.is_empty() {
+            format!("Blueprint: {blueprint}.")
+        } else {
+            format!("Blueprint: {blueprint}. {context}")
+        };
+        let leader_task =
+            codemason_agent::team::leader::leader_task_for_existing_team(&name, &leader_context);
+        let launched = codemason_agent::team::leader::launch_leader_for_team(
+            &agent_manager,
+            &sid,
+            &working_dir,
+            &name,
+            &leader_task,
+            active_model.clone(),
+        )
+        .await
+        .and_then(|launch| {
+            TeamStore::load_by_name(&launch.team_name, &working_dir).map(|store| (launch, store))
+        });
+        match launched {
+            Ok((launch, store)) => {
                 let name = store.config.name.clone();
-                let team_dir = store.dir.clone();
+                let leader_sid = launch.leader_session_id.clone();
                 self.session.active_team = Some(store.config);
                 self.session.team_members.clear();
                 self.session
@@ -7382,12 +7424,15 @@ than assumed.
                 self.session.team_task_counts.clear();
                 self.session.team_task_counts_dirty = true;
                 self.show_teams = true;
-                self.ensure_team_manager_for_team(&name, Some(team_dir));
-                self.push_log_no_agent(LogLevel::Info, format!("[team] Team '{}' created", name));
+                self.push_log_no_agent(
+                    LogLevel::Info,
+                    format!("[team] Team '{}' created, led by {}", name, launch.task_id),
+                );
                 self.append_assistant_text(&format!(
-                                    "From: /team create\nTeam '{}' created.\n\nUse the `team_spawn` tool to add teammates.",
-                                    name
-                                ));
+                    "From: /team create\nTeam '{}' created.\n\nIts team leader `{}` runs in \
+                     the background and reports back here when the team is done.",
+                    name, launch.task_id
+                ));
                 self.status = format!("team: {}", name);
 
                 // If the blueprint is installed, invoke the
@@ -7417,17 +7462,11 @@ than assumed.
                     let event_bus = self.event_bus.clone();
                     let storage = self.storage.clone();
                     let working_dir_clone = working_dir.clone();
-                    let sid_clone = sid.clone();
+                    // The seed runs as the leader: `seed_only` is allowed only
+                    // for the team's lead session.
+                    let sid_clone = leader_sid;
                     let name_clone = name.clone();
-                    // Capture the currently selected model so teammates inherit it.
-                    let active_model_clone: Option<codemason_agent::agent::ModelRef> =
-                        self.session.selected_model.as_deref().and_then(|s| {
-                            s.split_once('/')
-                                .map(|(pid, mid)| codemason_agent::agent::ModelRef {
-                                    provider_id: pid.to_string(),
-                                    model_id: mid.to_string(),
-                                })
-                        });
+                    let active_model_clone = active_model;
                     std::thread::spawn(move || {
                         // Create a small runtime for seeding if there is no existing Tokio runtime
                         let rt = match tokio::runtime::Runtime::new() {

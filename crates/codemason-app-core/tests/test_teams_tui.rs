@@ -511,7 +511,7 @@ async fn test_team_create_sets_active_team() {
     std::fs::create_dir_all(tmp.path().join(".codemason/teams")).unwrap();
 
     let mut app = support::make_app();
-    app.session.session_id = Some("s1".to_string());
+    support::attach_leader_runtime(&mut app);
 
     app.execute_slash_command("/team create bp1 my-test-team")
         .await;

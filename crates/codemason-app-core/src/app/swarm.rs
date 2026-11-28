@@ -47,14 +47,54 @@ impl App {
         let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let team_name = format!("swarm-{ts}");
         let working_dir = self.swarm_working_dir();
-        let lead_sid = self
-            .session
-            .session_id
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let parent_sid = self.session.session_id.clone().unwrap_or_default();
 
-        // Create the team
-        match TeamStore::create(&team_name, &lead_sid, &working_dir, true) {
+        // The primary is never a team lead: a `team-leader` sub-agent of this
+        // session creates the team, leads it and reports back here.
+        let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
+            self.status =
+                "[warn] swarm: team creation failed: no agent manager to run its team leader"
+                    .to_string();
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                "Swarm team creation failed: no agent manager to run its team leader".to_string(),
+            );
+            return;
+        };
+        let leader_model: Option<codemason_agent::agent::ModelRef> =
+            self.session.selected_model.as_deref().and_then(|s| {
+                s.split_once('/')
+                    .map(|(pid, mid)| codemason_agent::agent::ModelRef {
+                        provider_id: pid.to_string(),
+                        model_id: mid.to_string(),
+                    })
+            });
+        let goal = self
+            .session
+            .swarm_state
+            .as_ref()
+            .map(|s| s.prompt.clone())
+            .unwrap_or_default();
+        let leader_task = team::leader::leader_task_for_existing_team(
+            &team_name,
+            &format!(
+                "Swarm goal: {goal}\nEach teammate owns one pre-assigned subtask; dependent \
+                 subtasks are unblocked automatically as their predecessors finish."
+            ),
+        );
+
+        // Create the team, led by the leader session.
+        let launched = team::leader::launch_leader_for_team(
+            &agent_manager,
+            &parent_sid,
+            &working_dir,
+            &team_name,
+            &leader_task,
+            leader_model,
+        )
+        .await
+        .and_then(|launch| TeamStore::load_by_name(&launch.team_name, &working_dir));
+        match launched {
             Ok(mut store) => {
                 // Each swarm task belongs to its own teammate (pre-assigned at
                 // spawn or unblock). With auto-claim on, a teammate that went
@@ -92,7 +132,6 @@ impl App {
                 self.session.team_task_counts.clear();
                 self.session.team_task_counts_dirty = true;
                 self.show_teams = true;
-                self.ensure_team_manager_for_team(&team_name, Some(store.dir.clone()));
 
                 // Build display table
                 let mut output = format!(

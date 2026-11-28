@@ -37,7 +37,9 @@ mod slash_support;
 #[path = "support/mod.rs"]
 mod support;
 
-use slash_support::{EnvGuard, all_messages, app_with_session, enter_project, last_message};
+use slash_support::{
+    EnvGuard, all_messages, app_with_leader_runtime, app_with_session, enter_project, last_message,
+};
 
 type Harness = (
     std::sync::MutexGuard<'static, ()>,
@@ -57,7 +59,7 @@ fn isolated_app() -> Harness {
 fn team_app() -> Harness {
     let (guard, env, temp) = enter_project(r#"{ "defaultAgent": "general" }"#);
     std::fs::create_dir_all(temp.path().join(".codemason/teams")).expect("create teams dir");
-    let app = app_with_session();
+    let app = app_with_leader_runtime();
     (guard, env, temp, app)
 }
 

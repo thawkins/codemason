@@ -858,6 +858,47 @@ impl AgentManager {
             working_dir,
             false,
             time_bound_secs,
+            |_| Ok(()),
+        )
+        .await
+    }
+
+    /// [`spawn_background`] with a `setup` step that runs after the child
+    /// session is created and before the task is registered or its first step
+    /// runs.
+    ///
+    /// `setup` receives the child session id. A team leader uses it to create
+    /// its team with that session as lead, so the team exists before the
+    /// leader's first `team_wait`. When `setup` fails the child session is
+    /// deleted, no task is registered and the error is returned.
+    ///
+    /// # Errors
+    ///
+    /// The concurrency-limit refusal, a session-creation failure, or the
+    /// error `setup` returned.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_background_with_setup<F>(
+        &self,
+        parent_session_id: &str,
+        agent_name: &str,
+        task_prompt: &str,
+        model_override: Option<&str>,
+        working_dir: &std::path::Path,
+        time_bound_secs: Option<u64>,
+        setup: F,
+    ) -> anyhow::Result<TaskEntry>
+    where
+        F: FnOnce(&str) -> anyhow::Result<()> + Send,
+    {
+        self.spawn_background_mode(
+            parent_session_id,
+            agent_name,
+            task_prompt,
+            model_override,
+            working_dir,
+            false,
+            time_bound_secs,
+            setup,
         )
         .await
     }
@@ -885,14 +926,17 @@ impl AgentManager {
             working_dir,
             true,
             time_bound_secs,
+            |_| Ok(()),
         )
         .await
     }
 
-    /// Shared implementation for [`spawn_background`] / [`spawn_detached`].
-    /// `detached` toggles whether the task participates in the wait/list
-    /// surface (see [`TaskEntry::detached`]).
-    async fn spawn_background_mode(
+    /// Shared implementation for [`spawn_background`] / [`spawn_detached`] /
+    /// [`spawn_background_with_setup`]. `detached` toggles whether the task
+    /// participates in the wait/list surface (see [`TaskEntry::detached`]);
+    /// `setup` runs on the new child session id before the task is registered.
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_background_mode<F>(
         &self,
         parent_session_id: &str,
         agent_name: &str,
@@ -901,7 +945,11 @@ impl AgentManager {
         working_dir: &std::path::Path,
         detached: bool,
         time_bound_secs: Option<u64>,
-    ) -> anyhow::Result<TaskEntry> {
+        setup: F,
+    ) -> anyhow::Result<TaskEntry>
+    where
+        F: FnOnce(&str) -> anyhow::Result<()> + Send,
+    {
         // Check concurrency limit. The occupancy comes from the same
         // `limit_report` that `list_agents` reports, so a refusal and a listing
         // can never disagree (FR-011, FR-029).
@@ -946,6 +994,13 @@ impl AgentManager {
             codemason_storage::SessionKind::Subagent,
         )?;
         let child_sid = child_session.id.clone();
+        if let Err(e) = setup(&child_sid) {
+            if let Err(del) = self.processor.session_manager.delete_session(&child_sid) {
+                tracing::warn!(session = %child_sid, error = %del,
+                    "failed to delete the child session of a refused spawn");
+            }
+            return Err(e);
+        }
         // The child session's own directory is the project root this
         // sub-agent actually runs in, so `log/subagents/` must be resolved
         // against it - resolving against the PARENT's session directory

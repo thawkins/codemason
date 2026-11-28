@@ -140,13 +140,24 @@ The list view shows a table with blueprint name, scope (project/global), teammat
 /team create code-review
 ```
 
-This creates a team using the `code-review` blueprint, auto-spawns all defined teammates with their prompts, and seeds the initial task list. The blueprint parameter is required.
+This launches a `team-leader` sub-agent in the background, creates a team led by that
+leader using the `code-review` blueprint, auto-spawns all defined teammates with their
+prompts, and seeds the initial task list. The blueprint parameter is required; an optional
+name and free-text context may follow (`/team create code-review my-review Focus on src/auth`).
+Your own session is never the team's lead: the leader runs `team_wait`, follows up on stuck
+work and reports a summary back to your session when the team is done.
 
-When the LLM calls `team_create`, it should **always pass a `context` parameter** with the user's specific request — which files/directories to review, what to produce, and where to write output. This context is prepended to every teammate's spawn prompt so they know exactly what to work on.
+When the LLM wants a team it spawns a leader with
+`new_agent agent="team-leader" background=true task="Use blueprint code-review. Context: ..."`
+and waits for it with `wait_agents`. The task should **always carry the context** — which
+files/directories to review, what to produce, and where to write output. The leader passes
+it to `team_create`, which prepends it to every teammate's spawn prompt.
 
 ### Wait for teammates to finish
 
-After creation, the lead should call `team_wait` to block until all teammates complete their initial work. Do **not** use `wait_agents` for teammates — that only tracks `new_agent` sub-agents.
+The leader calls `team_wait` to block until all teammates complete their initial work. The
+session that spawned the leader waits for the leader with `wait_agents`; `wait_agents` only
+tracks `new_agent` sub-agents (leaders included), never teammates directly.
 
 ### Inspect team state
 
@@ -190,9 +201,25 @@ Alias: `/teams ...` routes to `/team ...` (for example `/teams help`, `/teams bl
 
 ---
 
-## 6) Tool-based workflow (lead + teammates)
+## 6) Tool-based workflow (leader + teammates)
 
 Teams are fully operable via tools. GUI commands are convenience wrappers.
+
+Only a `team-leader` agent may call `team_create`; any other session gets a refusal naming
+`new_agent agent="team-leader"` as the replacement. The primary agent spawns a leader:
+
+```json
+{
+  "tool": "new_agent",
+  "input": {
+    "agent": "team-leader",
+    "background": true,
+    "task": "Use blueprint code-review. Context: Review crates/codemason-server for security issues. Write findings to crates/codemason-server/COMPLIANCE.md"
+  }
+}
+```
+
+and then calls `wait_agents`. The rest of this section is what the leader does.
 
 ### 6.1 Create team with context
 
@@ -211,10 +238,14 @@ The `context` parameter is critical — it tells every auto-spawned teammate **e
 
 If the team already exists, `team_create` gracefully recovers and re-applies the blueprint.
 
-The GUI's `/team create` creates the team itself and then seeds the blueprint with
-`seed_only: true`, which applies the blueprint to the existing team and never creates
-(or re-creates) its directory. That keeps a seeding call from resurrecting a team
-directory that a concurrent `/team clear` or `/team forcecleanup` has just removed.
+The GUI's `/team create` launches the team leader (`launch_leader_for_team`), which
+creates the team with the leader's session as lead before the leader's first step, and
+then seeds the blueprint with `seed_only: true` as the leader's session. `seed_only`
+applies the blueprint to the existing team and never creates (or re-creates) its
+directory, and it is accepted only from the team's lead session. That keeps a seeding
+call from resurrecting a team directory that a concurrent `/team clear` or
+`/team forcecleanup` has just removed. The leader is told the team already exists, so it
+skips `team_create` and goes straight to `team_wait`.
 
 ### 6.2 Wait for teammates
 
@@ -339,16 +370,20 @@ session processor now binds the runtime for the team its session leads
 exists (the same step as `team_create`) returns an error telling you to call it
 again, instead of a false "queued".
 
-**The runtime is rebindable, not first-team-forever.** The processor holds it in
-a `TeamManagerSlot`:
+**One runtime per team.** The processor keeps a per-team registry of runtimes
+(`TeamManagers`, keyed by team name), so several teams - one per team leader,
+plus `/swarm` - run side by side on one processor:
 
-- a manager whose team is gone is unbound atomically (`clear_if`), so a manager
-  another session bound meanwhile is kept;
-- the processor keeps a live manager of another team rather than replacing it,
-  so concurrent `serve` sessions leading different teams do not flip the binding
-  on every step. The GUI, which has a single user, rebinds when its active team
-  changes; teammates already running keep the old manager alive until they
-  finish;
+- binding one team's manager never evicts or reads another team's;
+- `bind` refuses a second live manager for the same team, so one bound meanwhile
+  wins and the newcomer is dropped unused;
+- a manager whose team is gone (closed, deleted, cleaned up) is unbound by
+  `prune_stale`, and `remove_if` unbinds a manager only if it is still the one
+  bound, so a manager another session bound meanwhile is kept;
+- `launch_leader_for_team` binds the new team's manager (named for the leader's
+  session) as soon as the team exists, so `/team create` seeding and `/swarm`
+  can spawn teammates immediately; a leader that creates its own team through
+  `team_create` gets its manager bound at the start of its next step;
 - `spawn_teammate` refuses a `team_name` its manager does not drive;
 - `team_shutdown_teammate` and `team_task_cancel` use the bound manager only
   when it drives the named team, and otherwise act on disk.
@@ -795,7 +830,9 @@ creates an ephemeral team, and orchestrates parallel execution.
 
 1. The swarm analyses your prompt using the selected LLM model.
 2. It breaks the goal into independent subtasks with dependency edges.
-3. It creates an ephemeral team and spawns teammates for each subtask.
+3. It launches a `team-leader` sub-agent, which leads an ephemeral team created
+   for it, and spawns teammates for each subtask. Your session is never the
+   team's lead; the leader waits on the teammates and reports a summary back.
 4. Teammates work in parallel on tasks that are ready. The swarm team runs with
    `auto_claim_tasks` **off** and pre-assigns each task to its own teammate (a
    ready task at spawn, a dependent one when it unblocks), so an idle teammate
@@ -807,7 +844,7 @@ creates an ephemeral team, and orchestrates parallel execution.
    from the goal and each task's status and result, shown as "Swarm Result".
    A failed call is reported as "Synthesis Failed" instead of passing a partial
    answer off as success.
-7. The lead monitors progress via `/swarm status` and can cancel with
+7. You monitor progress via `/swarm status` and can cancel with
    `/swarm cancel`; a cancel aborts an in-flight synthesis call.
 
 ### Example
@@ -828,6 +865,7 @@ With a default agent type:
 |---------|---------------|----------|
 | Task decomposition | Manual (blueprint seed tasks) | Automatic (LLM decomposes prompt) |
 | Team creation | Requires a blueprint | Ephemeral, auto-created |
+| Team lead | A `team-leader` sub-agent | A `team-leader` sub-agent |
 | Teammate spawning | Blueprint-driven or manual | Automatic per subtask |
 | Dependency management | Manual in task-seed.json | Automatic from decomposition |
 | Best for | Structured, repeatable reviews | Ad-hoc, goal-driven parallel work |

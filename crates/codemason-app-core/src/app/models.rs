@@ -1092,7 +1092,7 @@ impl App {
         {
             return;
         }
-        let Some(lead_session_id) = self.session.session_id.clone() else {
+        let Some(session_id) = self.session.session_id.clone() else {
             return;
         };
 
@@ -1111,6 +1111,14 @@ impl App {
                 }
             }
         };
+
+        // The manager runs for the team's recorded lead (a team-leader
+        // sub-agent), not for this session: a manager naming another session
+        // would refuse the team and route lead notifications to the wrong
+        // place. A team without a readable config falls back to this session.
+        let lead_session_id = TeamStore::load(&team_dir)
+            .map(|store| store.config.lead_session_id)
+            .unwrap_or(session_id);
 
         // Parse the currently selected model so teammates inherit it in the reconcile loop.
         let active_model: Option<codemason_agent::agent::ModelRef> =

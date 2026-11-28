@@ -17,6 +17,7 @@
 //! |--------|----------|
 //! | [`classify`] | Agent-type inference and fallback helpers for swarm decomposition |
 //! | [`config`] | `TeamConfig`, `TeamMember`, `TeamStatus`, `MemberStatus` |
+//! | [`leader`] | `launch_leader_for_team` - entry points create teams through a `team-leader` |
 //! | [`hook_ledger`] | `hook-failures.jsonl` - bounded ledger of hooks that never ran (FR-019) |
 //! | [`task`]   | `Task`, `TaskStatus`, `TaskList`, `TaskStore` |
 //! | [`mailbox`]| `MailboxMessage`, `MessageType`, `Mailbox` |
@@ -31,6 +32,7 @@ use chrono::{DateTime, Utc};
 pub mod classify;
 pub mod config;
 pub mod hook_ledger;
+pub mod leader;
 pub mod mailbox;
 pub mod manager;
 pub mod registry;

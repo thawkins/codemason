@@ -234,3 +234,41 @@ pub fn store_fetch_landed(app: &App) -> bool {
     let slot = cache.plugin(kind);
     slot.in_flight.is_none() && !matches!(slot.data, codemason_app_core::app::SlotData::Empty)
 }
+
+/// Wire what a team leader needs into `app`: a real primary session (rooted at
+/// `app.cwd_path`) as `app.session.session_id`, and an `AgentManager` on the
+/// processor. `/team create` and `/swarm` launch a `team-leader` child session
+/// of the primary, so both must exist.
+///
+/// The selected model names a provider that is not registered, so a launched
+/// leader fails at once instead of calling a real LLM with whatever API key
+/// the environment holds.
+///
+/// # Returns
+///
+/// The `AgentManager` (the one already set, if the processor had one).
+#[allow(dead_code)]
+pub fn attach_leader_runtime(app: &mut App) -> Arc<codemason_agent::task::AgentManager> {
+    let session = app
+        .session_processor
+        .session_manager
+        .create_session(app.cwd_path.clone())
+        .expect("primary session");
+    app.session.session_id = Some(session.id);
+    app.session.selected_model = Some("leader-test-unregistered/none".to_string());
+    let manager = Arc::new(codemason_agent::task::AgentManager::new(
+        Arc::clone(&app.event_bus),
+        Arc::clone(&app.session_processor),
+        8,
+        60,
+    ));
+    let _ = app
+        .session_processor
+        .agent_manager
+        .set(Arc::clone(&manager));
+    app.session_processor
+        .agent_manager
+        .get()
+        .cloned()
+        .unwrap_or(manager)
+}

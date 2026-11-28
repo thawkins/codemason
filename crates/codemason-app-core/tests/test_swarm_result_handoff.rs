@@ -140,9 +140,9 @@ async fn test_swarm_unblock_rewrites_prompt_with_predecessor_result() {
 async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
     let dir = scratch("decompose");
     let mut app = support::make_app();
-    app.session.session_id = Some("lead-session".to_string());
     app.cwd_path = dir.clone();
     app.session.directory = dir.clone();
+    let manager = support::attach_leader_runtime(&mut app);
     app.session.swarm_state = Some(SwarmState {
         team_name: String::new(),
         prompt: "Harden auth".to_string(),
@@ -168,6 +168,15 @@ async fn test_swarm_decomposition_assigns_tasks_and_disables_auto_claim() {
         codemason_agent::team::find_team_dir(&dir, &state.team_name).expect("swarm team dir");
     let config = TeamStore::load(&team_dir).expect("load team").config;
     assert!(!config.settings.auto_claim_tasks);
+    let leaders = manager
+        .list_agents(app.session.session_id.as_deref().expect("primary"))
+        .await;
+    assert_eq!(leaders.len(), 1, "one team leader: {leaders:?}");
+    assert_eq!(leaders[0].agent_name, "team-leader");
+    assert_eq!(
+        config.lead_session_id, leaders[0].child_session_id,
+        "the swarm team is led by its team leader, not the primary"
+    );
     let s1_agent = config
         .member_by_name("swarm-s1")
         .expect("s1 member")

@@ -561,6 +561,8 @@ mod test_slash_spec;
 mod test_slash_spec_deep;
 #[path = "test_slash_spec_deep2.rs"]
 mod test_slash_spec_deep2;
+#[path = "test_slash_team_create_leader.rs"]
+mod test_slash_team_create_leader;
 #[path = "test_slash_teams_deep.rs"]
 mod test_slash_teams_deep;
 #[path = "test_slash_tools.rs"]
