@@ -810,7 +810,9 @@ connects MCP servers, then prints a `READY` / `WARNING` / `BLOCKED` verdict.
 ## Configuration
 
 codemason reads configuration from `codemason.json` in the `.codemason/` directory, layered
-over `~/.config/codemason/codemason.json`.
+over `~/.config/codemason/codemason.json`. When `XDG_CONFIG_HOME` is set, the global file is
+`$XDG_CONFIG_HOME/codemason/codemason.json` on every platform, Windows included; `HOME` and
+`XDG_DATA_HOME` likewise move codemason's home-directory and data folders.
 
 A repository's `.codemason/codemason.json` is untrusted input, so `Config::merge_project`
 strips the privileged keys a project may not set: `yolo`, permission allow-rules,

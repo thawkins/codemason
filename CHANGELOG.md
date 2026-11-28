@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+A deep-refactor train from a fresh audit
+(`docs/reports/deep-refactor-audit-2026-11-27.md`): defects first, then
+infrastructure, then behaviour-preserving refactors, with the test suite as
+the proof. Every test edit was a sanctioned, listed portability or
+fixture change. The report records each batch, its evidence and what stayed
+blocked.
+
+### Security
+
+- Security: webhook ingress (`POST /auto/{id}`) checks the automation's secret before its id, answers an unknown id with the same `401` as a wrong credential, and rate-limits per automation (`webhook:{id}`).
+- Security: the fetch and HTTP-request tools resolve DNS through `SsrfSafeResolver`, which drops private, loopback, CGNAT (`100.64/10`) and NAT64 (`64:ff9b::/96`) addresses. Trailing-dot hosts are normalised before the metadata check.
+- Security: one credential-prefix list (`codemason_types::sanitize::CREDENTIAL_PREFIXES`) for logs and telemetry. Telemetry now flags GitLab, Hugging Face, npm and `ghu_` tokens. Log redaction now masks `github_pat_`, `xoxs-`, `AIza`, `ya29.` and `jwt <token>`.
+- Security: archive extraction for `/plugins` and `/connectors` is shared (`codemason_surface::archive`). It refuses empty, absolute, `..`, backslash and drive/UNC-prefixed entry paths on every platform; plugins used to accept `C:/x` on Unix.
+- Security: a `git+` source with an unsafe subpath is refused by `/connectors` too. It used to derive a manifest URL for the whole repository.
+- Security: plugin `git` runs watch the clone size, pass `--template=`, and cap archive entries at 10,000. The webfetch length is capped at 10 MiB and its timeout at 300 s, and error bodies are read through capped readers.
+- Security: rooted paths are refused on Windows by `validate_relative_component`, the image placeholder (SEC-079) and `apply_patch`.
+- Security: LLM wire-trace files are written through the shared atomic writer (owner-only permissions on Unix).
+
+### Fixed
+
+- Fixed: six config sections (`stream`, `memory`, `storage`, `agent_perf`, `trigger`, `security_analyzer`) were never merged from the global or project file. `merge_inner` now names every `Config` field, so a new field cannot be forgotten without a compile error.
+- Fixed: `XDG_CONFIG_HOME`, `HOME` and `XDG_DATA_HOME` are honoured on every platform, Windows included.
+- Fixed: hooks, verification scripts and the OS-info probe run through one deadline-bounded child runner. It writes stdin on a thread, drains output, and kills the whole process tree on timeout. Hook environment values are capped at 64 KiB (16 KiB on Windows) with a `_TRUNCATED=1` marker. POSIX hook scripts run through the discovered Git Bash on Windows.
+- Fixed: the credential key is minted exactly once (CO-02), and snapshot files are restored atomically (CO-10).
+- Fixed: LLM streams: an Anthropic or Azure `event: error` frame ends the turn with its message. Parallel tool calls without an `index` stay separate (copilot, huggingface).
+- Fixed: tools:
+  - `bg` output lines are capped;
+  - glob keeps its root;
+  - `multi_edit` stages writes atomically and refuses read-only files;
+  - `rm` does not follow symlinks;
+  - clone directories are checked against the root;
+  - `git_status` parses porcelain v2 and decodes quoted paths;
+  - README fetch uses the raw `Accept` header.
+- Fixed: research: CRLF `RESEARCH.md` files keep their front matter, comparisons quote the right sentence after non-ASCII text, a five-digit number is no longer read as a year, and the open-access client's default timeout is 30 s, not zero.
+- Fixed: app:
+  - one provider's model list no longer hides another's spinner;
+  - `/init config` cannot overwrite a file another process just created;
+  - input history is written atomically;
+  - webhook runs execute in the server's project, not the launch directory.
+- Fixed: the project teams walk stops at the home folder, and team temp files are opened for write before they are synced.
+- Fixed: a live process is reported alive on Windows; Windows path, `npm` discovery and worktree path handling.
+- Fixed: the silent-error, unwrap, shared-guards and tool-rename gate scripts compare POSIX paths on Windows.
+
+### Changed
+
+- Changed: `material::button::small_button` (24 pt, click-only, toggle-aware) replaces four plain-egui buttons. The status bar's "N need you" count is a Material badge.
+- Changed: comments and docs that described code that no longer exists (TUI references, a misplaced `#[must_use]`, the `/webapi` token redaction claim, and others) now match the code.
+- Changed: performance: connectors and plugins extract archives from memory without a second copy or a temp file. The open-access client reuses one HTTP client.
+
+### Refactored
+
+- Refactored (behaviour unchanged, tests unchanged):
+  - `process_user_message` 1,830 -> 99 lines;
+  - `dispatch_key` 1,147 -> 28;
+  - `input::handle_key` 1,021 -> 48;
+  - `ResearchSession::run` 970 -> 123;
+  - `Storage::migrate` 670 -> 62;
+  - `merge_inner` 403 -> 241;
+  - `tool_input_summary` / `tool_result_summary` 1,105 / 673 -> 53 / 46;
+  - `slash_config` / `slash_codeindex` 460 / 427 -> 34 / 178;
+  - `async_main` 497 -> 162;
+  - `App::new` 469 -> 338;
+  - `handle_focused_event` 689 -> 646.
+- Refactored: one Anthropic Messages stream parser for Anthropic and Azure. One first-byte timeout helper (`send_within_first_byte_timeout`). `ModelRef` owns its three parse rules. The uncached path check wraps the cached one.
+
+### Build and CI
+
+- CI: clippy and the Linux check run with `--all-targets`. The benchmark workflow no longer ends in `|| true`. The shared-guard and redaction suites stop running a third time.
+- CI: the env-isolation, shared-guards and VCS-duplication guards now cover the root package and the whole plugins crate.
+- Build: duplicate dev-dependencies are removed and literal versions use `workspace = true` (`Cargo.lock` unchanged).
+- Build: `libc` is a Unix-only dependency of tools-core. Embedded skill data and the OpenAPI client stay LF under `core.autocrlf`.
+
+### Tests
+
+- Tests: every test binary redirects `XDG_CONFIG_HOME`, `HOME` and `XDG_DATA_HOME` to `target/temp/test-profile/` through a `ctor`, so a run never touches the real profile.
+- Tests: every workspace test target builds and passes on Windows except the known in-process races (W-15). The portability edits are listed per commit (`/tmp` -> `temp_dir()`, Unix-only gates, and similar).
+- Tests: new locking tests cover each fixed defect, for example `test_credential_prefixes`, `test_first_byte_timeout`, `test_surface_archive`, `test_hook_process_limits` and `test_merge_six_sections`.
+
 ## [1.0.186] - 2026-11-26
 
 The log, profile, tasks and memory panels are fixed tabs beside the sessions

@@ -1253,6 +1253,15 @@ Built-in default rules include:
 Environment variables matching `*KEY*`, `*SECRET*`, `*TOKEN*`, `*PASSWORD*`
 are redacted from tool outputs and logs.
 
+Known credential prefixes have one list, `codemason_types::sanitize::CREDENTIAL_PREFIXES`
+(`sk-`, `Bearer `, `ghp_`/`gho_`/`ghs_`/`ghr_`/`ghu_`, `github_pat_`, the GitLab
+`gl*-` token types, `xoxb-`/`xoxp-`/`xoxs-`, `AKIA`, `AIza`, `ya29.`, `jwt `, `hf_`,
+`npm_`). Log redaction (`redact_secrets`) masks each of them followed by a token, and
+telemetry treats an attribute value that starts with one as sensitive. Entries added
+after the original list need 16 characters after the prefix, so a tool name such as
+`npm_install` is not mistaken for a token. `test_credential_prefixes` fails if a
+listed prefix stops being redacted.
+
 ### 4.6a Path and Argument-Injection Guards
 
 Each guard is a named helper rather than an inline check, so every call site
@@ -1262,7 +1271,8 @@ shares one implementation.
 |-------|----------------|-----------------|
 | `validate_team_name` | `codemason-agent::team::store` | anything outside `^[a-z0-9][a-z0-9-]{0,63}$`; called by `TeamStore::create`, `find_team_dir`, `find_team_dir_cached`, `team_cleanup`, and the `/team create`/`/team delete` slash commands |
 | Team-name slugify (`slugify_team_name`) | `codemason-agent::team::store` | blueprint/timestamp-derived names are slugified before use so generation can never produce an invalid name |
-| `is_safe_git_argument` | `codemason-plugins::add` | a `git+` ref or subpath that is not `[A-Za-z0-9._/-]+`, begins with `-`, or contains `..`; `git_run` also passes `--` before every positional |
+| `parse_git_source` / `is_safe_git_argument` | `codemason-surface::git_source` (shared by `/plugins` and `/connectors`) | a `git+` ref or subpath that is not `[A-Za-z0-9._/-]+`, begins with `-`, or contains `..`; an unsafe subpath, or one starting with `/`, refuses the whole source; `git_run` also passes `--` before every positional |
+| `archive::extract` / `safe_relative_path` | `codemason-surface::archive` (shared by `/plugins` and `/connectors`) | an archive entry path that is empty, absolute, contains `..` or a backslash, or carries a Windows drive or UNC prefix on any platform; per-entry, total and entry-count caps bound the read itself |
 | `sanitize_declared_id` / `confined_dest_dir` | `codemason-plugins::manifest` / `add` | a manifest `id` that is not a single `Component::Normal` matching `[A-Za-z0-9._-]+` (no separators, no `..`, not absolute) |
 | `check_path_within_allowed_roots_cached` | `codemason-tools-core` | a `multi_edit` target outside the workspace — the same containment check `Edit`/`read`/`Write` apply |
 
@@ -1290,6 +1300,8 @@ Each guard is a named helper or an explicit bound.
 | Project-config privilege stripping | `codemason-config` | the cwd `.codemason/codemason.json` may not enable YOLO, remove a global deny rule, or widen `allowed_roots`/bash allow-lists |
 | `x-goog-api-key` header | `codemason-llm::providers::gemini` | the Gemini key is sent as a header, registered with the secret registry, and never interpolated into a logged URL |
 | `redirect::Policy::none()` | `codemason-llm::providers` | authenticated LLM requests do not follow redirects, so a non-standard auth header cannot be replayed cross-host |
+| `child_process::run_with_deadline` | `codemason-agent` | hooks, verification scripts and the OS-info probe run under one deadline: stdin is written on its own thread, output is drained while waiting, and on timeout the whole process tree is killed (process group on Unix, `taskkill /T /F` on Windows). A hook's environment values are capped at 64 KiB (16 KiB on Windows) with a `_TRUNCATED=1` marker |
+| `SsrfSafeResolver` | `codemason-tools-extended::masterfetch::security` | the fetch and HTTP-request tools resolve DNS through a resolver that drops private, loopback, CGNAT (`100.64/10`) and NAT64 (`64:ff9b::/96`) addresses, so a public name cannot rebind to an internal host; a trailing-dot host is normalised before the metadata check |
 | `ResearchIo::template_path` -> `Option` | `codemason-research::io` | the `--template` name must be a single `[A-Za-z0-9_-]` component; an invalid name yields no template plus a warning |
 | `redact_config_secrets` | `codemason-server::routes` | `GET /config` (`get_config`) replaces every credential value before the response is returned |
 | `check_path_within_root` on `from_files` | `codemason-research` / `codemason-server` | research file seeds are canonicalised and rejected outside the project root |
@@ -6003,6 +6015,16 @@ dispatch targets:
   registers `POST /auto/{id}` as a **public** route (like `/health`), because an
   external system such as a GitHub webhook has no bearer token. The request body
   is compacted to JSON and supplied to the run as prompt context.
+  - **Credentials.** The request must carry the automation's own secret (named by
+    `webhook_secret_env`) as `Authorization: Bearer` or a GitHub
+    `X-Hub-Signature-256`. An automation with no secret configured answers `403`.
+  - **Uniform refusal.** A missing or wrong credential and an unknown automation id
+    all answer the same `401`, and the credential is checked before the id, so the
+    public route cannot be used to enumerate automations.
+  - **Rate limit.** It is per automation (`webhook:{id}`), so flooding one id does not
+    lock out the others.
+  - **Working directory.** The run executes in the project the server state was built
+    for (the parent of `research_root`), not the process's launch directory.
 - **Scheduler (FR-014).** `AutomationService::spawn_scheduler` ticks every
   `scheduler_tick_secs`, enqueues a run when a schedule automation's due time
   passes (skipping one whose previous run is still in flight), and advances its

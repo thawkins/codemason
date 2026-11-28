@@ -313,7 +313,8 @@ cdmn models --provider gemini
 Codemason loads configuration from multiple sources (last wins):
 
 1. Built-in defaults
-2. `~/.config/codemason/codemason.json` (global)
+2. `~/.config/codemason/codemason.json` (global; `$XDG_CONFIG_HOME/codemason/codemason.json`
+   when `XDG_CONFIG_HOME` is set, on Windows too)
 3. `./codemason.json` (project-local)
 4. `$CODEMASON_CONFIG` (path to a config file)
 5. `$CODEMASON_CONFIG_CONTENT` (inline JSON)

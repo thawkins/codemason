@@ -221,7 +221,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 |-----|-----|--------------------|-----------|--------|
 | 0. Windows isolation | W-01, W-02, W-03 | Linux paths unchanged; Windows tests stop touching the profile | config 460/460, connectors 377/377, types 438/438, app-core init/reload 20/20; the real config's mtime is unchanged | **Done** (`8e049db`, `77ae198`, `4347b45`) |
 | 0b. Windows portability | W-04, W-07..W-14 | Unix behaviour unchanged; no assertion weakened (test edits enumerated in `feebc7a`, `9f8446d`) | Windows: agent 401 to 29 failed (28 need python3), app-core 82 to 6 (single-process races, invisible under nextest), gui 2 to 0, storage 427/427; real profile untouched across full runs | **Done** (`5ff13fb`..`cf638a8`) |
-| 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_inner_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | **Done** (`3984496`, `86dfcb2`, `3fba902`) |
+| 1. Config + storage correctness | CO-01 (+CO-24 guard), CO-02, CO-10 | Existing config files load the same; each of the six sections now merges | New `test_merge_six_sections` (one case per section); `-p codemason-config`; `-p codemason-storage` | **Done** (`3984496`, `86dfcb2`, `3fba902`) |
 | 2. Hooks + child processes | AG-01, AG-02, AG-03, AG-04, AG-06, AG-07 (via AG-18 helper) | Hook decisions are the same for in-limit hooks; env var names kept (`docs/howtos/hooks.md`) | Locking tests: a hung hook times out; a 200 KiB input still runs the guard; a child is killed on timeout; `-p codemason-agent -E hooks` | **Done** (see commit "fix(agent): one deadline-bounded child runner") |
 | 3. Agent panics + drift | AG-05, AG-08, AG-13, CO-14 | ASCII inputs unchanged | Non-ASCII trigger test; `timeout_secs = u64::MAX` test; Bedrock options test | **Done** (commit "fix(agent): batch 3 panics and Bedrock options") |
 | 4. LLM stream correctness | CO-05, CO-06, CO-12 | Same events for valid streams | An `event: error` frame yields Error+Finish; parallel tool calls without `index` stay separate | **Done** (commit "fix(llm): batch 4 stream frame handling") |
@@ -253,7 +253,7 @@ Statuses: `Proposed`, `Approved`, `In progress`, `Blocked`, `Superseded`, `Done`
 ### Prevention decisions
 
 - **Car 0:** Guard added. `test_global_config_dir_xdg` fails if the resolver stops honouring the variable. A Windows CI job (O-07) is the real guard for the class.
-- **Car 1:** Guard added: `test_merge_inner_sections`. **Correction (batch 16):** this line used to claim car 1 also added exhaustive destructuring (CO-24), but that was never written. Batch 16 added it (`88ba8d2`).
+- **Car 1:** Guard added: `test_merge_six_sections`. **Correction (batch 16):** this line used to claim car 1 also added exhaustive destructuring (CO-24), but that was never written. Batch 16 added it (`88ba8d2`).
 - **Cars 2-7:** Guard added (a locking test per defect, with non-ASCII, CRLF or oversized input).
 - **Car 8:** No guard justified. The fixes remove work with no visible behaviour change; the crate suites prove results are unchanged.
 - **Car 9:** Guard added. The three guards now cover the root package and the whole plugins crate; the VCS guard has a non-vacuity run.
