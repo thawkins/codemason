@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, Notify};
 use tracing::{debug, warn};
 
 use crate::Config;
-use crate::agent::{AgentInfo, AgentMode, resolve_agent_with_customs};
+use crate::agent::{AgentInfo, AgentMode, AgentRole, resolve_agent_with_customs};
 use crate::event::{Event, EventBus};
 use crate::session::processor::SessionProcessor;
 use crate::team::config::{
@@ -206,6 +206,37 @@ Prefer peer messaging when:
 - You want to share intermediate results to avoid duplicated effort.
 "#,
     )
+}
+
+/// Resolve the agent a teammate runs as: the `agent_type` profile (built-in
+/// or custom), or a plain agent of that name when it does not resolve.
+///
+/// A teammate is always a sub-agent with the standard role, whatever its
+/// profile says (team-leader-agent spec, section 4): a teammate spawned with
+/// `agent_type = "team-leader"` cannot create a team of its own, so teams
+/// never nest.
+///
+/// # Arguments
+///
+/// * `agent_type` - the agent profile named by `team_spawn` or a blueprint.
+/// * `config` - the resolved configuration holding the agent profiles.
+/// * `working_dir` - the project whose custom agents are searched.
+///
+/// # Returns
+///
+/// The teammate's agent definition, with mode `Subagent` and role `Standard`.
+#[must_use]
+pub fn teammate_agent_info(
+    agent_type: &str,
+    config: &Config,
+    working_dir: &Path,
+) -> Arc<AgentInfo> {
+    let mut agent = resolve_agent_with_customs(agent_type, config, working_dir)
+        .unwrap_or_else(|_| Arc::new(AgentInfo::new(agent_type, "Teammate agent")));
+    let info = Arc::make_mut(&mut agent);
+    info.mode = AgentMode::Subagent;
+    info.role = AgentRole::Standard;
+    agent
 }
 
 /// Resolve which model a teammate should run with.
@@ -2310,9 +2341,7 @@ impl TeamManager {
         // teammate with no model unless the caller supplied an override and the
         // spawn failed with "Agent 'general' has no model configured".
         let config = Config::load().unwrap_or_default();
-        let mut agent = resolve_agent_with_customs(agent_type, &config, working_dir)
-            .unwrap_or_else(|_| Arc::new(AgentInfo::new(agent_type, "Teammate agent")));
-        Arc::make_mut(&mut agent).mode = AgentMode::Subagent;
+        let mut agent = teammate_agent_info(agent_type, &config, working_dir);
         apply_teammate_model_override(Arc::make_mut(&mut agent), teammate_model, lead_model);
 
         // Ensure the agent has a model configured. Some custom agent names may

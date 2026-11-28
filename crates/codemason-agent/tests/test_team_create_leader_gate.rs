@@ -234,3 +234,48 @@ async fn test_team_create_leader_gate_leader_cannot_call_new_agent() {
         .expect_err("a team leader may not spawn sub-agents");
     assert!(err.to_string().contains("leader_cannot_spawn"), "{err}");
 }
+
+#[tokio::test]
+async fn test_team_create_leader_gate_refuses_second_team() {
+    let ws = workspace();
+    let mut ctx = ctx_in(ws.path(), AgentRole::TeamLeader);
+    ctx.team_context = Some(Arc::new(codemason_agent::tool::TeamContext {
+        team_name: "first".to_string(),
+        agent_id: "lead".to_string(),
+        is_lead: true,
+    }));
+    let err = tool("team_create")
+        .execute(
+            json!({ "blueprint": "code-review", "context": "x", "name": "second" }),
+            &ctx,
+        )
+        .await
+        .expect_err("a leader that already runs a team may not create another");
+    assert!(err.to_string().contains("exactly one team"), "{err}");
+    assert!(!ws.path().join(".codemason/teams/second").exists());
+}
+
+#[tokio::test]
+async fn test_team_create_leader_gate_teammate_never_leads() {
+    let ws = workspace();
+    let agent = codemason_agent::team::teammate_agent_info(
+        "team-leader",
+        &codemason_agent::Config::default(),
+        ws.path(),
+    );
+    assert_eq!(
+        agent.role,
+        AgentRole::Standard,
+        "a teammate is never a leader"
+    );
+    assert_eq!(agent.mode, codemason_agent::agent::AgentMode::Subagent);
+    let ctx = ctx_in(ws.path(), agent.role);
+    let err = tool("team_create")
+        .execute(
+            json!({ "blueprint": "code-review", "context": "x", "name": "nested" }),
+            &ctx,
+        )
+        .await
+        .expect_err("a teammate may not create a team");
+    assert!(err.to_string().contains("not_team_leader"), "{err}");
+}

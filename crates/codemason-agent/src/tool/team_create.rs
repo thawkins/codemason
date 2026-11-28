@@ -75,6 +75,10 @@ async fn dispatch_seed_tool(
 /// Stable reason code for a `team_create` call from a non-leader agent.
 pub const REASON_NOT_TEAM_LEADER: &str = "not_team_leader";
 
+/// Stable reason code for a `team_create` call from a session that already
+/// runs a team.
+pub const REASON_LEADER_HAS_TEAM: &str = "leader_has_team";
+
 /// Stable reason code for a `seed_only` call whose blueprint seeding was
 /// refused or failed.
 pub const REASON_SEED_FAILED: &str = "seed_failed";
@@ -193,6 +197,16 @@ impl Tool for TeamCreateTool {
                 "team_create may only be called by a team-leader agent. Spawn one with \
                  new_agent agent=\"team-leader\" background=true and pass the blueprint and \
                  context in its task.",
+            ));
+        }
+
+        // A leader runs exactly one team (spec section 2): a session that
+        // already leads an Active team may not create a second one.
+        if !seed_only && ctx.team_context.is_some() {
+            return Err(super::param_schema::reason_error(
+                REASON_LEADER_HAS_TEAM,
+                "this session already runs a team; a leader runs exactly one team. \
+                 Finish it with team_cleanup before creating another.",
             ));
         }
 
