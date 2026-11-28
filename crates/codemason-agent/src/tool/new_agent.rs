@@ -30,6 +30,9 @@ pub const REASON_CONTRACT_REFUSED: &str = "contract_refused";
 /// Machine-readable reason for a call made while a team context is active, so
 /// `new_agent` is the wrong tool (FR-009, FR-010).
 pub const REASON_TEAM_CONTEXT_ACTIVE: &str = "team_context_active";
+
+/// Stable reason code for a refusal because the caller is a team leader.
+pub const REASON_LEADER_CANNOT_SPAWN: &str = "leader_cannot_spawn";
 /// Machine-readable reason for a per-call `timeout_secs` that is not a positive
 /// integer (FR-010, FR-017).
 pub const REASON_INVALID_TIMEOUT_SECS: &str = "invalid_timeout_secs";
@@ -212,6 +215,17 @@ impl Tool for NewAgentTool {
         // FR-004 / FR-038: refuse an undeclared property before anything else,
         // so a misspelled flag cannot silently degrade to the default contract.
         super::param_schema::validate_tool_input(&self.parameters_schema(), &input)?;
+
+        // A team leader runs its team through the `team_*` tools; refusing by
+        // role keeps that independent of permission-string matching.
+        if ctx.agent_role == crate::agent::AgentRole::TeamLeader {
+            return Err(super::param_schema::reason_error(
+                REASON_LEADER_CANNOT_SPAWN,
+                "A team leader runs its team with the team_* tools (`team_spawn`, \
+                 `team_task_create`, `team_assign_task`, `team_message`) and cannot spawn \
+                 sub-agents with `new_agent`.",
+            ));
+        }
 
         // FR-009 / FR-045: a precondition failure is an error, not a successful
         // result whose content is prose. The guidance text is preserved verbatim

@@ -233,16 +233,26 @@ impl TeamStore {
         };
 
         let team_dir = base.join(name);
-        if team_dir.exists() {
-            return Err(anyhow!(
-                "team '{}' already exists at {}",
-                name,
-                team_dir.display()
-            ));
+        // Atomic check-and-create: `create_dir` fails with `AlreadyExists` when
+        // the directory is present, so two concurrent creates of one name
+        // cannot both win (an `exists()` check followed by `create_dir_all`
+        // could).
+        fs::create_dir_all(&base)
+            .with_context(|| format!("create teams directory {}", base.display()))?;
+        match fs::create_dir(&team_dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(anyhow!(
+                    "team '{}' already exists at {}",
+                    name,
+                    team_dir.display()
+                ));
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e)
+                    .context(format!("create team directory {}", team_dir.display())));
+            }
         }
-
-        fs::create_dir_all(&team_dir)
-            .with_context(|| format!("create team directory {}", team_dir.display()))?;
         fs::create_dir_all(team_dir.join("mailbox"))
             .with_context(|| "create mailbox subdirectory")?;
 

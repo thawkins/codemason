@@ -36,7 +36,9 @@ SHIM_CRATE="crates/codemason-team"
 # added beside a team's `config.json` (`hook-failures.jsonl`,
 # `status-history.jsonl`). They are canonical runtime modules like the rest, so
 # they belong in this list rather than tripping the "unexpected file" check.
-RUNTIME_MODULES=(classify config hook_ledger mailbox manager status_history store swarm task)
+# `leader` (launching a team-leader sub-agent for a team) and `registry` (the
+# per-team `TeamManagers` map) are the team-leader runtime added in 1.0.187.
+RUNTIME_MODULES=(classify config hook_ledger leader mailbox manager registry status_history store swarm task)
 
 fail() {
     echo "ERROR: $*"

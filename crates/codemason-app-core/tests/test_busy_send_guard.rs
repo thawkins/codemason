@@ -104,7 +104,7 @@ async fn test_bang_command_is_refused_while_processing() {
 async fn test_focused_teammate_does_not_gate_a_send_while_processing() {
     let mut app = support::make_app();
     app.session.is_processing = true;
-    app.session.focused_teammate = Some("teammate-1".to_string());
+    app.session.focused_teammate = Some((String::new(), "teammate-1".to_string()));
     app.session.input = "hello teammate".to_string();
 
     let action = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;

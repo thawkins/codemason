@@ -9,7 +9,9 @@
 //! host kind; a project with no sessions is listed too. Each session row
 //! shows the title, a relative age, the branch marker with the count of
 //! pull/merge requests for the session's branch, and an attention marker at
-//! the right edge; the focused session is highlighted.
+//! the right edge; the focused session is highlighted. Under a session come
+//! the team leaders it spawned (`team-leader: <team>`, collapsible), each
+//! followed by its team's teammates, then its other running sub-agents.
 //!
 //! Data from storage (groups, titles, pins, branches, request counts,
 //! hidden projects) is cached in [`SidebarState`] and rebuilt
@@ -32,11 +34,12 @@
 //! selected session opens a menu acting on the whole selection, and `Esc`
 //! clears it. Projects keep a manual order once one is moved up or down.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crate::geometry::Area;
 use crate::input_event::{Key, KeyInput, Modifiers, MouseButton, MouseInput, MouseKind};
+use codemason_agent::team::{MemberStatus, Task, TaskStore, TeamConfig, TeamStatus, TeamStore};
 use codemason_config::ExecutionBackendKind;
 use codemason_storage::{
     DiffStats, ProjectSessions, RequestKey, SessionCheckout, SessionRequest, SidebarSection,
@@ -143,6 +146,73 @@ pub struct SidebarState {
     /// list it (archived, child or non-interactive), as `(id, title)`; read
     /// once per focused session and dropped on every refresh.
     pub focused_title: Option<(String, String)>,
+    /// Whether the cached team rows ([`SidebarState::leaders`]) must be
+    /// rebuilt before the next use: set by team and sub-agent events, which
+    /// do not need the rest of the cache reloaded.
+    pub teams_dirty: bool,
+    /// Whether the session list ([`SidebarState::groups`]) has loaded at
+    /// least once. Until it has, no recorded team leader is pruned for a
+    /// parent that is missing from it.
+    pub sessions_loaded: bool,
+    /// Cached team-leader sessions, each with its team's teammates, in
+    /// display order (team-leader-agent spec, section 5). A leader stays
+    /// listed after its team is cleaned up, so the user can keep talking to
+    /// it, until its parent session leaves the sidebar.
+    pub leaders: Vec<SidebarLeader>,
+    /// Cached answer to "does this agent name resolve to a team-leader
+    /// role?", keyed by agent name.
+    pub leader_agents: HashMap<String, bool>,
+    /// Leader sessions whose teammate rows are hidden (not persisted).
+    pub collapsed_leaders: HashSet<String>,
+}
+
+/// A team-leader session listed in the sidebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarLeader {
+    /// The leader's child session id.
+    pub session_id: String,
+    /// The session that spawned the leader; its rows nest under this one.
+    pub parent_id: String,
+    /// The agent the leader runs as, when its task has been seen; a turn
+    /// sent to a finished leader resumes it under this agent.
+    pub agent_name: Option<String>,
+    /// The leader's team; empty until the team has been created.
+    pub team_name: String,
+    /// Whether the leader's team is still `Active` on disk.
+    pub team_active: bool,
+    /// The team's members that have a session, in roster order; empty once
+    /// the team is no longer `Active`.
+    pub teammates: Vec<SidebarTeammate>,
+}
+
+/// A teammate of a listed leader's team.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarTeammate {
+    /// The teammate's session id; `None` until it has started (a swarm subtask
+    /// waiting on its dependencies is `Blocked` and has no session yet).
+    pub session_id: Option<String>,
+    /// The teammate's agent id within its team (`tm-001`).
+    pub agent_id: String,
+    /// The teammate's name.
+    pub name: String,
+    /// The teammate's lifecycle state.
+    pub status: MemberStatus,
+    /// The teammates (or unassigned tasks) whose unfinished work this
+    /// teammate's task depends on; empty when it waits on nothing.
+    pub waiting_for: Vec<String>,
+}
+
+/// What a team-leader row shows about its leader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderState {
+    /// The leader's task is running.
+    Running,
+    /// The leader's task is gone while its team is still `Active` (it
+    /// crashed, or the app restarted): drawn greyed with its teammates.
+    Crashed,
+    /// The leader finished and its team is gone: drawn greyed, still open
+    /// to a direct user turn.
+    Done,
 }
 
 impl Default for SidebarState {
@@ -180,6 +250,11 @@ impl Default for SidebarState {
             project_order: Vec::new(),
             launch_log: None,
             focused_title: None,
+            teams_dirty: true,
+            sessions_loaded: false,
+            leaders: Vec::new(),
+            leader_agents: HashMap::new(),
+            collapsed_leaders: HashSet::new(),
         }
     }
 }
@@ -307,10 +382,60 @@ pub enum SidebarRow {
         /// Whether the task is suspended.
         suspended: bool,
     },
+    /// A team leader, nested under the session that spawned it and labelled
+    /// `team-leader: <team_name>`. Activating it focuses its session, whose
+    /// prompt then talks to the leader (a finished one too).
+    TeamLeader {
+        /// The leader's child session id.
+        session_id: String,
+        /// The leader's team; empty until the team exists.
+        team_name: String,
+        /// Running, crashed (team still active) or done (team gone).
+        state: LeaderState,
+        /// Whether the leader's teammate rows are hidden.
+        collapsed: bool,
+    },
+    /// A teammate, nested under its team's leader. Activating it focuses its
+    /// session, whose prompt then sends the teammate a direct user turn.
+    Teammate {
+        /// The teammate's session id; `None` until it has started.
+        session_id: Option<String>,
+        /// The teammate's team.
+        team_name: String,
+        /// The teammate's agent id within the team.
+        agent_id: String,
+        /// The teammate's name.
+        name: String,
+        /// The teammate's lifecycle state.
+        status: MemberStatus,
+        /// The teammates its task is waiting on (see [`waiting_for_names`]).
+        waiting_for: Vec<String>,
+    },
+}
+
+/// The text a team-leader row shows: `team-leader: <team>`, or plain
+/// `team-leader` before the leader has created its team.
+#[must_use]
+pub fn leader_label(team_name: &str) -> String {
+    if team_name.is_empty() {
+        "team-leader".to_string()
+    } else {
+        format!("team-leader: {team_name}")
+    }
 }
 
 /// Reloads the cached storage data when it is marked dirty.
 pub fn refresh_if_dirty(app: &mut App) {
+    let teams_dirty = app.sidebar.teams_dirty || app.sidebar.dirty;
+    refresh_storage_if_dirty(app);
+    if teams_dirty {
+        refresh_teams(app);
+    }
+}
+
+/// Reloads the cached storage data (everything but the team rows) when the
+/// sidebar is marked dirty.
+fn refresh_storage_if_dirty(app: &mut App) {
     if !app.sidebar.dirty {
         return;
     }
@@ -389,6 +514,7 @@ pub fn refresh_if_dirty(app: &mut App) {
                 app.sidebar.selected.retain(|id| live.contains(id.as_str()));
             }
             app.sidebar.groups = groups;
+            app.sidebar.sessions_loaded = true;
             app.sidebar.pinned = pinned;
             app.sidebar.checkouts = checkouts;
             app.sidebar.unread = unread;
@@ -684,6 +810,7 @@ fn push_section(rows: &mut Vec<SidebarRow>, app: &App, section: &SectionData<'_>
                 owns_worktree: checkout.is_some_and(|c| c.worktree.is_some()),
                 requests: checkout.and_then(|c| c.pr_count),
             });
+            push_team_rows(rows, app, &s.id);
             push_subagents(rows, app, &s.id, 1);
         }
     }
@@ -719,10 +846,12 @@ fn push_subagents(rows: &mut Vec<SidebarRow>, app: &App, parent: &str, depth: us
     if depth > MAX_SUBAGENT_DEPTH {
         return;
     }
+    // Team leaders have rows of their own ([`push_team_rows`]).
     for task in app
         .active_tasks
         .iter()
         .filter(|task| listed_parent(app, task) == parent)
+        .filter(|task| !is_leader_session(app, &task.child_session_id))
     {
         rows.push(SidebarRow::SubAgent {
             id: task.child_session_id.clone(),
@@ -737,6 +866,344 @@ fn push_subagents(rows: &mut Vec<SidebarRow>, app: &App, parent: &str, depth: us
             suspended: task.status == codemason_agent::task::TaskStatus::Suspended,
         });
         push_subagents(rows, app, &task.child_session_id, depth + 1);
+    }
+}
+
+/// Whether `session_id` is a listed team leader's session.
+fn is_leader_session(app: &App, session_id: &str) -> bool {
+    app.sidebar
+        .leaders
+        .iter()
+        .any(|leader| leader.session_id == session_id)
+}
+
+/// Appends the team leaders spawned by session `parent`, each followed by
+/// its team's teammates unless it is collapsed.
+fn push_team_rows(rows: &mut Vec<SidebarRow>, app: &App, parent: &str) {
+    for leader in app.sidebar.leaders.iter().filter(|l| l.parent_id == parent) {
+        let running = app
+            .active_tasks
+            .iter()
+            .any(|task| task.child_session_id == leader.session_id);
+        let state = match (running, leader.team_active) {
+            (true, _) => LeaderState::Running,
+            (false, true) => LeaderState::Crashed,
+            (false, false) => LeaderState::Done,
+        };
+        let collapsed = app.sidebar.collapsed_leaders.contains(&leader.session_id);
+        rows.push(SidebarRow::TeamLeader {
+            session_id: leader.session_id.clone(),
+            team_name: leader.team_name.clone(),
+            state,
+            collapsed,
+        });
+        if collapsed {
+            continue;
+        }
+        rows.extend(leader.teammates.iter().map(|mate| SidebarRow::Teammate {
+            session_id: mate.session_id.clone(),
+            team_name: leader.team_name.clone(),
+            agent_id: mate.agent_id.clone(),
+            name: mate.name.clone(),
+            status: mate.status,
+            waiting_for: mate.waiting_for.clone(),
+        }));
+    }
+}
+
+/// Shows or hides the teammate rows of the leader whose session is
+/// `session_id` (the disclosure triangle on its row, `Left`/`Right`).
+///
+/// # Arguments
+///
+/// * `app` - the application.
+/// * `session_id` - the leader's session.
+pub fn toggle_leader(app: &mut App, session_id: &str) {
+    let collapsed = &mut app.sidebar.collapsed_leaders;
+    if !collapsed.remove(session_id) {
+        collapsed.insert(session_id.to_string());
+    }
+}
+
+/// The `Active` teams visible from the launch project, plus those bound to
+/// a live manager wherever they live.
+fn active_teams(app: &App) -> Vec<(TeamConfig, Vec<Task>)> {
+    let mut dirs: Vec<std::path::PathBuf> = TeamStore::list_teams(&app.cwd_path)
+        .into_iter()
+        .map(|(_, dir, _)| dir)
+        .collect();
+    for manager in app.session_processor.team_managers.all() {
+        if !dirs.contains(&manager.team_dir) {
+            dirs.push(manager.team_dir.clone());
+        }
+    }
+    dirs.iter()
+        .filter_map(|dir| match TeamStore::load(dir) {
+            Ok(store) => Some((dir, store.config)),
+            Err(e) => {
+                tracing::debug!(dir = %dir.display(), error = %e, "session sidebar: team not read");
+                None
+            }
+        })
+        .filter(|(_, team)| team.status == TeamStatus::Active)
+        .map(|(dir, team)| {
+            // The task list names what each teammate waits on; a team without
+            // one (or an unreadable one) simply shows no waits.
+            let tasks = TaskStore::open(dir)
+                .and_then(|store| store.read())
+                .map(|list| list.tasks)
+                .unwrap_or_else(|e| {
+                    tracing::debug!(dir = %dir.display(), error = %e, "session sidebar: tasks not read");
+                    Vec::new()
+                });
+            (team, tasks)
+        })
+        .collect()
+}
+
+/// The teammates whose unfinished tasks the task of `agent_id` depends on,
+/// as the "Waiting for:" line of a blocked teammate's tooltip shows them.
+///
+/// Each predecessor that is neither completed nor cancelled is named by its
+/// assignee's teammate name, or `task <id>` when no teammate holds it.
+/// Names are listed once each, in dependency order.
+///
+/// # Arguments
+/// * `team` - the team, for mapping agent ids to teammate names.
+/// * `tasks` - the team's task list.
+/// * `agent_id` - the teammate whose waits are wanted.
+///
+/// # Returns
+/// The names it is waiting on; empty when it waits on nothing.
+#[must_use]
+pub fn waiting_for_names(team: &TeamConfig, tasks: &[Task], agent_id: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let own = tasks
+        .iter()
+        .filter(|task| task.assigned_to.as_deref() == Some(agent_id) && !task.status.is_terminal());
+    for task in own {
+        for dep in &task.depends_on {
+            let Some(pred) = tasks.iter().find(|t| &t.id == dep) else {
+                continue;
+            };
+            if pred.status.is_terminal() {
+                continue;
+            }
+            let name = pred
+                .assigned_to
+                .as_deref()
+                .and_then(|id| team.members.iter().find(|m| m.agent_id == id))
+                .map_or_else(|| format!("task {}", pred.id), |m| m.name.clone());
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Records in [`SidebarState::leader_agents`] whether each running task's
+/// agent resolves to a team-leader role, for names not yet known.
+fn resolve_leader_agents(app: &mut App) {
+    let unknown: BTreeSet<String> = app
+        .active_tasks
+        .iter()
+        .filter(|task| !app.sidebar.leader_agents.contains_key(&task.agent_name))
+        .map(|task| task.agent_name.clone())
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+    let config = app.session_processor.load_config_cached();
+    for name in unknown {
+        let leader =
+            codemason_agent::agent::resolve_agent_with_customs(&name, &config, &app.cwd_path)
+                .is_ok_and(|agent| agent.role == codemason_agent::agent::AgentRole::TeamLeader);
+        app.sidebar.leader_agents.insert(name, leader);
+    }
+}
+
+/// Rebuilds [`SidebarState::leaders`]: leaders whose task runs now (found by
+/// the agent's team-leader role), leads of `Active` teams (whose task may be
+/// gone after a crash or a restart), and leaders listed before whose team
+/// has since been cleaned up.
+fn refresh_teams(app: &mut App) {
+    app.sidebar.teams_dirty = false;
+    let active = active_teams(app);
+    resolve_leader_agents(app);
+    let mut leaders = std::mem::take(&mut app.sidebar.leaders);
+    let known = load_known_leaders(&app.storage);
+    // Leaders recorded before a restart, finished or not.
+    for (session_id, record) in &known {
+        if leaders.iter().any(|l| &l.session_id == session_id) {
+            continue;
+        }
+        if let Some(parent_id) = parent_of(app, session_id) {
+            leaders.push(SidebarLeader {
+                session_id: session_id.clone(),
+                parent_id,
+                agent_name: Some(record.agent_name.clone()),
+                team_name: record.team_name.clone(),
+                team_active: false,
+                teammates: Vec::new(),
+            });
+        }
+    }
+    for task in &app.active_tasks {
+        let is_leader = app
+            .sidebar
+            .leader_agents
+            .get(&task.agent_name)
+            .copied()
+            .unwrap_or(false)
+            || active
+                .iter()
+                .any(|(team, _)| team.lead_session_id == task.child_session_id);
+        if !is_leader {
+            continue;
+        }
+        match leaders
+            .iter_mut()
+            .find(|l| l.session_id == task.child_session_id)
+        {
+            Some(leader) => leader.agent_name = Some(task.agent_name.clone()),
+            None => leaders.push(SidebarLeader {
+                session_id: task.child_session_id.clone(),
+                parent_id: task.parent_session_id.clone(),
+                agent_name: Some(task.agent_name.clone()),
+                team_name: String::new(),
+                team_active: false,
+                teammates: Vec::new(),
+            }),
+        }
+    }
+    for (team, _) in &active {
+        if leaders.iter().any(|l| l.session_id == team.lead_session_id) {
+            continue;
+        }
+        if let Some(parent_id) = parent_of(app, &team.lead_session_id) {
+            leaders.push(SidebarLeader {
+                session_id: team.lead_session_id.clone(),
+                parent_id,
+                agent_name: None,
+                team_name: team.name.clone(),
+                team_active: false,
+                teammates: Vec::new(),
+            });
+        }
+    }
+    for leader in &mut leaders {
+        match active
+            .iter()
+            .find(|(team, _)| team.lead_session_id == leader.session_id)
+        {
+            Some((team, tasks)) => {
+                leader.team_name = team.name.clone();
+                leader.team_active = true;
+                leader.teammates = team
+                    .members
+                    .iter()
+                    .map(|member| SidebarTeammate {
+                        session_id: member.session_id.clone(),
+                        agent_id: member.agent_id.clone(),
+                        name: member.name.clone(),
+                        status: member.status,
+                        waiting_for: waiting_for_names(team, tasks, &member.agent_id),
+                    })
+                    .collect();
+            }
+            None => {
+                leader.team_active = false;
+                leader.teammates.clear();
+            }
+        }
+    }
+    // A leader whose parent has left the sidebar (archived, deleted) goes;
+    // before the session list has loaded nothing is known to have left, so
+    // nothing is pruned and the records are left as they are.
+    if !app.sidebar.sessions_loaded {
+        app.sidebar.leaders = leaders;
+        return;
+    }
+    let listed: HashSet<&str> = app
+        .sidebar
+        .groups
+        .iter()
+        .flat_map(|g| g.sessions.iter().map(|s| s.id.as_str()))
+        .collect();
+    leaders.retain(|l| listed.contains(l.parent_id.as_str()));
+    leaders.sort_by(|a, b| {
+        (a.team_name.as_str(), a.session_id.as_str())
+            .cmp(&(b.team_name.as_str(), b.session_id.as_str()))
+    });
+    let recorded: BTreeMap<String, KnownLeader> = leaders
+        .iter()
+        .filter_map(|l| {
+            Some((
+                l.session_id.clone(),
+                KnownLeader {
+                    agent_name: l.agent_name.clone()?,
+                    team_name: l.team_name.clone(),
+                },
+            ))
+        })
+        .collect();
+    if recorded != known {
+        save_known_leaders(&app.storage, &recorded);
+    }
+    app.sidebar.leaders = leaders;
+}
+
+/// Settings key holding the team leaders the sidebar has seen, so a
+/// finished leader stays listed (and resumes as its own agent) after a
+/// restart.
+const KNOWN_LEADERS_KEY: &str = "team.leaders";
+
+/// A team leader recorded under [`KNOWN_LEADERS_KEY`], keyed by its session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct KnownLeader {
+    /// The agent the leader runs as.
+    agent_name: String,
+    /// The leader's team; empty when it never created one.
+    #[serde(default)]
+    team_name: String,
+}
+
+/// The recorded leaders; none when nothing is stored or it is unreadable.
+fn load_known_leaders(storage: &Storage) -> BTreeMap<String, KnownLeader> {
+    match storage.get_setting(KNOWN_LEADERS_KEY) {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "ignoring malformed recorded team leaders");
+            BTreeMap::new()
+        }),
+        Ok(None) => BTreeMap::new(),
+        Err(e) => {
+            tracing::warn!(error = %e, "recorded team leaders not read");
+            BTreeMap::new()
+        }
+    }
+}
+
+/// Records `leaders`; a failure is logged only.
+fn save_known_leaders(storage: &Storage, leaders: &BTreeMap<String, KnownLeader>) {
+    match serde_json::to_string(leaders) {
+        Ok(json) => {
+            if let Err(e) = storage.set_setting(KNOWN_LEADERS_KEY, &json) {
+                tracing::warn!(error = %e, "recorded team leaders not saved");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "recorded team leaders not encoded"),
+    }
+}
+
+/// The parent of session `session_id`, from storage.
+fn parent_of(app: &App, session_id: &str) -> Option<String> {
+    match app.storage.get_session(session_id) {
+        Ok(row) => row.and_then(|row| row.parent_id),
+        Err(e) => {
+            tracing::warn!(error = %e, "session sidebar: team leader session not read");
+            None
+        }
     }
 }
 
@@ -909,11 +1376,25 @@ fn activate_row(app: &mut App, index: usize) {
         Some(SidebarRow::Search) => start_filter(app),
         Some(SidebarRow::Spacer) => {}
         Some(SidebarRow::Header { key, .. }) => toggle_section(app, key, None),
-        Some(SidebarRow::Session { id, .. } | SidebarRow::SubAgent { id, .. }) => {
+        Some(
+            SidebarRow::Session { id, .. }
+            | SidebarRow::SubAgent { id, .. }
+            | SidebarRow::TeamLeader { session_id: id, .. }
+            | SidebarRow::Teammate {
+                session_id: Some(id),
+                ..
+            },
+        ) => {
             let result = app.switch_to_session(id);
             report(app, result);
             app.sidebar.focused = false;
         }
+        // A teammate that has not started (a swarm subtask waiting on its
+        // dependencies) is a dimmed placeholder with no session: it does
+        // nothing until its session exists and it becomes a full row.
+        Some(SidebarRow::Teammate {
+            session_id: None, ..
+        }) => {}
         None => {}
     }
 }
@@ -1155,7 +1636,9 @@ fn open_menu_for_row(app: &mut App, index: usize, row_y: u16) -> bool {
             | SidebarRow::NewSession
             | SidebarRow::Spacer
             | SidebarRow::Search
-            | SidebarRow::SubAgent { .. },
+            | SidebarRow::SubAgent { .. }
+            | SidebarRow::TeamLeader { .. }
+            | SidebarRow::Teammate { .. },
         )
         | None => false,
     }
@@ -1390,14 +1873,32 @@ pub fn handle_key(app: &mut App, key: KeyInput) -> bool {
         Key::Home => state.cursor = 0,
         Key::End => state.cursor = selectable(&rows, last, false),
         Key::Enter | Key::Char(' ') => activate_row(app, app.sidebar.cursor),
-        Key::Left | Key::Right => {
-            if let Some(SidebarRow::Header { key: section, .. }) =
-                build_rows(app).get(app.sidebar.cursor)
-            {
+        Key::Left | Key::Right => match build_rows(app).get(app.sidebar.cursor) {
+            Some(SidebarRow::Header { key: section, .. }) => {
                 let section = section.clone();
                 toggle_section(app, &section, Some(key.key == Key::Left));
             }
-        }
+            // `Left` hides a leader's teammates, `Right` shows them.
+            Some(SidebarRow::TeamLeader {
+                session_id,
+                collapsed,
+                ..
+            }) => {
+                if *collapsed != (key.key == Key::Left) {
+                    let session_id = session_id.clone();
+                    toggle_leader(app, &session_id);
+                }
+            }
+            Some(
+                SidebarRow::NewSession
+                | SidebarRow::Spacer
+                | SidebarRow::Search
+                | SidebarRow::Session { .. }
+                | SidebarRow::SubAgent { .. }
+                | SidebarRow::Teammate { .. },
+            )
+            | None => {}
+        },
         Key::Char('/') => start_filter(app),
         // On a project heading: `n` starts a session in that project, `b`
         // prefills the command that starts one on its own branch.

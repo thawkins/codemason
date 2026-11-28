@@ -2,9 +2,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use codemason_agent::team::{
-    self, Mailbox, MailboxMessage, MemberStatus, MessageType, TeamMember, TeamStore,
-};
+use codemason_agent::team::{self, Mailbox, MailboxMessage, MessageType, TeamMember, TeamStore};
 use codemason_agent::{
     agent::ModelRef,
     event::{Event, FinishReason},
@@ -18,7 +16,7 @@ use codemason_telemetry::counters as telemetry_counters;
 use crate::app::state::{
     App, BgTaskView, LlmRequestStat, LogLevel, ModelDownloadState, ModelLoadingState,
     OutputViewLineCache, OutputViewState, OutputViewTarget, PlanApprovalState, ProviderSetupStep,
-    QuestionRequest, ResearchViewState, RollbackOfferState,
+    QuestionRequest, ResearchViewState, RollbackOfferState, TeamSection,
 };
 
 // Helpers
@@ -58,7 +56,6 @@ impl App {
     /// team summary (or surface an error) into the chat log.
     #[doc(hidden)]
     pub async fn poll_pending_swarm(&mut self) {
-        self.poll_swarm_synthesis();
         let outcome = {
             let mut guard = recover_poisoned(self.session.swarm_result.lock(), "swarm_result");
             guard.take()
@@ -82,43 +79,6 @@ impl App {
             }
             Err(msg) => {
                 self.report_swarm_failure("Swarm Error", &msg);
-            }
-        }
-    }
-
-    /// Show the finished swarm's combined answer (or the synthesis error) once
-    /// the synthesis call started at completion has returned.
-    fn poll_swarm_synthesis(&mut self) {
-        let outcome = {
-            let mut guard = recover_poisoned(
-                self.session.swarm_synthesis_result.lock(),
-                "swarm_synthesis_result",
-            );
-            guard.take()
-        };
-        let Some((team_name, outcome)) = outcome else {
-            return;
-        };
-        self.session.swarm_synthesis = None;
-        // An answer for a swarm that was cancelled, closed or replaced since
-        // the call started is dropped rather than shown against another swarm.
-        let current = self
-            .session
-            .swarm_state
-            .as_ref()
-            .is_some_and(|s| s.team_name == team_name);
-        if !current {
-            tracing::debug!(team = %team_name, "dropping synthesis result for a swarm that is gone");
-            return;
-        }
-        match outcome {
-            Ok(answer) => {
-                self.append_assistant_text(&format!("From: /swarm\n## Swarm Result\n\n{answer}\n"));
-                self.status = "[done] swarm: results combined".to_string();
-                self.push_log_no_agent(LogLevel::Info, "Swarm synthesis complete".to_string());
-            }
-            Err(msg) => {
-                self.report_swarm_failure("Synthesis Failed", &msg);
             }
         }
     }
@@ -627,7 +587,7 @@ impl App {
                 ref team_name,
                 ref teammate_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
                 self.on_teammate_spawned(team_name, teammate_name, agent_id);
             }
             Event::TeammateMessage {
@@ -637,7 +597,8 @@ impl App {
                 ref to,
                 ref message_type,
                 ref preview,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_message(team_name, from, to, message_type, preview);
             }
             Event::TeammateP2PMessage {
@@ -647,14 +608,16 @@ impl App {
                 ref to,
                 ref message_type,
                 ref preview,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_p2p_message(team_name, from, to, message_type, preview);
             }
             Event::TeammateIdle {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_idle(team_name, agent_id);
             }
             Event::TeammateFailed {
@@ -662,7 +625,8 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref error,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_failed(team_name, agent_id, error);
             }
             Event::TeammateStopped {
@@ -670,21 +634,24 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref cause,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_stopped(team_name, agent_id, cause);
             }
             Event::TeammateSuspended {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_suspended(team_name, agent_id);
             }
             Event::TeammateResumed {
                 ref session_id,
                 ref team_name,
                 ref agent_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_teammate_resumed(team_name, agent_id);
             }
             Event::TeamTaskClaimed {
@@ -692,7 +659,8 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref task_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_team_task_claimed(team_name, agent_id, task_id);
             }
             Event::TeamTaskCompleted {
@@ -700,7 +668,8 @@ impl App {
                 ref team_name,
                 ref agent_id,
                 ref task_id,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_team_task_completed(team_name, agent_id, task_id);
             }
             // FR-044: a completion the FR-001 ownership rule refused. The
@@ -715,7 +684,7 @@ impl App {
                 ref owner,
                 ref reason,
                 ref message,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
                 self.on_team_task_completion_rejected(
                     team_name, agent_id, task_id, owner, reason, message,
                 );
@@ -723,7 +692,8 @@ impl App {
             Event::TeamCleanedUp {
                 ref session_id,
                 ref team_name,
-            } if self.is_current_session(session_id) => {
+            } if self.tracks_team_event(session_id, team_name) => {
+                self.session.apply_team_event(&event);
                 self.on_team_cleaned_up(team_name).await;
             }
             Event::ShellCwdChanged {
@@ -2400,25 +2370,31 @@ impl App {
     /// Handle [`Event::TeammateSpawned`] for the focused session.
     fn on_teammate_spawned(&mut self, team_name: &str, teammate_name: &str, agent_id: &str) {
         telemetry_counters::set_team_members(self.session.team_members.len() as i64 + 1);
+        // The session's member list mirrors one team (the active one); a
+        // spawn in another team is read from that team's store when painted.
+        let for_active = self.is_active_or_unset_team(team_name);
         // Add new member to team_members if not already present.
-        if !self
-            .session
-            .team_members
-            .iter()
-            .any(|m| m.agent_id == *agent_id)
+        if for_active
+            && !self
+                .session
+                .team_members
+                .iter()
+                .any(|m| m.agent_id == *agent_id)
         {
             let member = TeamMember::new(teammate_name, agent_id, "teammate");
             self.session.team_members.push(member);
             self.session
                 .team_message_counts
-                .entry(agent_id.to_string())
+                .entry((team_name.to_string(), agent_id.to_string()))
                 .or_insert((0, 0));
         }
         // Always refresh the stored values (session id, status, current task)
         // from disk so races between UI hydration and spawn events don't
         // leave the UI showing an outdated state.
         let mut known_team_dir: Option<std::path::PathBuf> = None;
-        let teammate_session_id = if let Some(m) = self
+        let teammate_session_id = if !for_active {
+            None
+        } else if let Some(m) = self
             .session
             .team_members
             .iter_mut()
@@ -2464,18 +2440,9 @@ impl App {
         // created a `TeamManager`, so the progress recording in the
         // status handlers below is not a silent no-op for the whole
         // run. `reconcile = false`: the spawning owner manages its own
-        // members; this only attaches observation. Observation never
-        // displaces a live runtime bound to another team (events from
-        // two teams would otherwise flip the binding back and forth).
-        let bound_elsewhere = self
-            .session_processor
-            .team_manager
-            .get()
-            .is_some_and(|bound| bound.team_name != *team_name)
-            && self.session_processor.team_manager.stale().is_none();
-        if !bound_elsewhere {
-            self.ensure_team_manager_for_team_inner(team_name, known_team_dir, false);
-        }
+        // members; this only attaches observation. Each team has its own
+        // manager, so observing one team never displaces another's.
+        self.ensure_team_manager_for_team_inner(team_name, known_team_dir, false);
         self.show_teams = true;
         self.push_log_for(
             LogLevel::Info,
@@ -2494,27 +2461,11 @@ impl App {
         message_type: &str,
         preview: &str,
     ) {
-        if from != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry(from.to_string())
-                .or_insert((0, 0));
-            counts.0 = counts.0.saturating_add(1);
-        }
-        if to != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry(to.to_string())
-                .or_insert((0, 0));
-            counts.1 = counts.1.saturating_add(1);
-        }
         self.push_log_for(
             LogLevel::Info,
             format!("[msg] [{team_name}] {from} -> {to} ({message_type}): {preview}"),
             None,
-            self.team_member_session_id_by_agent_id(from),
+            self.team_member_session_id(team_name, from),
         );
     }
 
@@ -2527,71 +2478,34 @@ impl App {
         message_type: &str,
         preview: &str,
     ) {
-        // Same counter rule as TeammateMessage (FR-052): increment the
-        // sender's sent count and the recipient's received count,
-        // ignoring a sender or recipient named `lead` so the lead's
-        // own columns never move.
-        if from != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry(from.to_string())
-                .or_insert((0, 0));
-            counts.0 = counts.0.saturating_add(1);
-        }
-        if to != "lead" {
-            let counts = self
-                .session
-                .team_message_counts
-                .entry(to.to_string())
-                .or_insert((0, 0));
-            counts.1 = counts.1.saturating_add(1);
-        }
         self.push_log_for(
             LogLevel::Info,
             format!("[shuffle] [{team_name}] P2P {from} -> {to} ({message_type}): {preview}"),
             None,
-            self.team_member_session_id_by_agent_id(from),
+            self.team_member_session_id(team_name, from),
         );
     }
 
     /// Handle [`Event::TeammateIdle`] for the focused session.
     fn on_teammate_idle(&mut self, team_name: &str, agent_id: &str) {
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Idle;
-        }
         // M6-T1: record progress so the watchdog does not flag this
         // teammate as hung.
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         self.push_log_for(
             LogLevel::Info,
             format!("[sleep] [{team_name}] Teammate {agent_id} is idle"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
     /// Handle [`Event::TeammateFailed`] for the focused session.
     fn on_teammate_failed(&mut self, team_name: &str, agent_id: &str, error: &str) {
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Failed;
-            m.last_spawn_error = Some(error.to_string());
-        }
         // M6-T1: record progress so the watchdog stops tracking
         // this agent.
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         // Truncate on a char boundary so the appended ellipsis cannot
@@ -2601,34 +2515,26 @@ impl App {
             LogLevel::Error,
             format!("[err] [{team_name}] Teammate {agent_id} failed: {short_err}"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
     /// Handle [`Event::TeammateStopped`] for the focused session.
     fn on_teammate_stopped(&mut self, team_name: &str, agent_id: &str, cause: &str) {
         // FR-017: the stop is published by the runtime's status writer,
-        // so the row follows a shutdown acked by the teammate, one
-        // forced by the lead, and a team cleanup.
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Stopped;
-            m.current_task_id = None;
-        }
+        // so the row (updated by `SessionView::apply_team_event`) follows a
+        // shutdown acked by the teammate, one forced by the lead, and a team
+        // cleanup.
         // M6-T1: record progress so the watchdog stops tracking this
         // agent (a stopped member has no session left to fail).
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         self.push_log_for(
             LogLevel::Info,
             format!("[stop] [{team_name}] Teammate {agent_id} stopped ({cause})"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
@@ -2637,25 +2543,17 @@ impl App {
         // FR-040 plumbing: the `[stop]` click (or `/team suspend`)
         // suspends the teammate on disk and publishes this event; the
         // row must follow immediately instead of waiting for the next
-        // render-time store hydration.
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Suspended;
-        }
+        // render-time store hydration (`SessionView::apply_team_event`).
         // M6-T1: record progress so the watchdog does not flag this
         // teammate as hung.
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         self.push_log_for(
             LogLevel::Info,
             format!("[pause] [{team_name}] Teammate {agent_id} suspended"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
@@ -2663,69 +2561,44 @@ impl App {
     fn on_teammate_resumed(&mut self, team_name: &str, agent_id: &str) {
         // The resume direction of the same control restores the row;
         // the runtime marks the member idle again on disk.
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Idle;
-        }
         // M6-T1: record progress so the watchdog does not flag this
         // teammate as hung.
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         self.push_log_for(
             LogLevel::Info,
             format!("[play] [{team_name}] Teammate {agent_id} resumed (idle)"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
     /// Handle [`Event::TeamTaskClaimed`] for the focused session.
     fn on_team_task_claimed(&mut self, team_name: &str, agent_id: &str, task_id: &str) {
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.status = MemberStatus::Working;
-            m.current_task_id = Some(task_id.to_string());
-        }
         // M6-T1: record progress.
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         self.push_log_for(
             LogLevel::Info,
             format!("[notice] [{team_name}] {agent_id} claimed task {task_id}"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
     /// Handle [`Event::TeamTaskCompleted`] for the focused session.
     fn on_team_task_completed(&mut self, team_name: &str, agent_id: &str, task_id: &str) {
-        if let Some(m) = self
-            .session
-            .team_members
-            .iter_mut()
-            .find(|m| m.agent_id == *agent_id)
-        {
-            m.current_task_id = None;
-        }
         // M6-T1: record progress.
-        if let Some(tm) = self.session_processor.team_manager.get() {
+        if let Some(tm) = self.session_processor.team_managers.get(team_name) {
             tm.record_progress(agent_id);
         }
         self.push_log_for(
             LogLevel::Info,
             format!("[ok] [{team_name}] {agent_id} completed task {task_id}"),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
@@ -2746,7 +2619,7 @@ impl App {
                          (owner: {owner}, {reason}): {message}"
             ),
             None,
-            self.team_member_session_id_by_agent_id(agent_id),
+            self.team_member_session_id(team_name, agent_id),
         );
     }
 
@@ -2757,22 +2630,9 @@ impl App {
         // for the removed team (best effort: it may have raced the
         // removal already).
         self.stop_swarm_autocomplete(team_name).await;
-        self.session.active_team = None;
-        self.session.team_members.clear();
-        self.session.team_message_counts.clear();
-        self.show_teams = false;
-        self.session.focused_teammate = None;
-        // FR-053: cleanup hides the Teams popup too, so a removed team
-        // cannot keep a window open showing a lead row with no team.
-        self.show_teams_window = false;
-        if self
-            .session
-            .swarm_state
-            .as_ref()
-            .is_some_and(|s| s.team_name == team_name)
-        {
-            self.session.swarm_state = None;
-        }
+        // The view state (active team, members, counters, focused
+        // teammate, swarm) was cleared by `SessionView::apply_team_event`.
+        self.drop_team_from_pane(team_name);
         self.push_log_no_agent(
             LogLevel::Info,
             format!("[clr] Team '{team_name}' cleaned up"),
@@ -3210,10 +3070,10 @@ impl App {
     /// member session id when known, NFR-008); a failure logs a warn-level
     /// trace naming the teammate id and error, and the row keeps its current
     /// status until the next event (spec error table).
-    pub fn dispatch_suspend_teammate(&mut self, agent_id: &str) {
-        self.log_teammate_action(agent_id, "[pause]", "suspend");
+    pub fn dispatch_suspend_teammate(&mut self, team_name: &str, agent_id: &str) {
+        self.log_teammate_action(team_name, agent_id, "[pause]", "suspend");
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let tm = self.session_processor.team_manager.get();
+            let tm = self.session_processor.team_managers.get(team_name);
             let id = agent_id.to_string();
             handle.spawn(async move {
                 if let Some(tm) = tm {
@@ -3228,10 +3088,10 @@ impl App {
     /// Dispatch a graceful shutdown request for team member `agent_id` on the
     /// async runtime (FR-040, FR-068). Attribution and failure logging match
     /// [`App::dispatch_suspend_teammate`].
-    pub fn dispatch_shutdown_teammate(&mut self, agent_id: &str) {
-        self.log_teammate_action(agent_id, "[stop]", "shutdown");
+    pub fn dispatch_shutdown_teammate(&mut self, team_name: &str, agent_id: &str) {
+        self.log_teammate_action(team_name, agent_id, "[stop]", "shutdown");
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let tm = self.session_processor.team_manager.get();
+            let tm = self.session_processor.team_managers.get(team_name);
             let id = agent_id.to_string();
             handle.spawn(async move {
                 if let Some(tm) = tm {
@@ -3249,10 +3109,10 @@ impl App {
     /// dialog - it restores a subject the user already suspended - so this
     /// is the only entry the control needs for that direction. Attribution
     /// and failure logging match [`App::dispatch_suspend_teammate`].
-    pub fn dispatch_resume_teammate(&mut self, agent_id: &str) {
-        self.log_teammate_action(agent_id, "[play]", "resume");
+    pub fn dispatch_resume_teammate(&mut self, team_name: &str, agent_id: &str) {
+        self.log_teammate_action(team_name, agent_id, "[play]", "resume");
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let tm = self.session_processor.team_manager.get();
+            let tm = self.session_processor.team_managers.get(team_name);
             let id = agent_id.to_string();
             handle.spawn(async move {
                 if let Some(tm) = tm {
@@ -3270,14 +3130,9 @@ impl App {
     /// panel and the teammate's output view agree on ownership. The team name
     /// prefixes the message in the same `[<team>]` shape the lifecycle events
     /// use.
-    fn log_teammate_action(&mut self, agent_id: &str, icon: &str, verb: &str) {
-        let session_id = self.team_member_session_id_by_agent_id(agent_id);
-        let team_prefix = self
-            .session
-            .active_team
-            .as_ref()
-            .map(|t| format!("[{}] ", t.name))
-            .unwrap_or_default();
+    fn log_teammate_action(&mut self, team_name: &str, agent_id: &str, icon: &str, verb: &str) {
+        let session_id = self.team_member_session_id(team_name, agent_id);
+        let team_prefix = format!("[{team_name}] ");
         self.push_log_for(
             LogLevel::Info,
             format!("{icon} {team_prefix}Teammate {agent_id} {verb} requested"),
@@ -3400,24 +3255,29 @@ impl App {
         });
     }
 
-    /// Cycle teammate focus forward or backward (FR-046): `forward` moves to
-    /// the next member (from no focus to the first), backward to the previous
-    /// (from no focus to the last). Each landed focus opens that teammate's
-    /// output view; moving past either end clears focus together with the
-    /// output view. Exposed `pub` for the consolidated test target; not part
-    /// of the crate's public API surface.
+    /// Cycle teammate focus forward or backward (FR-046) across every team in
+    /// pane order: `forward` moves to the next teammate (from no focus to the
+    /// first), backward to the previous (from no focus to the last). Each
+    /// landed focus opens that teammate's output view; moving past either end
+    /// clears focus together with the output view. Exposed `pub` for the
+    /// consolidated test target; not part of the crate's public API surface.
     #[doc(hidden)]
     pub fn cycle_focused_teammate(&mut self, forward: bool) {
-        if self.session.team_members.is_empty() {
+        let ids: Vec<(String, String)> = self
+            .team_sections()
+            .into_iter()
+            .flat_map(|section| {
+                let team = section.name;
+                section
+                    .members
+                    .into_iter()
+                    .map(move |m| (team.clone(), m.agent_id))
+            })
+            .collect();
+        if ids.is_empty() {
             self.session.focused_teammate = None;
             return;
         }
-        let ids: Vec<String> = self
-            .session
-            .team_members
-            .iter()
-            .map(|m| m.agent_id.clone())
-            .collect();
         let current_idx = self
             .session
             .focused_teammate
@@ -3443,8 +3303,8 @@ impl App {
         };
         match next {
             Some(idx) => {
-                let agent_id = ids[idx].clone();
-                self.focus_teammate_by_id(&agent_id);
+                let (team_name, agent_id) = ids[idx].clone();
+                self.focus_teammate_in(&team_name, &agent_id);
             }
             None => {
                 self.session.focused_teammate = None;
@@ -3454,33 +3314,125 @@ impl App {
         }
     }
 
-    /// Set teammate focus by agent id, opening the newly focused teammate's
-    /// output view (FR-046). Exposed `pub` for the consolidated test target;
-    /// not part of the crate's public API surface.
+    /// Set teammate focus by agent id in the active team, opening the newly
+    /// focused teammate's output view (FR-046). Exposed `pub` for the
+    /// consolidated test target; not part of the crate's public API surface.
     #[doc(hidden)]
     pub fn focus_teammate_by_id(&mut self, agent_id: &str) {
-        let member = self
+        let team_name = self
             .session
-            .team_members
-            .iter()
-            .find(|m| m.agent_id == agent_id)
-            .cloned();
-        if let Some(m) = member {
-            self.session.focused_teammate = Some(m.agent_id.clone());
-            let team_name = self
-                .session
-                .active_team
-                .as_ref()
-                .map(|t| t.name.clone())
-                .unwrap_or_default();
-            self.open_output_view_team_member(
-                team_name,
-                m.agent_id.clone(),
-                m.name.clone(),
-                m.session_id.clone(),
-            );
-            self.status = format!("team: focused -> {}", m.name);
+            .active_team
+            .as_ref()
+            .map(|t| t.name.clone())
+            .unwrap_or_default();
+        self.focus_teammate_in(&team_name, agent_id);
+    }
+
+    /// Set teammate focus to `agent_id` of team `team_name`, opening that
+    /// teammate's output view. An unknown teammate leaves focus unchanged.
+    pub fn focus_teammate_in(&mut self, team_name: &str, agent_id: &str) {
+        let Some(m) = self.team_member(team_name, agent_id) else {
+            return;
+        };
+        self.session.focused_teammate = Some((team_name.to_string(), m.agent_id.clone()));
+        self.open_output_view_team_member(
+            team_name.to_string(),
+            m.agent_id.clone(),
+            m.name.clone(),
+            m.session_id.clone(),
+        );
+        self.status = format!("team: focused -> {}", m.name);
+    }
+
+    /// Take `team_name` out of the Teams pane after it was closed, deleted or
+    /// cleaned up: its manager is unbound, any other stale manager is pruned,
+    /// and the pane stays shown while another team is still listed. With none
+    /// left the Teams popup hides too (FR-053), so a removed team cannot keep
+    /// a window open showing a lead row with no team.
+    pub(crate) fn drop_team_from_pane(&mut self, team_name: &str) {
+        let managers = &self.session_processor.team_managers;
+        if let Some(manager) = managers.get(team_name) {
+            managers.remove_if(&manager);
         }
+        managers.prune_stale();
+        let teams_remain = self.session.active_team.is_some() || !managers.all().is_empty();
+        self.show_teams = teams_remain;
+        if !teams_remain {
+            self.show_teams_window = false;
+        }
+    }
+
+    /// Whether `team_name` is the team the session's member list mirrors, or
+    /// no team is active yet (so the first team observed becomes the view).
+    pub(crate) fn is_active_or_unset_team(&self, team_name: &str) -> bool {
+        self.session
+            .active_team
+            .as_ref()
+            .is_none_or(|t| t.name == team_name)
+    }
+
+    /// Every team the Teams pane lists, sorted by name: one section per
+    /// bound `TeamManager`, plus the session's active team when it has none
+    /// yet. The active team's members come from the session's live list,
+    /// every other team's from its store.
+    pub fn team_sections(&self) -> Vec<TeamSection> {
+        let active = self.session.active_team.as_ref().map(|t| t.name.as_str());
+        let mut sections: Vec<TeamSection> = self
+            .session_processor
+            .team_managers
+            .all()
+            .into_iter()
+            .map(|manager| {
+                let members = if active == Some(manager.team_name.as_str()) {
+                    self.session.team_members.clone()
+                } else {
+                    TeamStore::load(&manager.team_dir)
+                        .map(|store| store.config.members)
+                        .unwrap_or_default()
+                };
+                TeamSection {
+                    name: manager.team_name.clone(),
+                    lead_session_id: manager.lead_session_id.clone(),
+                    members,
+                }
+            })
+            .collect();
+        if let Some(team) = self.session.active_team.as_ref()
+            && !sections.iter().any(|s| s.name == team.name)
+        {
+            sections.push(TeamSection {
+                name: team.name.clone(),
+                lead_session_id: self.session.session_id.clone().unwrap_or_default(),
+                members: self.session.team_members.clone(),
+            });
+            sections.sort_by(|a, b| a.name.cmp(&b.name));
+        } else if self.session.active_team.is_none() && !self.session.team_members.is_empty() {
+            // Members hydrated before any team became active still show,
+            // under a nameless section (the pane titles it `team`).
+            sections.insert(
+                0,
+                TeamSection {
+                    name: String::new(),
+                    lead_session_id: self.session.session_id.clone().unwrap_or_default(),
+                    members: self.session.team_members.clone(),
+                },
+            );
+        }
+        sections
+    }
+
+    /// The member `agent_id` of team `team_name`, if the team lists it.
+    pub fn team_member(&self, team_name: &str, agent_id: &str) -> Option<TeamMember> {
+        self.team_sections()
+            .into_iter()
+            .find(|s| s.name == team_name)
+            .and_then(|s| s.members.into_iter().find(|m| m.agent_id == agent_id))
+    }
+
+    /// The session id of member `agent_id` of team `team_name`, if known.
+    pub fn team_member_session_id(&self, team_name: &str, agent_id: &str) -> Option<String> {
+        self.team_member(team_name, agent_id)
+            .and_then(|m| m.session_id)
     }
 
     /// Move the teammate focus to the member named `name`.

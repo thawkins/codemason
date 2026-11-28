@@ -1,5 +1,5 @@
 //! `App::new` and provider-setup helpers for the TUI and GUI.
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Instant;
@@ -314,6 +314,8 @@ impl App {
             active_tasks: Vec::new(),
             subagent_parents: HashMap::new(),
             finished_subagent_views: Vec::new(),
+            leader_resumes: HashSet::new(),
+            leader_resume_outcomes: Default::default(),
             agents_history: VecDeque::new(),
             agents_history_cap: app_config.effective_agents_completed_history(),
             tui_event_lag: Arc::new(std::sync::atomic::AtomicU64::new(0)),

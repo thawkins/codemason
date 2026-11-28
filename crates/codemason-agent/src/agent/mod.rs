@@ -507,6 +507,20 @@ impl ModelRef {
     }
 }
 
+/// Functional role of an agent, orthogonal to its [`AgentMode`].
+///
+/// A `TeamLeader` is the only role allowed to create and run agent teams
+/// (`team_create`); it is also exempt from the background sub-agent timeout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentRole {
+    /// An ordinary agent.
+    #[default]
+    Standard,
+    /// An agent that creates, runs and summarises one agent team.
+    TeamLeader,
+}
+
 /// Complete definition of an agent, including its model, prompt, and permissions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInfo {
@@ -578,6 +592,9 @@ pub struct AgentInfo {
     /// budget without changing the global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_timeout_secs: Option<u64>,
+    /// Functional role of this agent (see [`AgentRole`]).
+    #[serde(default)]
+    pub role: AgentRole,
 }
 
 impl AgentInfo {
@@ -612,6 +629,7 @@ impl AgentInfo {
             options: std::sync::Arc::new(HashMap::new()),
             model_pinned: false,
             stall_timeout_secs: None,
+            role: AgentRole::Standard,
         }
     }
 }
@@ -714,6 +732,16 @@ pub fn create_builtin_agents() -> Vec<AgentInfo> {
              Provide concise, accurate answers about code structure, patterns, and logic. \
              Do NOT modify any files.",
         ),
+        AgentInfo {
+            role: AgentRole::TeamLeader,
+            ..builtin_agent(
+                "team-leader",
+                "Creates, runs and summarises one agent team",
+                AgentMode::Subagent,
+                team_leader_permissions(),
+                TEAM_LEADER_PROMPT,
+            )
+        },
         AgentInfo {
             hidden: true,
             temperature: Some(0.3),
@@ -979,6 +1007,19 @@ pub fn create_builtin_agents() -> Vec<AgentInfo> {
     ]
 }
 
+/// System prompt of the built-in `team-leader` agent.
+const TEAM_LEADER_PROMPT: &str = "You are a team leader. You run exactly one agent team \
+to complete the task you were given, and you never do the team's work yourself.\n\n\
+1. Pick the team blueprint that best fits the task.\n\
+2. Call `team_create` with that blueprint and a full `context`: the task, the \
+directories and files to target, and where output must be written.\n\
+3. Call `team_wait` to block until every teammate is idle.\n\
+4. Read `team_status` and the teammates' outputs.\n\
+5. Re-assign work or shut down teammates that are stuck or incomplete, then wait again.\n\
+6. When you have what your summary needs, call `team_cleanup`.\n\n\
+Your final message is a concise summary: the results, the files written, and any \
+unresolved items. You cannot edit files, run shell commands or spawn other agents.";
+
 /// One built-in agent with the defaults every built-in shares: visible, no
 /// temperature or thinking override, 1024 steps, no skills, memory, options,
 /// tool allow-list or stall override. Agents that differ set those fields with
@@ -1008,6 +1049,7 @@ fn builtin_agent(
         model_pinned: false,
         allowed_tools: None,
         stall_timeout_secs: None,
+        role: AgentRole::Standard,
     }
 }
 
@@ -1108,6 +1150,28 @@ pub fn default_permissions() -> PermissionRuleset {
             PermissionAction::Allow,
         ),
     ]
+}
+
+/// Permissions for the built-in `team-leader` agent (and custom agents with
+/// `role: team-leader` that declare none): read-only file tools, every `team:*`
+/// category, no edit, no bash, and no `new_agent`.
+///
+/// `team_wait` shares the `agent:spawn` category with `new_agent`, so the
+/// category is allowed and `new_agent` is denied by its resource name.
+#[must_use]
+pub fn team_leader_permissions() -> PermissionRuleset {
+    let mut rules = read_only_permissions();
+    for category in ["team:manage", "team:communicate", "team:tasks", "team:read"] {
+        rules.push(rule(
+            Permission::Custom(category.to_string()),
+            "*",
+            PermissionAction::Allow,
+        ));
+    }
+    let spawn = || Permission::Custom("agent:spawn".to_string());
+    rules.push(rule(spawn(), "*", PermissionAction::Allow));
+    rules.push(rule(spawn(), "tool:new_agent", PermissionAction::Deny));
+    rules
 }
 
 fn read_only_permissions() -> PermissionRuleset {

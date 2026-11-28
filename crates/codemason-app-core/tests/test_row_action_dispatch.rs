@@ -93,6 +93,7 @@ async fn stale_teammate_answer_dispatches_nothing() {
     let mut app = app_with_teams_window(MemberStatus::Working);
     // Arm the dialog directly (the trigger points are T-009's concern).
     app.open_row_action(codemason_app_core::app::RowAction::SuspendTeammate {
+        team_name: String::new(),
         agent_id: "tm-001".to_string(),
         name: "reviewer".to_string(),
     });

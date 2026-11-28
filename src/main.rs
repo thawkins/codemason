@@ -1828,7 +1828,7 @@ fn build_session_processor(
         permission_checker,
         event_bus: event_bus.clone(),
         agent_manager: std::sync::OnceLock::new(),
-        team_manager: Default::default(),
+        team_managers: Default::default(),
         team_context_cache: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),

@@ -83,7 +83,7 @@ pub(crate) struct PendingToolCall {
 
 /// Resolve team identity for the given `session_id`, if that session currently
 /// participates in a team as lead or teammate.
-pub(crate) fn resolve_team_context_for_session(
+pub fn resolve_team_context_for_session(
     session_id: &str,
     working_dir: &std::path::Path,
 ) -> Option<Arc<crate::tool::TeamContext>> {

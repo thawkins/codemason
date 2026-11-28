@@ -157,7 +157,10 @@ async fn focus_transitions_report_to_the_status_line() {
     app.cycle_focused_teammate(true);
 
     assert_eq!(
-        app.session.focused_teammate.as_deref(),
+        app.session
+            .focused_teammate
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some("tm-001"),
         "the first cycle focuses the only member (FR-046)"
     );

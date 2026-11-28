@@ -521,6 +521,8 @@ mod test_sessions_sidebar;
 mod test_setup_dialog_chrome;
 #[path = "test_shortcuts_catalog.rs"]
 mod test_shortcuts_catalog;
+#[path = "test_sidebar_team_rows.rs"]
+mod test_sidebar_team_rows;
 #[path = "test_skill_command.rs"]
 mod test_skill_command;
 #[path = "test_slash_advertised_forms.rs"]
@@ -561,6 +563,8 @@ mod test_slash_spec;
 mod test_slash_spec_deep;
 #[path = "test_slash_spec_deep2.rs"]
 mod test_slash_spec_deep2;
+#[path = "test_slash_team_create_leader.rs"]
+mod test_slash_team_create_leader;
 #[path = "test_slash_teams_deep.rs"]
 mod test_slash_teams_deep;
 #[path = "test_slash_tools.rs"]
@@ -613,6 +617,8 @@ mod test_syntax_highlight;
 mod test_tasks_panel;
 #[path = "test_teams_message_counts.rs"]
 mod test_teams_message_counts;
+#[path = "test_teams_multi.rs"]
+mod test_teams_multi;
 #[path = "test_teams_tui.rs"]
 mod test_teams_tui;
 #[path = "test_teams_window_table.rs"]

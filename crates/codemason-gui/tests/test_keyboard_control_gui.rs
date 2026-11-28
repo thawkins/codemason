@@ -161,7 +161,7 @@ fn bind_team_manager(app: &mut App, status: MemberStatus) -> PathBuf {
         app.session_processor.clone(),
         app.event_bus.clone(),
     ));
-    let _ = app.session_processor.team_manager.set(manager);
+    let _ = app.session_processor.team_managers.bind(manager);
     store.dir
 }
 
@@ -491,7 +491,7 @@ async fn space_on_a_cursor_teammate_arms_the_suspend_dialog() {
 
     assert!(app.row_action_confirm_open(), "Space confirms the suspend");
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(codemason_app_core::app::RowAction::SuspendTeammate { agent_id, name }) => {
+        Some(codemason_app_core::app::RowAction::SuspendTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }
@@ -564,7 +564,7 @@ async fn del_on_a_cursor_teammate_shuts_it_down_through_the_manager() {
 
     assert!(app.row_action_confirm_open(), "Del confirms the shutdown");
     match app.row_action_confirm.as_ref().map(|p| &p.action) {
-        Some(codemason_app_core::app::RowAction::ShutdownTeammate { agent_id, name }) => {
+        Some(codemason_app_core::app::RowAction::ShutdownTeammate { agent_id, name, .. }) => {
             assert_eq!(agent_id, "tm-001");
             assert_eq!(name, "reviewer");
         }

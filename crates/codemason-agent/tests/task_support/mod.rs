@@ -28,7 +28,7 @@ pub fn test_processor() -> Arc<SessionProcessor> {
         permission_checker: Arc::new(parking_lot::RwLock::new(PermissionChecker::new(vec![]))),
         event_bus,
         agent_manager: std::sync::OnceLock::new(),
-        team_manager: Default::default(),
+        team_managers: Default::default(),
         mcp_client: std::sync::OnceLock::new(),
         connector_session: tokio::sync::RwLock::new(None),
         connector_statuses: tokio::sync::RwLock::new(None),
@@ -102,6 +102,9 @@ pub fn entry_full(
 }
 
 /// A new `AgentManager` with the given background cap.
+// Shared helper mounted by many test files; a file that only needs
+// `test_processor` would otherwise warn.
+#[allow(dead_code)]
 pub fn manager(max_background: usize) -> Arc<AgentManager> {
     Arc::new(AgentManager::new(
         Arc::new(EventBus::new(16)),

@@ -78,6 +78,9 @@ mod test_agent_skill_hooks_extra;
 #[path = "test_agent_thinking_defaults.rs"]
 mod test_agent_thinking_defaults;
 
+#[path = "test_agent_team_leader.rs"]
+mod test_agent_team_leader;
+
 #[path = "test_agentskills_discovery.rs"]
 mod test_agentskills_discovery;
 
@@ -430,6 +433,8 @@ mod test_read_only_permission_categories;
 
 #[path = "test_plugin_bridge.rs"]
 mod test_plugin_bridge;
+#[path = "test_readable_names.rs"]
+mod test_readable_names;
 
 #[path = "test_plugin_hooks.rs"]
 mod test_plugin_hooks;
@@ -626,6 +631,8 @@ mod test_team_manager_runtime;
 #[path = "test_team_manager_spawn.rs"]
 mod test_team_manager_spawn;
 
+#[path = "test_resume_detached_race.rs"]
+mod test_resume_detached_race;
 #[path = "test_team_caller_roles.rs"]
 mod test_team_caller_roles;
 #[path = "test_team_manager_binding.rs"]
@@ -634,10 +641,14 @@ mod test_team_manager_binding;
 mod test_team_name_validation;
 #[path = "test_team_poll_loop_keeps_unread.rs"]
 mod test_team_poll_loop_keeps_unread;
+#[path = "test_team_registry.rs"]
+mod test_team_registry;
 #[path = "test_team_store_atomic_update.rs"]
 mod test_team_store_atomic_update;
 #[path = "test_team_teammate_wake.rs"]
 mod test_team_teammate_wake;
+#[path = "test_team_user_turns.rs"]
+mod test_team_user_turns;
 
 #[path = "test_team_store_extra.rs"]
 mod test_team_store_extra;
@@ -682,6 +693,10 @@ mod test_team_task_result;
 #[path = "test_team_task_store.rs"]
 mod test_team_task_store;
 
+#[path = "test_team_leader_launch.rs"]
+mod test_team_leader_launch;
+#[path = "test_team_leader_runtime.rs"]
+mod test_team_leader_runtime;
 #[path = "test_team_wait_outcomes.rs"]
 mod test_team_wait_outcomes;
 
@@ -866,3 +881,5 @@ mod test_session_worktree;
 /// Redirects the user-profile variables before any test runs.
 #[path = "../../../tests/common/profile_isolation.rs"]
 mod profile_isolation;
+#[path = "test_team_create_leader_gate.rs"]
+mod test_team_create_leader_gate;

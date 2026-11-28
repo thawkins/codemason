@@ -25,6 +25,68 @@ use super::helpers::short_session_id;
 use super::session_view::{Attention, SessionView};
 use super::state::App;
 
+/// Agent a leader whose task was never seen (after a restart) resumes as.
+const DEFAULT_LEADER_AGENT: &str = "team-leader";
+
+/// A team agent a prompt can be typed to.
+enum TeamAgent {
+    /// A team leader, running as `agent_name`.
+    Leader {
+        /// The leader's agent.
+        agent_name: String,
+    },
+    /// A teammate of `team_name`.
+    Teammate {
+        /// The teammate's team.
+        team_name: String,
+        /// The teammate's agent id within the team.
+        agent_id: String,
+        /// The teammate's name.
+        name: String,
+    },
+    /// A teammate session whose team is no longer listed (cleaned up).
+    EndedTeammate,
+}
+
+/// How a detached resume of a finished team leader ended.
+#[derive(Debug)]
+pub(super) struct LeaderResumeOutcome {
+    /// The leader's session.
+    session_id: String,
+    /// The agent it was resumed as.
+    agent_name: String,
+    /// The prompt the turn was started with.
+    text: String,
+    /// `Err` with the reason when the turn could not be started.
+    result: Result<(), String>,
+}
+
+/// Pushes its outcome into the shared list when dropped, so a resume task
+/// that panics or is cancelled still releases its session.
+struct ResumeGuard {
+    /// Where outcomes are drained from by `App::poll_leader_resumes`.
+    outcomes: std::sync::Arc<std::sync::Mutex<Vec<LeaderResumeOutcome>>>,
+    /// The outcome so far; an `Err` until the launch returns.
+    outcome: Option<LeaderResumeOutcome>,
+}
+
+impl Drop for ResumeGuard {
+    fn drop(&mut self) {
+        if let Some(outcome) = self.outcome.take() {
+            self.outcomes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(outcome);
+        }
+    }
+}
+
+/// Whether `error` is the registry's "no running task in that session".
+fn is_task_not_found(error: &anyhow::Error) -> bool {
+    codemason_agent::tool::param_schema::reason_in(&error.to_string())
+        == Some(codemason_agent::tool::new_agent::REASON_TASK_NOT_FOUND)
+}
+
 /// Settings key holding the open session ids, focused first, then the
 /// background sessions most recently focused first (FR-13).
 const OPEN_SESSIONS_KEY: &str = "tui.sessions.open";
@@ -142,15 +204,205 @@ impl App {
             return false;
         };
         if let Err(e) = manager.send_to_session(&sid, text) {
-            self.status = format!("[warn] {e}");
+            // The task finished between the check above and the send: say
+            // so instead of showing the registry's reason-coded error.
+            self.status = if is_task_not_found(&e) {
+                format!("[warn] {agent_name} has finished; the message was not sent")
+            } else {
+                format!("[warn] {e}")
+            };
             return true;
         }
-        self.session.messages.push(Message::user_text(&sid, text));
+        self.accept_agent_prompt(&sid, text, &agent_name);
+        true
+    }
+
+    /// Shows `text` as sent to agent `name` in the focused session `sid`:
+    /// the transcript gets it, the input is cleared and the status says the
+    /// agent reads it at its next step.
+    fn accept_agent_prompt(&mut self, sid: &str, text: &str, name: &str) {
+        self.session.messages.push(Message::user_text(sid, text));
         self.add_to_history(text.to_string());
         self.session.input.clear();
         self.session.input_cursor = 0;
-        self.status = format!("sent to {agent_name}; it reads it at its next step");
+        self.status = format!("sent to {name}; it reads it at its next step");
+    }
+
+    /// The team agent whose session is `session_id`, from the Sessions
+    /// pane's team rows; a teammate session no listed team has (its team
+    /// has ended) is [`TeamAgent::EndedTeammate`].
+    fn team_agent_of(&self, session_id: &str) -> Option<TeamAgent> {
+        let listed = self.listed_team_agent(session_id);
+        if listed.is_some() {
+            return listed;
+        }
+        matches!(
+            self.storage.session_kind(session_id),
+            Ok(Some(codemason_storage::SessionKind::Teammate))
+        )
+        .then_some(TeamAgent::EndedTeammate)
+    }
+
+    /// The leader or teammate of a listed team whose session is
+    /// `session_id`.
+    fn listed_team_agent(&self, session_id: &str) -> Option<TeamAgent> {
+        self.sidebar.leaders.iter().find_map(|leader| {
+            if leader.session_id == session_id {
+                return Some(TeamAgent::Leader {
+                    agent_name: leader
+                        .agent_name
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_LEADER_AGENT.to_string()),
+                });
+            }
+            leader
+                .teammates
+                .iter()
+                .find(|mate| mate.session_id.as_deref() == Some(session_id))
+                .map(|mate| TeamAgent::Teammate {
+                    team_name: leader.team_name.clone(),
+                    agent_id: mate.agent_id.clone(),
+                    name: mate.name.clone(),
+                })
+        })
+    }
+
+    /// Whether `session_id` is a team leader's or teammate's session, so a
+    /// prompt typed there goes to that agent and not to a new turn.
+    pub(crate) fn is_team_agent_session(&self, session_id: &str) -> bool {
+        self.team_agent_of(session_id).is_some()
+    }
+
+    /// Whether a resume turn for the leader session `session_id` is still
+    /// starting (a further prompt to it is held until it has).
+    #[must_use]
+    pub fn leader_resume_in_flight(&self, session_id: &str) -> bool {
+        self.leader_resumes.contains(session_id)
+    }
+
+    /// Sends `text` as a direct user turn to the team agent focused in
+    /// `self.session` (team-leader-agent spec, section 6): a teammate gets
+    /// it through its team's manager, a leader through its running task or,
+    /// once finished, one more detached turn in its own session. A refusal
+    /// is shown as an error and the prompt stays in the input.
+    ///
+    /// # Returns
+    ///
+    /// `false` when the focused session is not a team agent's, so the
+    /// caller tries the other routes.
+    pub(crate) fn send_to_focused_team_agent(&mut self, text: &str) -> bool {
+        let Some(sid) = self.session.session_id.clone() else {
+            return false;
+        };
+        let Some(agent) = self.team_agent_of(&sid) else {
+            return false;
+        };
+        match agent {
+            TeamAgent::Teammate {
+                team_name,
+                agent_id,
+                name,
+            } => {
+                let sent = match self.session_processor.team_managers.get(&team_name) {
+                    Some(manager) => manager.send_user_turn(&agent_id, text),
+                    None => Err(anyhow::anyhow!(
+                        "team {team_name} is not running here; teammate {name} cannot be reached"
+                    )),
+                };
+                match sent {
+                    Ok(()) => self.accept_agent_prompt(&sid, text, &name),
+                    Err(e) => self.status = format!("[error] {e}"),
+                }
+            }
+            TeamAgent::Leader { agent_name } => self.send_to_leader(&sid, &agent_name, text),
+            TeamAgent::EndedTeammate => {
+                self.status = "[error] this teammate's team has ended".to_string();
+            }
+        }
         true
+    }
+
+    /// Sends `text` to the leader in session `sid`: queued on its running
+    /// task, or, when none runs, as one detached resume turn. Only one
+    /// resume per session starts at a time.
+    fn send_to_leader(&mut self, sid: &str, agent_name: &str, text: &str) {
+        if self.leader_resumes.contains(sid) {
+            self.status = format!("[warn] {agent_name} is still starting; send again in a moment");
+            return;
+        }
+        let Some(manager) = self.session_processor.agent_manager.get().cloned() else {
+            self.status = "[error] sub-agents are not available in this session".to_string();
+            return;
+        };
+        match manager.send_to_session(sid, text) {
+            Ok(()) => self.accept_agent_prompt(sid, text, agent_name),
+            Err(e) if is_task_not_found(&e) => {
+                self.leader_resumes.insert(sid.to_string());
+                self.status = format!("starting {agent_name} with your message");
+                let outcomes = std::sync::Arc::clone(&self.leader_resume_outcomes);
+                let (session_id, agent_name, text) =
+                    (sid.to_string(), agent_name.to_string(), text.to_string());
+                tokio::spawn(async move {
+                    // Reports an outcome on every exit, a panic included,
+                    // so the session is never left held.
+                    let mut guard = ResumeGuard {
+                        outcomes,
+                        outcome: Some(LeaderResumeOutcome {
+                            session_id,
+                            agent_name,
+                            text,
+                            result: Err("the turn stopped before it started".to_string()),
+                        }),
+                    };
+                    let Some(pending) = guard.outcome.as_mut() else {
+                        return;
+                    };
+                    pending.result = manager
+                        .resume_detached(&pending.session_id, &pending.agent_name, &pending.text)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                });
+            }
+            Err(e) => self.status = format!("[error] {e}"),
+        }
+    }
+
+    /// Applies the outcomes of finished leader resume launches: a started
+    /// turn shows the prompt in the leader's transcript and clears it from
+    /// the input; a refusal is shown as an error and leaves the input as is.
+    pub(crate) fn poll_leader_resumes(&mut self) {
+        let outcomes = std::mem::take(
+            &mut *self
+                .leader_resume_outcomes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for outcome in outcomes {
+            self.leader_resumes.remove(&outcome.session_id);
+            match outcome.result {
+                Ok(()) => {
+                    let sid = outcome.session_id.as_str();
+                    self.add_to_history(outcome.text.clone());
+                    let message = Message::user_text(sid, &outcome.text);
+                    if self.session.session_id.as_deref() == Some(sid) {
+                        self.session.messages.push(message);
+                        if self.session.input == outcome.text {
+                            self.session.input.clear();
+                            self.session.input_cursor = 0;
+                        }
+                    } else if let Some(view) = self
+                        .background
+                        .position(sid)
+                        .and_then(|index| self.background.view_mut(index))
+                    {
+                        view.messages.push(message);
+                    }
+                    self.status = format!("sent to {}", outcome.agent_name);
+                }
+                Err(e) => self.status = format!("[error] {e}"),
+            }
+        }
     }
 
     /// Swaps the focused view with the background view at `index`.
@@ -208,6 +460,26 @@ impl App {
             self.handle_autofix_trigger(session_id, kind, summary, prompt);
             return;
         }
+        // Team and sub-agent lifecycle changes the Sessions pane's team rows.
+        if matches!(
+            event,
+            Event::SubagentStart { .. }
+                | Event::SubagentComplete { .. }
+                | Event::SubagentKilled { .. }
+                | Event::SubagentCancelled { .. }
+                | Event::TeammateSpawned { .. }
+                | Event::TeammateStopped { .. }
+                | Event::TeammateIdle { .. }
+                | Event::TeammateFailed { .. }
+                | Event::TeammateSuspended { .. }
+                | Event::TeammateResumed { .. }
+                | Event::TeammateStatusChanged { .. }
+                | Event::TeamTaskClaimed { .. }
+                | Event::TeamAdopted { .. }
+                | Event::TeamCleanedUp { .. }
+        ) {
+            self.sidebar.teams_dirty = true;
+        }
         // Session activity changes the sidebar's titles and ordering (NFR-03).
         if matches!(
             event,
@@ -237,9 +509,24 @@ impl App {
         let owner = event
             .session_id()
             .and_then(|sid| self.background_owner(sid));
+        // A team event reaches every view that tracks the team: the full
+        // handler runs in one of them, the others mirror its state change
+        // (see `app/team_event_routing.rs`).
+        let route =
+            Self::team_event_ids(&event).map(|(sid, team)| self.team_event_route(owner, sid, team));
+        let (owner, mirror) = match route {
+            Some(route) if !route.mirrors.is_empty() => {
+                (route.owner, Some((route.mirrors, event.clone())))
+            }
+            Some(route) => (route.owner, None),
+            None => (owner, None),
+        };
         match owner {
             Some(index) => self.handle_background_event(index, event).await,
             None => self.handle_focused_event(event).await,
+        }
+        if let Some((mirrors, event)) = mirror {
+            self.mirror_team_event(&mirrors, &event);
         }
         if let Some(session_id) = finished_reply {
             self.auto_title(&session_id);
@@ -1002,7 +1289,9 @@ impl App {
 
     /// Archives session `id` from the sidebar (FR-08). The focused session
     /// is closed as `/session archive` does; an open background session is
-    /// dropped from the background. A running session is refused.
+    /// dropped from the background. A running session is refused. The
+    /// archived session's running team leaders are cancelled, as
+    /// `/team close` cancels a team's leader.
     ///
     /// # Errors
     ///
@@ -1025,12 +1314,58 @@ impl App {
         self.storage
             .archive_session(id)
             .map_err(|e| e.to_string())?;
+        self.cancel_running_leaders_of(id);
         self.forget_session_step_state(id);
         self.persist_open_sessions();
         self.release_unused_projects();
         self.sidebar.dirty = true;
         self.status = format!("archived session {}", short_session_id(id));
         Ok(())
+    }
+
+    /// Cancels every running team-leader task that session `parent_id`
+    /// spawned, so archiving a primary never leaves its leaders (and their
+    /// teams) running. A task is a leader when its agent resolves to the
+    /// team-leader role or its session leads a bound team. The cancels run
+    /// in the background; each is the `/team close` leader cancel.
+    fn cancel_running_leaders_of(&self, parent_id: &str) {
+        let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
+            return;
+        };
+        let processor = std::sync::Arc::clone(&self.session_processor);
+        let working_dir = self.cwd_path.clone();
+        let parent_id = parent_id.to_string();
+        tokio::spawn(async move {
+            let config = processor.load_config_cached();
+            let leaders: Vec<String> = agent_manager
+                .tasks_snapshot()
+                .await
+                .into_iter()
+                .filter(|task| task.parent_session_id == parent_id && !task.status.is_terminal())
+                .filter(|task| {
+                    codemason_agent::agent::resolve_agent_with_customs(
+                        &task.agent_name,
+                        &config,
+                        &working_dir,
+                    )
+                    .is_ok_and(|agent| agent.role == codemason_agent::agent::AgentRole::TeamLeader)
+                        || processor
+                            .team_managers
+                            .all()
+                            .iter()
+                            .any(|team| team.lead_session_id == task.child_session_id)
+                })
+                .map(|task| task.child_session_id)
+                .collect();
+            for leader in leaders {
+                if codemason_agent::team::leader::cancel_leader_for_session(&agent_manager, &leader)
+                    .await
+                {
+                    tracing::info!(parent = %parent_id, leader = %leader,
+                        "archived session: its team leader was cancelled");
+                }
+            }
+        });
     }
 
     /// Archives every session in `ids` (the project and selection menus).
@@ -1600,6 +1935,7 @@ impl App {
         self.storage
             .archive_session(&id)
             .map_err(|e| e.to_string())?;
+        self.cancel_running_leaders_of(&id);
         self.close_focused_session()?;
         self.status = format!("archived session {}", short_session_id(&id));
         Ok(())

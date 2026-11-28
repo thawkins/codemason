@@ -183,27 +183,21 @@ fn test_teams_row_maps_stay_index_aligned_with_the_painted_rows() {
 
     render_teams_effects(&mut app, 170, 44);
 
-    // Painted rows: header, lead (its own sentinel), three teammates (a
+    // Painted rows: title, header, lead (its own sentinel), three teammates (a
     // terminal member still paints and still carries its key, FR-071's
     // re-expression).
     assert_eq!(
         app.teams_row_agent_ids,
-        vec![
-            String::new(),
-            "lead".to_string(),
-            "tm-001".to_string(),
-            "tm-002".to_string(),
-            "tm-003".to_string(),
-        ],
+        ["", "", "lead", "tm-001", "tm-002", "tm-003",]
+            .map(|key| (TEAM_NAME.to_string(), key.to_string()))
+            .to_vec(),
         "one row key per painted row, aligned with the paint order (NFR-011)"
     );
     assert_eq!(
         app.teams_teammate_agent_ids,
-        vec![
-            "tm-001".to_string(),
-            "tm-002".to_string(),
-            "tm-003".to_string(),
-        ],
+        ["tm-001", "tm-002", "tm-003"]
+            .map(|id| (TEAM_NAME.to_string(), id.to_string()))
+            .to_vec(),
         "the cursor ordinal list is the teammate slice in paint order (NFR-011)"
     );
 }

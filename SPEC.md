@@ -4215,6 +4215,63 @@ carry the lead session id (`MailboxMessage::with_sender_session`,
 SEC-codemason-team-003), so a lead-authored message pushed without one is rejected
 at the write boundary rather than silently forwarded.
 
+### 14.2a Team leaders
+
+Every team is led by a **team-leader** sub-agent, never by the primary
+session (team-leader-agent design):
+
+- The built-in `team-leader` agent, and any custom agent whose definition
+  sets `"role": "team-leader"` (`AgentRole::TeamLeader`), may call
+  `team_create`; other agents are refused (`not_team_leader`) and told to
+  spawn a leader with `new_agent agent="team-leader"`. Leaders may not
+  spawn plain sub-agents. The check is in the tool, not only the prompt.
+  A leader runs exactly one team: a non-seed `team_create` from a session
+  that already runs a team is refused (`leader_has_team`). Teams never
+  nest: a teammate always runs with the standard role, whatever its
+  `agent_type`. A custom leader always runs as a sub-agent (a `primary` or
+  `all` mode is overridden with a warning) and always gets the leader tool
+  policy; its own `permissions` are appended after it.
+- `/team create <blueprint> [name] [context]` and `/swarm` launch a leader
+  child session of the primary; the team is created with that session as
+  lead and seeded before the leader's first step. A seed step the
+  permission checker refuses fails the launch with an error naming the
+  permission; on a stock config add a `team:manage` allow rule.
+- Several teams run at once: each has its own `TeamManager` in
+  `SessionProcessor.team_managers` (`TeamManagers`, keyed by the unique team
+  name). A leader's run is not bound by the background timeout while it
+  waits in `team_wait`, and a direct user turn ends that wait early.
+  Leaders count against `experimental.max_background_agents`, except a
+  turn the user starts by typing to a finished leader
+  (`AgentManager::resume_detached`): that resumed turn is exempt, so the
+  user can always reach a leader (a deviation from the design's "no
+  separate limit" wording).
+- The Sessions pane (`sessions_sidebar_state`) lists each leader as a
+  `SidebarRow::TeamLeader` (`team-leader: <team>`, collapsible, with a
+  `LeaderState` of `Running`, `Crashed` - task gone, team still `Active` -
+  or `Done` - team cleaned up) under the session that spawned it, and its
+  team's members as `SidebarRow::Teammate` rows (name and status) under it.
+  Leaders are found by their agent's role, by the `lead_session_id` of
+  `Active` teams on disk, and from the `team.leaders` settings key, which
+  records each leader seen (session id -> agent name and team name), so
+  both crashed and finished leaders are listed again after a restart; plain
+  sub-agent rows are not shown for leaders. Teammate rows leave once the
+  team is no longer `Active`; the leader row (and its record) stays until
+  its parent session leaves the sidebar (archived or deleted); no record
+  is pruned before the session list has loaded. Archiving a session
+  cancels the team leaders it spawned, as `/team close` does. The team's
+  on-disk format is unchanged.
+- Opening a leader or teammate row focuses its session. A prompt typed
+  there is a direct user turn: a teammate gets it through
+  `TeamManager::send_user_turn`; a leader through
+  `AgentManager::send_to_session`, or, when no task runs in its session
+  (`task_not_found`), one detached `AgentManager::resume_detached` turn
+  under the leader's recorded agent (the built-in `team-leader` when none
+  is recorded), at most one starting per session at a time (a second
+  prompt meanwhile is held with `[warn] <agent> is still starting`). A
+  prompt in a teammate session whose team has ended is refused with
+  `[error] this teammate's team has ended`. A refusal is shown on the
+  status line as `[error] <reason>` and the prompt stays in the input.
+
 ### 14.3 Team Tools
 
 | Tool | Purpose |
@@ -4275,7 +4332,7 @@ the bound manager drives another team.
 
 | Command | Purpose |
 |---------|---------|
-| `/team create <name>` | Create a new team |
+| `/team create <blueprint> [name] [context]` | Launch a team leader that creates and leads a team from the blueprint |
 | `/team close` | Close current team |
 | `/team clear` | Reset current team state |
 | `/team delete <name>` | Delete a team |

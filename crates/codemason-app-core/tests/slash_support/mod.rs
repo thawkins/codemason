@@ -126,6 +126,16 @@ pub fn app_with_session() -> App {
     app
 }
 
+/// [`app_with_session`] whose session is real and whose processor has an
+/// `AgentManager`, so `/team create` can launch its team leader (see
+/// `support::attach_leader_runtime`).
+#[allow(dead_code)]
+pub fn app_with_leader_runtime() -> App {
+    let mut app = super::support::make_app();
+    super::support::attach_leader_runtime(&mut app);
+    app
+}
+
 /// Text of the most recent message in the message window.
 pub fn last_message(app: &App) -> String {
     app.session

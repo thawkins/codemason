@@ -1113,6 +1113,33 @@ two columns at the right edge:
 
 Hover a row to see how long ago it was active, its backend and its branch.
 
+Team leaders and their teammates are listed under the session that started
+them (by `/team create`, `/swarm`, or the agent spawning a `team-leader`):
+
+```text
+v codemason
+    Fix auth flow
+      v team-leader: code-review
+          reviewer-security  working
+          reviewer-perf      idle
+      > team-leader: docs-sweep
+```
+
+- A leader row reads `team-leader: <team>`. Click its triangle (or press
+  `Left`/`Right` on it) to hide or show its teammates. A leader whose run
+  has stopped while its team is still active is drawn greyed with
+  `(stopped)`; once its team is cleaned up its teammates go and the leader
+  stays, greyed with `(done)`, until its parent session is archived or
+  deleted, also after codemason restarts.
+- A teammate row shows the teammate's name and its status.
+- Click a leader or teammate row (or press `Enter` on it) to open that
+  agent's session and watch its output live. A prompt typed there goes to
+  that agent as a direct user turn, not to your primary session: a busy
+  agent reads it at its next step, a finished leader runs one more turn in
+  its own session (its reply stays there). If the agent cannot take it
+  (for example the teammate has exited, or its team has ended), the status
+  line shows the error and your text stays in the input.
+
 Rest the pointer on a row with requests to open its request list beside
 it, newest first. Each entry shows the title, then the state, repository
 and number (`thawkins/codemason #58`) and, for GitHub, the lines added and
@@ -1137,7 +1164,7 @@ Keys:
 | `Ctrl+Up` / `Ctrl+Down` | Previous / next session |
 | `Alt+R` | The session you were in last (Linux/Windows chord) |
 | `Up`/`Down`, `Enter` | (sidebar focused) move, open the row |
-| `Left`/`Right` | (sidebar focused) collapse / expand a project |
+| `Left`/`Right` | (sidebar focused) collapse / expand a project, or a team leader's teammates |
 | `p` / `a` / `F2` | (sidebar focused) pin, archive, rename |
 | `u` / `f` / `D` | (sidebar focused) mark unread/read, fork, delete (asks first) |
 | `m` / `Shift+F10` | (sidebar focused) open the menu of the session or project heading; right-click also opens it |

@@ -27,9 +27,18 @@ use codemason_app_core::app::App;
 #[allow(dead_code)]
 #[must_use]
 pub fn make_app() -> App {
+    make_app_with_storage(Arc::new(
+        Storage::open_in_memory().expect("in-memory storage"),
+    ))
+}
+
+/// Build an [`App`] like [`make_app`] over an existing `storage`, so a test
+/// can start a second, fresh `App` over the same database (an app restart).
+#[allow(dead_code)]
+#[must_use]
+pub fn make_app_with_storage(storage: Arc<Storage>) -> App {
     codemason_app_core::app::use_scratch_log_root_for_tests();
     let event_bus = Arc::new(EventBus::default());
-    let storage = Arc::new(Storage::open_in_memory().expect("in-memory storage"));
     let provider_registry = Arc::new(provider::create_default_registry());
     let tool_registry = Arc::new(tool::create_default_registry());
     let permission_checker = Arc::new(parking_lot::RwLock::new(PermissionChecker::new(vec![])));
@@ -42,7 +51,7 @@ pub fn make_app() -> App {
         event_bus: event_bus.clone(),
         agent_manager: std::sync::OnceLock::new(),
         bg_service: std::sync::OnceLock::new(),
-        team_manager: Default::default(),
+        team_managers: Default::default(),
         mcp_client: std::sync::OnceLock::new(),
         connector_session: tokio::sync::RwLock::new(None),
         connector_statuses: tokio::sync::RwLock::new(None),
@@ -233,4 +242,64 @@ pub fn store_fetch_landed(app: &App) -> bool {
     let cache = app.store_cache.lock().expect("store cache");
     let slot = cache.plugin(kind);
     slot.in_flight.is_none() && !matches!(slot.data, codemason_app_core::app::SlotData::Empty)
+}
+
+/// Wire what a team leader needs into `app`: a real primary session (rooted at
+/// `app.cwd_path`) as `app.session.session_id`, and an `AgentManager` on the
+/// processor. `/team create` and `/swarm` launch a `team-leader` child session
+/// of the primary, so both must exist.
+///
+/// The selected model names a provider that is not registered, so a launched
+/// leader fails at once instead of calling a real LLM with whatever API key
+/// the environment holds.
+///
+/// # Returns
+///
+/// The `AgentManager` (the one already set, if the processor had one).
+#[allow(dead_code)]
+pub fn attach_leader_runtime(app: &mut App) -> Arc<codemason_agent::task::AgentManager> {
+    let session = app
+        .session_processor
+        .session_manager
+        .create_session(app.cwd_path.clone())
+        .expect("primary session");
+    app.session.session_id = Some(session.id);
+    app.session.selected_model = Some("leader-test-unregistered/none".to_string());
+    let manager = Arc::new(codemason_agent::task::AgentManager::new(
+        Arc::clone(&app.event_bus),
+        Arc::clone(&app.session_processor),
+        8,
+        60,
+    ));
+    let _ = app
+        .session_processor
+        .agent_manager
+        .set(Arc::clone(&manager));
+    app.session_processor
+        .agent_manager
+        .get()
+        .cloned()
+        .unwrap_or(manager)
+}
+
+/// Install a project-local team blueprint `name` under `root` (which must be
+/// a scratch project, never the repository). Each entry of `teammates` is a
+/// teammate the blueprint spawns (`general` agent); an empty slice makes a
+/// blueprint that seeds nothing.
+#[allow(dead_code)]
+pub fn install_test_blueprint(root: &std::path::Path, name: &str, teammates: &[&str]) {
+    let dir = root.join(".codemason/blueprints/teams").join(name);
+    std::fs::create_dir_all(&dir).expect("create blueprint dir");
+    std::fs::write(dir.join("README.md"), "A test blueprint.").expect("write blueprint readme");
+    if !teammates.is_empty() {
+        let prompts: Vec<serde_json::Value> = teammates
+            .iter()
+            .map(|t| serde_json::json!({"tool": "team_spawn", "teammate_name": t, "agent_type": "general", "prompt": "go"}))
+            .collect();
+        std::fs::write(
+            dir.join("spawn-prompts.json"),
+            serde_json::to_string(&prompts).expect("blueprint json"),
+        )
+        .expect("write spawn prompts");
+    }
 }

@@ -35,6 +35,10 @@ fn env_lock() -> MutexGuard<'static, ()> {
 /// pretending it is intentionally unused.
 struct XdgGuard {
     prev: Option<std::ffi::OsString>,
+    // The cwd to restore. `Config::load()` writes a first-run default
+    // `.codemason/codemason.json` into the process cwd when no config exists, so
+    // the guard parks the cwd in a `target/temp` scratch dir.
+    cwd: Option<PathBuf>,
     // Held for its Drop side effect (unlocking the env mutex); never read.
     #[allow(dead_code)]
     lock: MutexGuard<'static, ()>,
@@ -45,12 +49,23 @@ impl XdgGuard {
         let lock = env_lock();
         let prev = std::env::var_os("XDG_CONFIG_HOME");
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir) };
-        Self { prev, lock }
+        let cwd = std::env::current_dir().ok();
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/temp/plugin-bridge-cwd")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&scratch).expect("scratch cwd");
+        std::env::set_current_dir(&scratch).expect("enter scratch cwd");
+        Self { prev, cwd, lock }
     }
 }
 
 impl Drop for XdgGuard {
     fn drop(&mut self) {
+        if let Some(cwd) = &self.cwd
+            && let Err(e) = std::env::set_current_dir(cwd)
+        {
+            eprintln!("could not restore cwd {}: {e}", cwd.display());
+        }
         match &self.prev {
             Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
             None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },

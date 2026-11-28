@@ -130,6 +130,12 @@ fn test_make_client_unconfigured_reports_not_configured() {
         ("HOME", Some(dir.path().to_string_lossy().to_string())),
         ("XDG_CONFIG_HOME", None),
     ]);
+    // An empty global config, so `Config::load()` does not take this for a
+    // first run and write a default `.codemason/codemason.json` into the
+    // process cwd (the crate directory under nextest).
+    let global = dir.path().join(".config/codemason");
+    std::fs::create_dir_all(&global).expect("global config dir");
+    std::fs::write(global.join("codemason.json"), "{}").expect("global config");
     let ctx = ctx_with(dir.path().to_path_buf(), Some(Arc::new(EmptyStore)));
     let err = err_string(make_client(&ctx));
     assert!(

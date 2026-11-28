@@ -367,6 +367,11 @@ fn test_the_registry_names_match_the_recorded_after_rename_digest() {
 /// this test from every other env-mutating test in the binary.
 struct EnvGuard {
     saved: Vec<(&'static str, Option<OsString>)>,
+    /// The cwd to restore. `Config::load()` writes a first-run default
+    /// `.codemason/codemason.json` into the process cwd when no config exists, so
+    /// the guard parks the cwd in a `target/temp` scratch dir to keep the
+    /// repository clean.
+    cwd: Option<std::path::PathBuf>,
 }
 
 impl EnvGuard {
@@ -387,12 +392,23 @@ impl EnvGuard {
             std::env::remove_var("CODEMASON_CONFIG");
             std::env::remove_var("CODEMASON_CONFIG_CONTENT");
         }
-        Self { saved }
+        let cwd = std::env::current_dir().ok();
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/temp/fr030-surface-cwd")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&scratch).expect("scratch cwd");
+        std::env::set_current_dir(&scratch).expect("enter scratch cwd");
+        Self { saved, cwd }
     }
 }
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
+        if let Some(cwd) = &self.cwd
+            && let Err(e) = std::env::set_current_dir(cwd)
+        {
+            eprintln!("could not restore cwd {}: {e}", cwd.display());
+        }
         for (key, value) in &self.saved {
             // SAFETY: restoring the value captured in `isolating`.
             unsafe {
@@ -577,6 +593,8 @@ fn registry_ctx(registry: Arc<ToolRegistry>) -> ToolContext {
         allowed_roots: Vec::new(),
         read_timestamps: Arc::new(std::sync::RwLock::new(HashMap::new())),
         cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
+        user_input_pending: None,
         permission_checker: None,
         canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
         tool_registry: registry,
@@ -885,7 +903,7 @@ fn make_processor(
         permission_checker: Arc::new(parking_lot::RwLock::new(PermissionChecker::new(vec![]))),
         event_bus,
         agent_manager: std::sync::OnceLock::new(),
-        team_manager: Default::default(),
+        team_managers: Default::default(),
         team_context_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         tool_repeat_guard: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         mcp_client: std::sync::OnceLock::new(),

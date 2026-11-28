@@ -32,7 +32,7 @@ impl App {
         &mut self,
         decomposition: team::SwarmDecomposition,
     ) {
-        use codemason_agent::team::{SwarmState, TaskStore, TeamStore, task::Task};
+        use codemason_agent::team::SwarmState;
 
         let task_count = decomposition.tasks.len();
         if task_count == 0 {
@@ -47,218 +47,131 @@ impl App {
         let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let team_name = format!("swarm-{ts}");
         let working_dir = self.swarm_working_dir();
-        let lead_sid = self
+        let parent_sid = self.session.session_id.clone().unwrap_or_default();
+
+        // The primary is never a team lead: a `team-leader` sub-agent of this
+        // session creates the team, leads it and reports back here.
+        let Some(agent_manager) = self.session_processor.agent_manager.get().cloned() else {
+            self.status =
+                "[warn] swarm: team creation failed: no agent manager to run its team leader"
+                    .to_string();
+            self.push_log_no_agent(
+                LogLevel::Warn,
+                "Swarm team creation failed: no agent manager to run its team leader".to_string(),
+            );
+            return;
+        };
+        let leader_model: Option<codemason_agent::agent::ModelRef> =
+            self.session.selected_model.as_deref().and_then(|s| {
+                s.split_once('/')
+                    .map(|(pid, mid)| codemason_agent::agent::ModelRef {
+                        provider_id: pid.to_string(),
+                        model_id: mid.to_string(),
+                    })
+            });
+        let goal = self
             .session
-            .session_id
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+            .swarm_state
+            .as_ref()
+            .map(|s| s.prompt.clone())
+            .unwrap_or_default();
+        let leader_task = team::leader::leader_task_for_swarm(&team_name, &goal);
 
-        // Create the team
-        match TeamStore::create(&team_name, &lead_sid, &working_dir, true) {
-            Ok(mut store) => {
-                // Each swarm task belongs to its own teammate (pre-assigned at
-                // spawn or unblock). With auto-claim on, a teammate that went
-                // idle would take the next ready task with a bare "task X is
-                // yours" turn - no description, no dependency results - and
-                // strand that task's own teammate.
-                match TeamStore::update(&store.dir, |config| {
-                    config.settings.auto_claim_tasks = false;
-                    Ok(config.clone())
-                }) {
-                    Ok(config) => store.config = config,
-                    Err(e) => self.push_log_no_agent(
-                        LogLevel::Warn,
-                        format!("Swarm: failed to turn off auto-claim for {team_name}: {e}"),
-                    ),
+        // Create the team, led by the leader session, and seed its tasks and
+        // teammates before the leader's first step.
+        let mut seeded: Option<SwarmSeeded> = None;
+        let slot = &mut seeded;
+        let launched = team::leader::launch_leader_for_team_with_seed(
+            &agent_manager,
+            &parent_sid,
+            &working_dir,
+            &team_name,
+            &leader_task,
+            leader_model,
+            |leader| {
+                let decomposition = &decomposition;
+                let team_name = &team_name;
+                async move {
+                    *slot = Some(seed_swarm_team(&leader, team_name, decomposition).await?);
+                    Ok(())
                 }
-                // Seed tasks into tasks.json
-                if let Ok(task_store) = TaskStore::open(&store.dir) {
-                    for st in &decomposition.tasks {
-                        let mut task = Task::new(&st.id, &st.title);
-                        task.description = st.description.clone();
-                        task.depends_on = st.depends_on.clone();
-                        if let Err(e) = task_store.add_task(task).await {
-                            self.push_log_no_agent(
-                                LogLevel::Warn,
-                                format!("Swarm: failed to add task {}: {e}", st.id),
-                            );
-                        }
-                    }
-                }
-
-                // Set up active team state
-                self.session.active_team = Some(store.config.clone());
-                self.session.team_members.clear();
-                self.session.team_task_counts.clear();
-                self.session.team_task_counts_dirty = true;
-                self.show_teams = true;
-                self.ensure_team_manager_for_team(&team_name, Some(store.dir.clone()));
-
-                // Build display table
-                let mut output = format!(
-                    "From: /swarm\n## [bee] Swarm Created: {team_name}\n\n\
-                                      **{task_count} subtasks** decomposed and seeded.\n\n\
-                                      | ID | Title | Agent Type | Dependencies |\n\
-                                      |----|-------|------------|--------------|\n"
+            },
+        )
+        .await;
+        let seeded = match (launched, seeded) {
+            (Ok(_), Some(seeded)) => seeded,
+            (Ok(launch), None) => {
+                // Unreachable in practice: a successful launch ran the seed.
+                team::leader::cancel_leader_for_session(&agent_manager, &launch.leader_session_id)
+                    .await;
+                self.status =
+                    "[warn] swarm: team creation failed: the team was not seeded".to_string();
+                return;
+            }
+            (Err(e), _) => {
+                self.status = format!("[warn] swarm: team creation failed: {e:#}");
+                self.push_log_no_agent(
+                    LogLevel::Warn,
+                    format!("Swarm team creation failed: {e:#}"),
                 );
-                for st in &decomposition.tasks {
-                    let deps = if st.depends_on.is_empty() {
-                        "-".to_string()
-                    } else {
-                        st.depends_on.join(", ")
-                    };
-                    let agent = st
-                        .agent_type
-                        .as_deref()
-                        .unwrap_or(codemason_agent::team::DEFAULT_AGENT_TYPE);
-                    output.push_str(&format!(
-                        "| {} | {} | {} | {} |\n",
-                        st.id, st.title, agent, deps
-                    ));
-                }
-                output.push_str("\nSpawning teammates...\n");
-                self.append_assistant_text(&output);
-
-                // Keep the goal and default agent type `/swarm` recorded before
-                // decomposing: the synthesis step answers that goal.
-                let (swarm_prompt, default_agent_type) = self
-                    .session
-                    .swarm_state
-                    .as_ref()
-                    .map(|s| (s.prompt.clone(), s.default_agent_type.clone()))
-                    .unwrap_or_default();
-                self.session.swarm_state = Some(SwarmState {
-                    team_name: team_name.clone(),
-                    prompt: swarm_prompt,
-                    decomposition: decomposition.clone(),
-                    spawned: false,
-                    completed: false,
-                    default_agent_type,
-                });
-                // Spawn one teammate per subtask
-                self.spawn_swarm_teammates(&team_name, &decomposition, &store.dir);
+                return;
             }
-            Err(e) => {
-                self.status = format!("[warn] swarm: team creation failed: {e}");
-                self.push_log_no_agent(LogLevel::Warn, format!("Swarm team creation failed: {e}"));
-            }
-        }
-    }
+        };
 
-    pub(crate) fn spawn_swarm_teammates(
-        &mut self,
-        team_name: &str,
-        decomposition: &team::SwarmDecomposition,
-        team_dir: &std::path::Path,
-    ) {
-        let working_dir = self.swarm_working_dir();
+        // Set up active team state
+        self.session.active_team = Some(seeded.config);
+        self.session.team_members = seeded.members;
+        self.session.team_task_counts.clear();
+        self.session.team_task_counts_dirty = true;
+        self.show_teams = true;
 
-        for subtask in &decomposition.tasks {
-            let teammate_name = format!("swarm-{}", subtask.id);
-
-            // Resolve per-subtask agent type (classification fallback already applied).
-            let agent_type = subtask
+        // Build display table
+        let mut output = format!(
+            "From: /swarm\n## [bee] Swarm Created: {team_name}\n\n\
+                              **{task_count} subtasks** decomposed and seeded.\n\n\
+                              | ID | Title | Agent Type | Dependencies |\n\
+                              |----|-------|------------|--------------|\n"
+        );
+        for st in &decomposition.tasks {
+            let deps = if st.depends_on.is_empty() {
+                "-".to_string()
+            } else {
+                st.depends_on.join(", ")
+            };
+            let agent = st
                 .agent_type
                 .as_deref()
-                .unwrap_or(codemason_agent::team::DEFAULT_AGENT_TYPE)
-                .to_string();
-
-            // Parse per-subtask model override
-            let teammate_model: Option<codemason_agent::agent::ModelRef> =
-                subtask.model.as_deref().and_then(|s| {
-                    s.split_once('/')
-                        .or_else(|| s.split_once(':'))
-                        .map(|(p, m)| codemason_agent::agent::ModelRef {
-                            provider_id: p.to_string(),
-                            model_id: m.to_string(),
-                        })
-                });
-
-            // Tasks with unresolved dependencies start as Blocked; others as Spawning
-            let has_deps = !subtask.depends_on.is_empty();
-            let initial_status = if has_deps {
-                MemberStatus::Blocked
-            } else {
-                MemberStatus::Spawning
-            };
-
-            // Dependent subtasks get this prompt replaced on unblock, once
-            // their predecessors' results exist (see `poll_swarm_unblock`).
-            let prompt = team::build_swarm_task_prompt(subtask, &[]);
-
-            // Record member in config
-            {
-                // The roster read, id allocation and insert are one atomic
-                // `TeamStore::update`, so a concurrent status write is not lost.
-                if let Some(team_dir) = team::find_team_dir(&working_dir, team_name) {
-                    let recorded = team::TeamStore::update(&team_dir, |config| {
-                        if config.member_by_name(&teammate_name).is_some() {
-                            return Ok(None);
-                        }
-                        let agent_id = config.next_agent_id();
-                        let mut member =
-                            team::TeamMember::new(&teammate_name, &agent_id, &agent_type);
-                        member.spawn_prompt = Some(prompt.clone());
-                        member.model_override = teammate_model.clone();
-                        member.status = initial_status;
-                        config.members.push(member.clone());
-                        Ok(Some(member))
-                    });
-                    match recorded {
-                        // Add to local state; a task with no dependencies is
-                        // given to its teammate now (dependent ones on unblock).
-                        Ok(Some(member)) => {
-                            if !has_deps {
-                                assign_swarm_task(&team_dir, &subtask.id, &member.agent_id);
-                            }
-                            self.session.team_members.push(member);
-                        }
-                        Ok(None) => {}
-                        // FUNC-027: surface a failed team-state save rather than
-                        // silently dropping it while the swarm reports success.
-                        Err(e) => {
-                            tracing::warn!(
-                                team = %team_name,
-                                teammate = %teammate_name,
-                                error = %e,
-                                "failed to persist swarm teammate to team store"
-                            );
-                            self.push_log_no_agent(
-                                LogLevel::Warn,
-                                format!(
-                                    "Swarm teammate '{teammate_name}': failed to save team state: {e}"
-                                ),
-                            );
-                        }
-                    }
-                }
-            }
-
-            let status_label = if has_deps {
-                "blocked (deps)"
-            } else {
-                "spawning"
-            };
-            self.push_log_no_agent(
-                LogLevel::Info,
-                format!(
-                    "[bee] Swarm teammate: {} ({}) - {} ({} agent)",
-                    teammate_name, subtask.id, status_label, agent_type
-                ),
-            );
+                .unwrap_or(codemason_agent::team::DEFAULT_AGENT_TYPE);
+            output.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                st.id, st.title, agent, deps
+            ));
+        }
+        output.push_str(
+            "\nTeammates spawned. A team leader waits for every subtask and reports the \
+             combined answer.\n",
+        );
+        self.append_assistant_text(&output);
+        for line in seeded.log {
+            self.push_log_no_agent(LogLevel::Info, line);
         }
 
-        // Trigger reconcile - the manager picks up Spawning members and spawns them.
-        // Blocked members are skipped by reconcile (they aren't MemberStatus::Spawning).
-        if let Some(manager) = self.session_processor.team_manager.get() {
-            manager.clone().reconcile_spawning_members();
-        } else {
-            self.ensure_team_manager_for_team_inner(team_name, Some(team_dir.to_path_buf()), true);
-        }
-
-        if let Some(ref mut swarm) = self.session.swarm_state {
-            swarm.spawned = true;
-        }
+        // Keep the goal and default agent type `/swarm` recorded before
+        // decomposing.
+        let (swarm_prompt, default_agent_type) = self
+            .session
+            .swarm_state
+            .as_ref()
+            .map(|s| (s.prompt.clone(), s.default_agent_type.clone()))
+            .unwrap_or_default();
+        self.session.swarm_state = Some(SwarmState {
+            team_name: team_name.clone(),
+            prompt: swarm_prompt,
+            decomposition: decomposition.clone(),
+            spawned: true,
+            completed: false,
+            default_agent_type,
+        });
 
         let ready = decomposition
             .tasks
@@ -439,20 +352,23 @@ impl App {
             return;
         }
 
+        // Each swarm task is pre-assigned to its own teammate, so a member's
+        // subtask is the task assigned to its agent id. The list is kept so
+        // an unblocked member's prompt can carry its predecessors' results.
+        let working_dir = self.swarm_working_dir();
+        let task_list = self.load_swarm_tasks(&team_name);
+        let task_of = |agent_id: &str| swarm_task_of(task_list.as_ref(), agent_id);
+
         // Build set of completed task IDs from member status.
-        // A task ID is the suffix after "swarm-" in the teammate name.
         let completed_task_ids: std::collections::HashSet<String> = self
             .session
             .team_members
             .iter()
             .filter(|m| matches!(m.status, MemberStatus::Idle | MemberStatus::Stopped))
-            .filter_map(|m| m.name.strip_prefix("swarm-").map(|s| s.to_string()))
+            .filter_map(|m| task_of(&m.agent_id))
             .collect();
 
-        // Also check TaskStore for explicitly completed tasks. The list is kept
-        // so an unblocked member's prompt can carry its predecessors' results.
-        let working_dir = self.swarm_working_dir();
-        let task_list = self.load_swarm_tasks(&team_name);
+        // Also check TaskStore for explicitly completed tasks.
         let task_completed_ids: std::collections::HashSet<String> = task_list
             .as_ref()
             .map(|tl| tl.completed_ids())
@@ -466,7 +382,11 @@ impl App {
         // Check each blocked member's dependencies
         let mut unblocked = Vec::new();
         for (member_name, agent_id) in &blocked_members {
-            let task_id = member_name.strip_prefix("swarm-").unwrap_or(member_name);
+            let Some(task_id) = task_of(agent_id) else {
+                tracing::debug!(teammate = %member_name, "swarm member has no assigned task");
+                continue;
+            };
+            let task_id = task_id.as_str();
             // Find the task's depends_on from decomposition
             let deps = decomp_tasks
                 .iter()
@@ -551,7 +471,7 @@ impl App {
                 ),
             );
         } // Trigger reconcile to spawn newly-unblocked members
-        if let Some(manager) = self.session_processor.team_manager.get() {
+        if let Some(manager) = self.session_processor.team_managers.get(&team_name) {
             manager.clone().reconcile_spawning_members();
         }
 
@@ -706,9 +626,7 @@ impl App {
     /// So once this returns nothing of the job writes into the directory
     /// any more, and no further hook starts. Tasks it did not reach stay
     /// open, as they were before the swarm finalised.
-    ///
-    /// The swarm's synthesis call, if one is still running, is aborted too,
-    /// so its answer never appears after the swarm is gone.
+
     ///
     /// # Arguments
     ///
@@ -723,14 +641,6 @@ impl App {
         {
             jobs.extend(self.session.swarm_autocomplete.take());
         }
-        if self
-            .session
-            .swarm_synthesis
-            .as_ref()
-            .is_some_and(|job| job.team_name == team_name)
-        {
-            jobs.extend(self.session.swarm_synthesis.take());
-        }
         for index in 0..self.background.len() {
             if let Some(view) = self.background.view_mut(index)
                 && view
@@ -739,14 +649,6 @@ impl App {
                     .is_some_and(|job| job.team_name == team_name)
             {
                 jobs.extend(view.swarm_autocomplete.take());
-            }
-            if let Some(view) = self.background.view_mut(index)
-                && view
-                    .swarm_synthesis
-                    .as_ref()
-                    .is_some_and(|job| job.team_name == team_name)
-            {
-                jobs.extend(view.swarm_synthesis.take());
             }
         }
         for job in jobs {
@@ -821,11 +723,11 @@ impl App {
             }
         }
 
-        let synthesising = completed > 0 && self.spawn_swarm_synthesis(team_name);
-        if synthesising {
-            output.push_str("Combining the results into one answer...\n\n");
-        }
-        output.push_str("Use `/swarm cancel` to clean up the ephemeral team.\n");
+        // The swarm's team leader synthesises the combined answer and cleans
+        // the team up; the frontend only reports the tally.
+        output.push_str(
+            "The team leader combines the results into one answer and cleans up the team.\n",
+        );
 
         self.append_assistant_text(&output);
         self.status = format!("[done] swarm complete: {team_name}");
@@ -840,65 +742,159 @@ impl App {
     }
 }
 
-impl App {
-    /// Start the synthesis call that combines `team_name`'s task results into
-    /// one answer to the swarm's goal, on the runtime. The answer lands in
-    /// `swarm_synthesis_result`, tagged with `team_name`, for
-    /// [`App::poll_pending_swarm`] to show. The call goes through
-    /// `CodemasonCompleter`, the same path (and key resolution) as the
-    /// decomposition call, which fails on a provider stream error rather than
-    /// returning an empty or partial answer. The job is kept in
-    /// `swarm_synthesis`, so cancelling the swarm aborts it.
-    ///
-    /// Returns `false` (and starts nothing) when no model is selected, the
-    /// task list cannot be read, or there is no runtime to run the call on.
-    fn spawn_swarm_synthesis(&mut self, team_name: &str) -> bool {
-        let Some((provider_id, model_id)) = self
-            .session
-            .selected_model
-            .as_deref()
-            .and_then(|s| s.split_once('/'))
-            .map(|(p, m)| (p.to_string(), m.to_string()))
-        else {
-            return false;
-        };
-        let Some(tasks) = self.load_swarm_tasks(team_name) else {
-            return false;
-        };
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return false;
-        };
-        let goal = self
-            .session
-            .swarm_state
-            .as_ref()
-            .map(|s| s.prompt.clone())
-            .unwrap_or_default();
-        let user = team::build_synthesis_user_prompt(&goal, &tasks.tasks);
-        let completer = crate::research_adapter::CodemasonCompleter {
-            registry: std::sync::Arc::clone(&self.provider_registry),
-            storage: std::sync::Arc::clone(&self.storage),
-            provider_id,
-            model_id,
-        };
-        let slot = std::sync::Arc::clone(&self.session.swarm_synthesis_result);
-        let tag = team_name.to_string();
-        let handle = runtime.spawn(async move {
-            let outcome = completer
-                .complete(team::SYNTHESIS_SYSTEM_PROMPT, &user)
-                .await
-                .map_err(|e| e.to_string());
-            if let Ok(mut guard) = slot.lock() {
-                *guard = Some((tag, outcome));
-            }
-        });
-        self.session.swarm_synthesis = Some(SwarmAutoComplete {
-            team_name: team_name.to_string(),
-            handle,
-        });
-        self.status = format!("[wait] swarm: combining results for {team_name}");
-        true
+/// What [`seed_swarm_team`] leaves for the frontend to show.
+struct SwarmSeeded {
+    /// The team config after seeding.
+    config: team::TeamConfig,
+    /// The recorded teammates, one per subtask.
+    members: Vec<team::TeamMember>,
+    /// One log line per teammate.
+    log: Vec<String>,
+}
+
+/// Seed a swarm team inside its leader's launch, before the leader's first
+/// step: turn auto-claim off, add one task per subtask, record one teammate
+/// per subtask (dependent ones `Blocked`), give ready tasks to their
+/// teammates and start the ready teammates through the team's manager.
+///
+/// Each swarm task belongs to its own teammate (pre-assigned at spawn or
+/// unblock). With auto-claim on, a teammate that went idle would take the
+/// next ready task with a bare "task X is yours" turn - no description, no
+/// dependency results - and strand that task's own teammate.
+///
+/// # Errors
+///
+/// Any failed write to the team's config or task list; the launch then
+/// fails and the team is removed.
+async fn seed_swarm_team(
+    leader: &team::leader::LeaderSeed,
+    team_name: &str,
+    decomposition: &team::SwarmDecomposition,
+) -> anyhow::Result<SwarmSeeded> {
+    let team_dir = leader.team_dir.as_path();
+    team::TeamStore::update(team_dir, |config| {
+        config.settings.auto_claim_tasks = false;
+        Ok(())
+    })
+    .map_err(|e| anyhow::anyhow!("turning off auto-claim for {team_name}: {e}"))?;
+    let task_store = team::TaskStore::open(team_dir)?;
+    for st in &decomposition.tasks {
+        let mut task = team::task::Task::new(&st.id, &st.title);
+        task.description = st.description.clone();
+        task.depends_on = st.depends_on.clone();
+        task_store
+            .add_task(task)
+            .await
+            .map_err(|e| anyhow::anyhow!("adding task {}: {e}", st.id))?;
     }
+
+    let mut members = Vec::new();
+    let mut log = Vec::new();
+    for subtask in &decomposition.tasks {
+        // Per-subtask agent type (classification fallback already applied).
+        let agent_type = subtask
+            .agent_type
+            .as_deref()
+            .unwrap_or(codemason_agent::team::DEFAULT_AGENT_TYPE)
+            .to_string();
+        let teammate_model: Option<codemason_agent::agent::ModelRef> =
+            subtask.model.as_deref().and_then(|s| {
+                s.split_once('/')
+                    .or_else(|| s.split_once(':'))
+                    .map(|(p, m)| codemason_agent::agent::ModelRef {
+                        provider_id: p.to_string(),
+                        model_id: m.to_string(),
+                    })
+            });
+        // Tasks with unresolved dependencies start as Blocked; others as Spawning.
+        let has_deps = !subtask.depends_on.is_empty();
+        let initial_status = if has_deps {
+            MemberStatus::Blocked
+        } else {
+            MemberStatus::Spawning
+        };
+        // Dependent subtasks get this prompt replaced on unblock, once their
+        // predecessors' results exist (see `poll_swarm_unblock`).
+        let prompt = team::build_swarm_task_prompt(subtask, &[]);
+        // The roster read, id allocation and insert are one atomic
+        // `TeamStore::update`, so a concurrent status write is not lost.
+        let recorded = team::TeamStore::update(team_dir, |config| {
+            // A readable `<agent-type>-<adjective>-<surname>` name, unique in
+            // the team; the subtask is linked to it by assignment, not name.
+            let teammate_name =
+                codemason_agent::readable_names::readable_member_name(&agent_type, |name| {
+                    config.member_by_name(name).is_some()
+                });
+            let agent_id = config.next_agent_id();
+            let mut member = team::TeamMember::new(&teammate_name, &agent_id, &agent_type);
+            member.spawn_prompt = Some(prompt.clone());
+            member.model_override = teammate_model.clone();
+            member.status = initial_status;
+            config.members.push(member.clone());
+            Ok(Some(member))
+        })
+        .map_err(|e| anyhow::anyhow!("recording swarm teammate for subtask {}: {e}", subtask.id))?;
+        if let Some(member) = recorded {
+            // A task with no dependencies is given to its teammate now. A
+            // dependent one is reserved for it (assignee set, still pending)
+            // and claimed on unblock, so the task list names whose subtask
+            // it is from the start.
+            if has_deps {
+                reserve_swarm_task(team_dir, &subtask.id, &member.agent_id);
+            } else {
+                assign_swarm_task(team_dir, &subtask.id, &member.agent_id);
+            }
+            members.push(member);
+        }
+        let status_label = if has_deps {
+            "blocked (deps)"
+        } else {
+            "spawning"
+        };
+        let teammate_name = members.last().map_or("-", |m| m.name.as_str());
+        log.push(format!(
+            "[bee] Swarm teammate: {} ({}) - {} ({} agent)",
+            teammate_name, subtask.id, status_label, agent_type
+        ));
+    }
+
+    // The manager picks up Spawning members and spawns them; Blocked members
+    // are skipped until they unblock.
+    std::sync::Arc::clone(&leader.manager).reconcile_spawning_members();
+    let config = team::TeamStore::load(team_dir)?.config;
+    Ok(SwarmSeeded {
+        config,
+        members,
+        log,
+    })
+}
+
+/// Reserve dependent swarm task `task_id` for its teammate `agent_id`: the
+/// assignee is recorded while the task stays pending, so only that teammate
+/// may claim it once its dependencies complete. A failure is logged; the task
+/// is then assigned when it unblocks.
+fn reserve_swarm_task(team_dir: &std::path::Path, task_id: &str, agent_id: &str) {
+    let reserved = team::TaskStore::open(team_dir).and_then(|store| {
+        store.update_task(task_id, |task| {
+            task.assigned_to = Some(agent_id.to_string())
+        })
+    });
+    if let Err(e) = reserved {
+        tracing::warn!(task = %task_id, agent = %agent_id, error = %e,
+            "failed to reserve swarm task for its teammate");
+    }
+}
+
+/// The swarm subtask held by teammate `agent_id`: the task assigned to it.
+fn swarm_task_of(
+    task_list: Option<&codemason_agent::team::task::TaskList>,
+    agent_id: &str,
+) -> Option<String> {
+    task_list?
+        .tasks
+        .iter()
+        .find(|task| task.assigned_to.as_deref() == Some(agent_id))
+        .map(|task| task.id.clone())
 }
 
 /// Give swarm task `task_id` to its teammate `agent_id` (`pre_assign_task`:
@@ -915,9 +911,8 @@ fn assign_swarm_task(team_dir: &std::path::Path, task_id: &str, agent_id: &str) 
 }
 
 /// A finalising swarm's background job, running on the runtime: the task
-/// auto-completion (see [`App::poll_swarm_completion`]) or the synthesis
-/// call (see `App::spawn_swarm_synthesis`). For the auto-completion the
-/// handle doubles as the in-flight flag and the result slot: the job's only
+/// auto-completion (see [`App::poll_swarm_completion`]). The handle doubles
+/// as the in-flight flag and the result slot: the job's only
 /// results are the store writes and their warnings, so its end is what the
 /// next pass waits for.
 ///

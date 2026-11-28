@@ -799,8 +799,28 @@ Use Teams when you want one lead session to orchestrate multiple teammate agents
 ### Start a team in the GUI
 
 ```text
-/team create feature-squad
+/team create code-review
+/team create code-review my-review Focus on src/auth
 ```
+
+`/team create <blueprint> [name] [context]` launches a `team-leader`
+sub-agent in the background; the leader leads the team, waits for its
+teammates, follows up and summarises. Your session never leads a team, and
+only a team-leader agent may call `team_create` (others are told to spawn
+one with `new_agent agent="team-leader"`). Several teams can run at once,
+one per leader, each under its own unique name.
+
+On a stock config, `/team create` fails with a message naming the
+permission when a blueprint's seed steps are refused. Add a `team:manage`
+allow rule to let blueprints seed teammates.
+
+A custom agent becomes a leader with `"role": "team-leader"` in its
+definition (for example the front matter of `.codemason/agents/<name>.md`).
+
+In the Sessions pane each leader is listed as `team-leader: <team>` under
+the session that started it, with its teammates under it. Open a leader or
+teammate row and type to send that agent a direct message; a finished
+leader still answers, in its own session.
 
 Check status any time:
 
@@ -848,12 +868,14 @@ Use `team_spawn` with a role-specific prompt:
 ### Swarms
 
 `/swarm <goal>` splits a goal into subtasks and runs one teammate per subtask
-(`/swarm status`, `/swarm cancel`, `/swarm help`). In the GUI, **Agent > Swarm**
+(`/swarm status`, `/swarm cancel`, `/swarm help`). Like `/team create`, it
+runs through a team leader, which supervises the subtasks and combines
+their results. In the GUI, **Agent > Swarm**
 asks for the goal in a dialog and runs `/swarm <goal>` on **Ok**.
 
 - A teammate finishes with `team_task_complete` and an optional `result`; a
   subtask that depends on it starts with that result in its prompt.
-- When every subtask is done, the selected model combines the results into one
+- When every subtask is done, the swarm's leader combines the results into one
   answer, shown as "Swarm Result".
 
 ### Communicate and close out

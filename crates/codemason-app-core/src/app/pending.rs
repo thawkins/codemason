@@ -73,13 +73,11 @@ fn session_outstanding(view: &SessionView) -> bool {
         || option_outstanding(&view.compact_result)
         || option_outstanding(&view.context_snapshot_result)
         || option_outstanding(&view.swarm_result)
-        || option_outstanding(&view.swarm_synthesis_result)
         || view
             .swarm_state
             .as_ref()
             .is_some_and(|swarm| !swarm.completed)
         || view.swarm_autocomplete.is_some()
-        || view.swarm_synthesis.is_some()
         || view.autopilot_pending_continue.is_some()
 }
 

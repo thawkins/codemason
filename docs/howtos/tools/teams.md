@@ -62,7 +62,7 @@ Add a teammate for one scoped task.
 | Argument | Type | Required | Description | Typical value |
 |----------|------|----------|-------------|---------------|
 | `team_name` | string | yes | Team name | `"audit-team"` |
-| `teammate_name` | string | yes | Unique teammate name | `"reviewer-1"` |
+| `teammate_name` | string | no | Unique teammate name; omit it to get a readable `<agent_type>-<adjective>-<surname>` name such as `explore-focused-turing` | `"reviewer-1"` |
 | `agent_type` | string | yes | Agent profile to run | `"coder"` |
 | `prompt` | string | yes | Scoped task prompt | — |
 | `model` | string | no | Model override as `provider_id/model_id`; inherits the lead's model when omitted | `"anthropic/claude-sonnet-4-20250514"` |

@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+Teams are led by team-leader sub-agents instead of the primary session, so
+several teams can run at once, and each leader and teammate is listed in the
+Sessions pane, where typing to it sends that agent a direct message.
+
+### Added
+
+- Added: a built-in `team-leader` agent and `AgentRole::TeamLeader`; a custom agent becomes a leader with `"role": "team-leader"` in its definition. A leader gets team permissions (`team:manage`, `team:communicate`, `team:tasks`, `team:read`, `team_wait`) and may not spawn plain sub-agents.
+- Added: several teams at once - one `TeamManager` per team in `SessionProcessor.team_managers` (`TeamManagers`, keyed by team name); the Teams pane shows one section per team and events route by team name.
+- Added: direct user turns - `TeamManager::send_user_turn` queues a message for a teammate (waking a parked one) and `AgentManager::resume_detached` runs one more detached turn in a finished leader's own session; a user turn ends a leader's `team_wait` early.
+- Added: Sessions pane rows for teams (`SidebarRow::TeamLeader`, `SidebarRow::Teammate`, `LeaderState`): each leader is listed as `team-leader: <team>` under the session that spawned it, collapsible with its disclosure triangle or `Left`/`Right`, with its teammates (name and status) under it. A leader whose task is gone while its team is active is greyed `(stopped)`; after cleanup its teammates go and the leader stays greyed `(done)`. Leaders seen are recorded in the `team.leaders` setting (agent and team name), so crashed and finished leaders are listed again after a restart, and plain sub-agent rows are no longer shown for leaders.
+- Added: a prompt typed in an open leader or teammate session goes to that agent (`send_user_turn` for a teammate; `send_to_session`, or `resume_detached` when no task runs, for a leader, with at most one resume starting per session, run as the leader's recorded agent; a teammate session whose team has ended is refused). A refusal shows `[error] <reason>` on the status line and leaves the prompt in the input.
+
+### Changed
+
+- Changed: `/team create <blueprint> [name] [context]` and `/swarm` launch a team leader that creates, seeds, waits on, summarises and cleans up the team; the primary never leads a team. `/team close`, `/team delete` and `/team forcecleanup` cancel the team's leader.
+- Changed: only a team-leader agent may call `team_create` (`not_team_leader` otherwise, naming `new_agent agent="team-leader"`), team names are unique (an explicit taken name is refused, a generated one gets a suffix), and a leader is not bound by the background timeout while it waits in `team_wait`.
+- Changed: on a stock config, `/team create` fails with a message naming the permission when a blueprint's seed steps are refused; add a `team:manage` allow rule to let blueprints seed teammates.
+- Changed: `/swarm`'s `Swarm Result` is written by the swarm's team leader, not by a separate synthesis call in the frontend. The leader waits until no subtask can make progress (a failed or cancelled subtask, and any subtask blocked only on one, counts as finished), synthesises from the completed results, names the subtasks that failed or never ran, then cleans up the team. `/swarm cancel` stops the leader.
+- Changed: teammates get readable names prefixed by their agent type, `<agent_type>-<adjective>-<surname>` (e.g. `explore-focused-turing`): every `/swarm` teammate, and a `team_spawn` call that omits the now optional `teammate_name`. The generator behind the sidebar's random branch names moved to `codemason_agent::readable_names` (`readable_member_name`); `codemason_app_core::branch_names` re-exports it. A dependent swarm task is now reserved for its teammate at seeding (assigned, still pending) instead of left unassigned, and the swarm finds a teammate's subtask by assignment rather than by name.
+- Added: a teammate that has not started yet (a swarm subtask waiting on its dependencies) is listed in the Sessions pane as a dimmed placeholder that cannot be opened, and becomes a full row once its session exists. A teammate row's tooltip says `Blocked: waiting for the subtasks it depends on to finish` and adds a `Waiting for:` line naming the teammates whose unfinished tasks it depends on.
+- Changed: a message sent to a sub-agent whose run ended a moment earlier now says `<agent> has finished; the message was not sent` instead of the registry's reason-coded error.
+- Changed: a leader runs exactly one team (a second `team_create` is refused with `leader_has_team`), a teammate always runs with the standard role so teams never nest, and a custom team-leader agent always runs as a sub-agent and keeps the leader tool policy, with its own `permissions` appended after it. Archiving a session cancels the team leaders it spawned.
+- Upgrade note: a team created before this upgrade that is still `Active` with the primary session as its lead makes `new_agent` refuse to spawn a team leader from that session until that team is removed from disk with `/team delete <name>` (`/team close` only closes it for the session and leaves it `Active`).
+
+### Tests
+
+- Added: `test_sidebar_team_rows` (rows nested under the parent, leader not listed as a sub-agent, custom-named leader found by role, crashed leader greyed, rows rebuilt after a restart, teammates hidden and leader kept after cleanup, collapse, opening rows, prompts to a teammate, to an exited teammate, to an ended teammate and to a finished leader, finished leader listed and custom-named leader resumed as itself after a restart) and `test_sessions_team_rows_gui` (drawing, triangle toggle, row opens the leader). `support::make_app_with_storage` builds a second app over one database.
+- Fixed: tests in `codemason-agent`, `codemason-app-core`, `codemason-gui`, `codemason-plugins` and `codemason-tools-vcs` no longer write a first-run `codemason.json`, a code index or a plugins folder into git-ignored `.codemason/` directories inside the crates; each now runs from, or seeds its config in, a `target/temp` scratch project.
+- Fixed: `test_dialogs_more::test_context_menu_rows_are_material_items_with_their_icons_and_state` pins the clipboard, so it no longer depends on the host clipboard.
+
 A deep-refactor train from a fresh audit
 (`docs/reports/deep-refactor-audit-2026-11-27.md`): defects first, then
 infrastructure, then behaviour-preserving refactors, with the test suite as

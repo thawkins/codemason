@@ -55,6 +55,8 @@ fn tool_context(workspace: &std::path::Path, team_name: &str) -> ToolContext {
         config: None,
         bg_service: None,
         cached_team_dir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        agent_role: codemason_agent::agent::AgentRole::Standard,
+        user_input_pending: None,
         permission_checker: None,
         read_timestamps: std::sync::Arc::new(std::sync::RwLock::new(
             std::collections::HashMap::new(),

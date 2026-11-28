@@ -35,7 +35,8 @@ What you get out of the box:
   7-layer bash validator
 - **Extensible** — MCP servers, Claude- and Codex-dialect plugins, connector
   and plugin marketplaces, skills, custom agents and team blueprints
-- **Multi-agent work** — teams with shared task lists and mailboxes, swarms,
+- **Multi-agent work** — teams with shared task lists and mailboxes, each run
+  by its own `team-leader` agent so several teams can work at once, swarms,
   `/loop` goal-driven runs, autopilot and a research pipeline
 
 The binary is `cdmn`; environment variables use the `CODEMASON_` prefix and
@@ -147,11 +148,17 @@ per-project state lives in `.codemason/`. Start with
   exclusive lock from read to write, so two teammates changing status at once no
   longer lose one change. The team runtime is bound before tool dispatch in every
   entry point - GUI, `cdmn run`, `cdmn serve` and ACP - so `team_spawn` works
-  outside the GUI, and it is rebindable (`TeamManagerSlot`) rather than pinned to
-  the first team the process ever created: a manager whose team is gone is
-  unbound atomically, a manager refuses to spawn into a team it does not drive,
-  and a teammate's loop keeps running turns while it holds an auto-claimed task
-  or has unread mail
+  outside the GUI. Each team has its own manager in a per-team registry
+  (`TeamManagers`), so several teams run at once without touching each other: a
+  manager whose team is gone is unbound atomically, a manager refuses to spawn
+  into a team it does not drive, and a teammate's loop keeps running turns while
+  it holds an auto-claimed task or has unread mail. Teams are created and run by
+  a `team-leader` agent (built in, or any custom agent with
+  `role: "team-leader"`): the primary starts one per team with
+  `new_agent agent="team-leader" background=true` and gets back one summary.
+  `team_create` is leader-only and a leader runs exactly one team; `/team create`
+  and `/swarm` start a leader too. Leaders and teammates appear under their
+  primary in the Sessions pane, where typing to one sends it a direct turn
 - **Agent** (5) — new_agent, cancel_agent, list_agents, wait_agents and
   `team_wait` (a team's wait belongs to the agent family, because `team_wait`
   and `wait_agents` are the same await surface for two different task
