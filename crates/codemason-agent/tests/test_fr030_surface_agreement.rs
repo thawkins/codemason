@@ -367,6 +367,11 @@ fn test_the_registry_names_match_the_recorded_after_rename_digest() {
 /// this test from every other env-mutating test in the binary.
 struct EnvGuard {
     saved: Vec<(&'static str, Option<OsString>)>,
+    /// The cwd to restore. `Config::load()` writes a first-run default
+    /// `.codemason/codemason.json` into the process cwd when no config exists, so
+    /// the guard parks the cwd in a `target/temp` scratch dir to keep the
+    /// repository clean.
+    cwd: Option<std::path::PathBuf>,
 }
 
 impl EnvGuard {
@@ -387,12 +392,23 @@ impl EnvGuard {
             std::env::remove_var("CODEMASON_CONFIG");
             std::env::remove_var("CODEMASON_CONFIG_CONTENT");
         }
-        Self { saved }
+        let cwd = std::env::current_dir().ok();
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/temp/fr030-surface-cwd")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&scratch).expect("scratch cwd");
+        std::env::set_current_dir(&scratch).expect("enter scratch cwd");
+        Self { saved, cwd }
     }
 }
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
+        if let Some(cwd) = &self.cwd
+            && let Err(e) = std::env::set_current_dir(cwd)
+        {
+            eprintln!("could not restore cwd {}: {e}", cwd.display());
+        }
         for (key, value) in &self.saved {
             // SAFETY: restoring the value captured in `isolating`.
             unsafe {
