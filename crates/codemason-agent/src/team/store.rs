@@ -539,9 +539,30 @@ impl TeamStore {
     fn initialised_task_store(&self) -> Result<TaskStore> {
         let task_path = self.dir.join("tasks.json");
         if !task_path.exists() {
+            // Publish the empty list in one step, and only if no other
+            // creator got there first. A plain `fs::write` here ran outside
+            // the store lock, so two first writers could interleave and a
+            // reader under the lock could see half a file ("tasks.json is
+            // malformed"). `hard_link` fails when the target exists, so a
+            // late creator never replaces a list another writer has already
+            // added to.
             let initial = TaskList::new(&self.config.name);
-            fs::write(&task_path, serde_json::to_string_pretty(&initial)?)
+            let temp = self
+                .dir
+                .join(format!(".tasks.json.{}.init", uuid::Uuid::new_v4()));
+            fs::write(&temp, serde_json::to_string_pretty(&initial)?)
                 .with_context(|| format!("initialise {}", task_path.display()))?;
+            let published = fs::hard_link(&temp, &task_path);
+            // INTENTIONAL: the temp file is scratch; a failed removal leaves a
+            // dot-file that no reader opens.
+            let _ = fs::remove_file(&temp);
+            match published {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(e).with_context(|| format!("initialise {}", task_path.display()));
+                }
+            }
         }
         self.task_store()
     }
