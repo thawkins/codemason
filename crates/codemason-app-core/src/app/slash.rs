@@ -16176,11 +16176,11 @@ impl TeamSeed {
             )),
             allowed_roots: vec![self.working_dir.clone()],
             cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
+            agent_role: codemason_agent::agent::AgentRole::Standard,
+            user_input_pending: None,
             // SEC-codemason-team-001: hand the nested team_create call the
             // session's checker so a blueprint seed cannot execute tools
             // without approval.
-            agent_role: codemason_agent::agent::AgentRole::Standard,
-            user_input_pending: None,
             permission_checker: Some(processor.permission_checker.clone()),
             tool_registry: codemason_agent::tool::ToolContext::default_tool_registry(),
             read_timestamps: processor.read_timestamps.clone(),

@@ -3310,13 +3310,13 @@ impl SessionProcessor {
                     config: Some(std::sync::Arc::clone(&turn.session_config)),
                     allowed_roots,
                     cached_team_dir: Arc::new(std::sync::Mutex::new(None)),
-                    // SEC-codemason-team-001: blueprint seed files must run through
-                    // the same permission decision as ordinary tool calls.
                     agent_role: agent.role,
                     user_input_pending: self
                         .agent_manager
                         .get()
                         .and_then(|m| m.inbox_notify(session_id)),
+                    // SEC-codemason-team-001: blueprint seed files must run through
+                    // the same permission decision as ordinary tool calls.
                     permission_checker: Some(self.permission_checker.clone()),
                     read_timestamps: self.read_timestamps.clone(),
                     canonical_cache: Arc::new(codemason_tools_core::CanonicalPathCache::new()),
