@@ -20,7 +20,7 @@ use codemason_agent::permission::{
     Permission, PermissionAction, PermissionChecker, PermissionRule,
 };
 use codemason_agent::team::TeamStore;
-use codemason_agent::tool::{TeamContext, Tool, ToolContext};
+use codemason_agent::tool::{Tool, ToolContext};
 use parking_lot::RwLock;
 use serde_json::json;
 
@@ -72,11 +72,9 @@ fn ctx(fixture: &Fixture, rules: Vec<PermissionRule>) -> ToolContext {
         agent_manager: None,
         active_model: None,
         provider_registry: None,
-        team_context: Some(Arc::new(TeamContext {
-            team_name: String::new(),
-            agent_id: "lead".to_string(),
-            is_lead: true,
-        })),
+        // A leader that has not created its team yet: a session already in a
+        // team may not create another (`leader_has_team`).
+        team_context: None,
         team_manager: None,
         code_index: None,
         bg_service: None,
